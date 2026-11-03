@@ -1,0 +1,10 @@
+# Host-side workspace. `game/` targets thumbv4t-none-eabi with nightly build-std,
+# so it is built from its own directory (see game/.cargo/config.toml) and kept out of here.
+[workspace]
+resolver = "3"
+members = ["logic", "harness"]
+exclude = ["game"]
+
+# The harness emulates minutes of gameplay; an unoptimised emulator core makes that slow.
+[profile.dev.package.pecten]
+opt-level = 3

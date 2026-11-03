@@ -1,0 +1,8 @@
+[package]
+name = "diamond_hands_logic"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-independent game rules for Diamond Hands (no_std, fixed point)"
+license = "MIT"
+
+[dependencies]

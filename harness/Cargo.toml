@@ -1,0 +1,13 @@
+[package]
+name = "diamond_hands_harness"
+version = "0.1.0"
+edition = "2024"
+description = "Headless ROM tests for Diamond Hands on the gba-wasm core"
+license = "MIT"
+publish = false
+
+[dependencies]
+diamond_hands_logic = { path = "../logic" }
+# Expects gba-wasm checked out next to this repo (~/repos/gba-wasm).
+# The crate is named `pecten` upstream; the alias keeps `use gba_wasm::…` working.
+gba_wasm = { package = "pecten", path = "../../gba-wasm/rust" }

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: diamond-hands
+      # The harness uses the gba-wasm core as a sibling path dependency.
+      - uses: actions/checkout@v4
+        with:
+          repository: smolgroot/gba-wasm
+          path: gba-wasm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            diamond-hands
+            diamond-hands/game
+
+      - name: Logic tests
+        working-directory: diamond-hands
+        run: cargo +stable test -p diamond_hands_logic
+
+      - name: Build ROM
+        working-directory: diamond-hands
+        run: |
+          cargo +stable install agb-gbafix --locked
+          ./scripts/build-rom.sh
+
+      - name: ROM tests on gba-wasm
+        working-directory: diamond-hands
+        run: cargo +stable test -p diamond_hands_harness
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diamond-hands.gba
+          path: diamond-hands/dist/diamond-hands.gba
