@@ -1,23 +1,23 @@
 //! Levels are hand-drawn ASCII maps, one character per 8x8 tile, read in place.
 //!
-//! Terrain: `#` solid rock, `r` boulder (solid), `=` one-way plank (solid from above
-//! only), `^` cactus spikes. Scenery, which is air for collision: `,` dry grass, `*`
-//! pebbles, `&` cow skull. Anything else is air. Markers, which are air too:
+//! Terrain: `#` solid rock, `r` crystal boulder (solid), `=` one-way steel girder
+//! (solid from above only), `^` energy spikes. Scenery, which is air for collision:
+//! `,` moss, `*` scrap, `&` a dead bot's head. Anything else is air. Markers, which are air too:
 //!
 //! | char | meaning |
 //! | ---- | ------- |
 //! | `P`  | player start (feet on the tile below) |
 //! | `C`  | checkpoint flag |
-//! | `o`  | sat |
+//! | `o`  | diamond |
 //! | `+`  | cold-wallet heal |
-//! | `b`  | Bandit Bear |
-//! | `s`  | rattlesnake |
-//! | `v`  | FUD vulture |
-//! | `t`  | tumbleweed |
+//! | `b`  | Sentry bot |
+//! | `s`  | Crawler bot |
+//! | `v`  | Drone |
+//! | `t`  | rolling Mine |
 //! | `X`  | left edge of the boss arena (any row) |
 //! | `B`  | the boss |
 
-use crate::TILE;
+use crate::{TILE, talk::Line};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
@@ -41,7 +41,7 @@ impl Tile {
 /// Which backdrop and tileset the renderer uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
-    Canyon,
+    Badlands,
 }
 
 #[derive(Debug)]
@@ -49,6 +49,8 @@ pub struct Level {
     pub name: &'static str,
     pub subtitle: &'static str,
     pub theme: Theme,
+    /// What the boss says when the wassie walks into the arena; empty for none.
+    pub boss_talk: &'static [Line],
     pub rows: &'static [&'static str],
 }
 

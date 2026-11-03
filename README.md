@@ -3,31 +3,52 @@
 
 ![Diamond Hands](./cover.png)
 
-A side-scrolling platform adventure for the Game Boy Advance, written in Rust with [agb](https://agbrs.dev).
-A wassie in a red poncho, packing a laser blaster, fights its way left to right through the bears'
-territory. Each level ends with a boss.
+A side-scrolling action platformer for the Game Boy Advance, written in Rust with [agb](https://agbrs.dev).
+In a dystopian future the bears have built machines. A wassie in a red poncho, hauling an
+oversized laser cannon, blasts its way left to right through their cyber bots. Each level ends
+with a boss.
 
-1. **The Canyon** (playable): a Bitcoin western from noon to nightfall. Bandit Bears, rattlesnakes,
-   FUD vultures and tumbleweeds, then **Sheriff Ursa**.
+1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
+   night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **URSA-9000**, a
+   bear-shaped war mech.
 2. **Solana Trenches** (planned): a neon casino strip full of hustlers.
 3. **Ethereum City** (planned): a futuristic city of gas drones and MEV bots.
 
-| Button      | Action                                       |
-| ----------- | -------------------------------------------- |
-| D-pad       | Move; Up aims the blaster skyward            |
-| A           | Jump (hold for higher); confirm in menus     |
-| B           | Fire; hold and release for a charged beam    |
-| Start       | Pause                                        |
+| Button      | Action                                                          |
+| ----------- | --------------------------------------------------------------- |
+| D-pad       | Move and aim: Up, Up+forward; in the air also Down, Down+forward |
+| A           | Jump (hold for higher); keep holding to hover on the jetpack    |
+| B           | Fire; hold and release for a charged beam                       |
+| L or R      | Hold to plant your feet, so the d-pad only aims                 |
+| Start       | Pause (the controls are shown there too); skips dialogue        |
 
-You can also stomp enemies by landing on them. You have 8 HP. Touching a ₿ flag makes it your
-respawn point, and retries are unlimited. **Options** sets the difficulty (Chill, Normal, Degen),
-which scales the damage you take and how often villains fire. It is saved to SRAM with the best score.
+- **Combat:** you can stomp bots by landing on them. A "!" over a bot means it is about to
+  attack. The blaster fires in eight directions; diagonal shots fly at the same speed.
+- **Jetpack:** after a jump's rise, keeping A held lights a jetpack that climbs slowly for
+  48 frames. This reaches about 62 px, against 38 px for a plain jump, so the diamonds on
+  the floating rocks are reachable. Letting go saves the rest of the fuel, landing or
+  stomping a bot refuels it, and a quick tap in the air never hovers (it stays a buffered
+  jump).
+- **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie
+  trade a few lines. A finishes a line and then turns the page; Start skips the rest. It
+  plays once per visit, so retries go straight to the fight.
+- **World map:** from the title, MAP shows every place. Any place with a level is open from
+  the start, and a level cleared from the map returns to it. The Solana Trenches and
+  Ethereum City are marked "coming soon".
+- **Health and respawns:** you have 8 HP. Touching a beacon makes it your respawn point, and
+  retries are unlimited.
+- **Diamonds:** they are scattered along the route, and the upper ledges hold the most.
+- **Options:** sets the difficulty (Chill, Normal, Degen), which scales the damage you take and
+  how often bots fire. It is saved to SRAM with the best score.
+
+Art direction follows `cover.png` and the project skill in `.claude/skills/diamond-hands-gba/`.
 
 ## Layout
 
 - `logic/`: all game rules. Tile physics, the player, villains, the boss, scenes, levels and the
   test probe. `no_std` and integer-only, tested on the host.
-  - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`.
+  - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`. Each
+    level also carries its boss dialogue; places on the world map are in `logic/src/levels.rs`.
 - `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
   - All art is drawn in code at boot, in `game/src/art/`.
   - It builds with its own nightly toolchain and target (`game/rust-toolchain.toml`,
@@ -60,14 +81,31 @@ cargo test -p diamond_hands_harness  # boots the ROM on gba-wasm (needs dist/dia
 ```
 
 The logic tests also check every map for authoring mistakes: unreachable steps, spawns inside
-rock, and the arena size. A route bot then plays each level in god mode and must beat the boss.
+rock, the arena size, and diamonds on floating rock that the jetpack can't reach. They also
+check that the dialogue fits the box and the font. A route bot then plays each level in god
+mode and must beat the boss.
 
 Each frame, the ROM mirrors a `Probe` struct into EWRAM. The harness finds it by its `DHPR` magic, then checks:
 - scene flow
 - running, jumping, firing
 - pausing
 - SRAM persistence
-- that the ROM matches the host-side model frame by frame while the route bot clears the Canyon
+- hovering, and diagonal and downward aim
+- the world map
+- that the ROM matches the host-side model frame by frame while the route bot clears the
+  Badlands, including the boss dialogue
+
+Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of the title, map,
+hovering, aiming and each line of dialogue.
+
+## Known limitations
+
+- There is no sound yet.
+- Only the Badlands is playable; the other two places on the map are placeholders.
+- Sprite VRAM is nearly full: new sprites for later levels will need the level's art loaded
+  per level rather than all at boot. Splitting the blaster from the body poses and shrinking
+  the big font to 8x16 bought back room for the aims, jetpack, portraits and map markers.
+- The world map is painted at boot, which adds about half a second to start-up.
 
 If a harness test fails, try the ROM in mGBA. If it behaves correctly there, the bug is in gba-wasm:
 1. Record it in gba-wasm as a failing test or a `TASKS.md` entry.

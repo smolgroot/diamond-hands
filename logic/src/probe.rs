@@ -26,7 +26,7 @@ pub struct Probe {
     /// [`crate::boss::BossState`] as `u32`.
     pub boss_state: u32,
     pub score: u32,
-    pub sats: u32,
+    pub diamonds: u32,
     pub kills: u32,
     pub best: u32,
     /// [`crate::Difficulty`] as `u32`.
@@ -38,7 +38,7 @@ pub struct Probe {
 
 impl Probe {
     pub const MAGIC: u32 = u32::from_le_bytes(*b"DHPR");
-    pub const VERSION: u32 = 3;
+    pub const VERSION: u32 = 4;
     pub const WORDS: usize = size_of::<Probe>() / 4;
 
     /// The value the ROM starts with, before the first frame runs.
@@ -57,7 +57,7 @@ impl Probe {
         boss_hp: 0,
         boss_state: 0,
         score: 0,
-        sats: 0,
+        diamonds: 0,
         kills: 0,
         best: 0,
         difficulty: 0,
@@ -80,7 +80,7 @@ impl Probe {
             boss_hp: world.boss.hp,
             boss_state: world.boss.state as u32,
             score: game.score(),
-            sats: world.sats,
+            diamonds: world.diamonds,
             kills: world.kills,
             best: game.best,
             difficulty: game.difficulty as u32,

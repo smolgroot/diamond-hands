@@ -54,7 +54,7 @@ pub struct Contacts {
     pub ceiling: bool,
     pub wall_left: bool,
     pub wall_right: bool,
-    /// Touching cactus spikes after the move.
+    /// Touching energy spikes after the move.
     pub spike: bool,
 }
 
@@ -202,7 +202,8 @@ mod tests {
     const ROOM: Level = Level {
         name: "TEST",
         subtitle: "",
-        theme: Theme::Canyon,
+        theme: Theme::Badlands,
+        boss_talk: &[],
         rows: &[
             "..........",
             "..........",

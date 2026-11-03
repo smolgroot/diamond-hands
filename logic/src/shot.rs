@@ -12,14 +12,14 @@ pub enum ShotKind {
     Bolt,
     /// Hold B and release: a fat piercing laser.
     Beam,
-    /// Bandit and sheriff revolver rounds.
+    /// Red plasma rounds from sentries and the mech.
     Bullet,
-    /// Dropped by FUD vultures; falls.
-    Dust,
-    /// Runs along the ground from the sheriff's slam.
+    /// EMP bombs dropped by drones; they fall.
+    Bomb,
+    /// Runs along the ground from the mech's slam.
     Shockwave,
-    /// Red candles raining down in the sheriff's last phase.
-    Candle,
+    /// Missiles raining down in the mech's last phase.
+    Missile,
 }
 
 impl ShotKind {
@@ -27,21 +27,22 @@ impl ShotKind {
         matches!(self, ShotKind::Bolt | ShotKind::Beam)
     }
 
+    /// Hitbox size; the wassie's lasers are given heading right (see [`Shot::size`]).
     pub fn size(self) -> (i32, i32) {
         match self {
             ShotKind::Bolt => (8, 4),
             ShotKind::Beam => (24, 8),
             ShotKind::Bullet => (6, 4),
-            ShotKind::Dust => (8, 8),
+            ShotKind::Bomb => (8, 8),
             ShotKind::Shockwave => (10, 12),
-            ShotKind::Candle => (6, 12),
+            ShotKind::Missile => (6, 12),
         }
     }
 
     pub fn damage(self) -> i32 {
         match self {
-            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Dust => 1,
-            ShotKind::Shockwave | ShotKind::Candle => 2,
+            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Bomb => 1,
+            ShotKind::Shockwave | ShotKind::Missile => 2,
             ShotKind::Beam => 3,
         }
     }
@@ -88,14 +89,27 @@ impl Shot {
         hit_boss: false,
     };
 
+    /// The hitbox follows the heading: the wassie's lasers stand on end when fired up or
+    /// down, and are square on the diagonals.
+    pub fn size(kind: ShotKind, vx_fx: i32, vy_fx: i32) -> (i32, i32) {
+        let (w, h) = kind.size();
+        if !kind.from_player() || vy_fx == 0 {
+            (w, h)
+        } else if vx_fx == 0 {
+            (h, w)
+        } else {
+            ((w + h) / 2, (w + h) / 2)
+        }
+    }
+
     pub fn rect(&self) -> Rect {
-        let (w, h) = self.kind.size();
+        let (w, h) = Shot::size(self.kind, self.vx_fx, self.vy_fx);
         Rect::new(self.x_fx >> 8, self.y_fx >> 8, w, h)
     }
 
     /// Moves one frame; fizzles on running out of life or into rock.
     pub fn update(&mut self, level: &Level) {
-        if self.kind == ShotKind::Candle || self.kind == ShotKind::Dust {
+        if self.kind == ShotKind::Missile || self.kind == ShotKind::Bomb {
             self.vy_fx = (self.vy_fx + 24).min(3 * FX);
         }
         self.x_fx += self.vx_fx;
@@ -122,7 +136,7 @@ pub fn spawn(
     let Some(slot) = pool.iter_mut().find(|s| !s.active) else {
         return false;
     };
-    let (w, h) = kind.size();
+    let (w, h) = Shot::size(kind, vx_fx, vy_fx);
     *slot = Shot {
         kind,
         x_fx: (cx - w / 2) * FX,

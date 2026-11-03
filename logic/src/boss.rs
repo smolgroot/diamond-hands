@@ -1,9 +1,9 @@
-//! Sheriff Ursa, the Canyon's boss: a bear with a badge and a revolver.
+//! URSA-9000, the Badlands boss: a bear-shaped war mech with an arm cannon.
 //!
 //! The fight loops Walk → Aim (two volleys of three shots, alternating low and high) →
-//! Telegraph → Charge on all fours into the arena wall → Stunned (double damage).
-//! Below a third of her health she adds Leap → Slam, which sends shockwaves along the
-//! ground and rains red candles. Every step is on timers, so the fight is deterministic.
+//! Telegraph → Charge low on its treads into the arena wall → Stalled (double damage).
+//! Below a third of its armour it adds Leap → Slam, which sends shockwaves along the
+//! ground and rains missiles. Every step is on timers, so the fight is deterministic.
 
 use crate::{
     FX, SCREEN_W,
@@ -145,7 +145,7 @@ impl Boss {
         self.vulnerable() && self.state != BossState::Stunned
     }
 
-    /// Applies a hit; stunned bears take double. Returns true if this hit beat her.
+    /// Applies a hit; a stunned mech takes double. Returns true if this hit beat it.
     pub fn damage(&mut self, amount: i32, events: &mut Events) -> bool {
         if !self.vulnerable() {
             return false;
@@ -273,6 +273,7 @@ impl Boss {
             BossState::Leap => {
                 if self.left_ground && self.grounded {
                     self.slam(ctx);
+                    events.insert(Events::SLAM);
                     self.body.vx_fx = 0;
                     self.go(BossState::Recover, 40);
                 }
@@ -298,7 +299,7 @@ impl Boss {
         if !contacts.ground {
             self.left_ground = true;
         }
-        // The arena edges are walls for the sheriff too.
+        // The arena edges are walls for the mech too.
         let min_x = self.arena.0 + 2;
         let max_x = self.arena.1 - 2 - BOSS_W;
         let x = self.body.x().clamp(min_x, max_x);
@@ -318,7 +319,7 @@ impl Boss {
         for offset in [-48, 0, 48] {
             let jitter = ctx.rng.below(17) as i32 - 8;
             let x = (px + offset + jitter).clamp(self.arena.0 + 8, self.arena.1 - 8);
-            shot::spawn(ctx.shots, ShotKind::Candle, x, 4, 0, 0);
+            shot::spawn(ctx.shots, ShotKind::Missile, x, 4, 0, 0);
         }
     }
 }
@@ -397,8 +398,8 @@ mod tests {
 
         let mut events = Events::default();
         a.boss.damage(2, &mut events);
-        assert_eq!(a.boss.hp, BOSS_HP - 4, "stunned bears take double");
-        assert!(!a.boss.harmful(), "touching a dizzy bear is safe");
+        assert_eq!(a.boss.hp, BOSS_HP - 4, "a stunned mech takes double");
+        assert!(!a.boss.harmful(), "touching a stalled mech is safe");
     }
 
     #[test]
@@ -410,7 +411,7 @@ mod tests {
         a.until(BossState::Leap, 200);
         a.until(BossState::Recover, 200);
         assert_eq!(a.shots_of(ShotKind::Shockwave), 2);
-        assert_eq!(a.shots_of(ShotKind::Candle), 3);
+        assert_eq!(a.shots_of(ShotKind::Missile), 3);
     }
 
     #[test]

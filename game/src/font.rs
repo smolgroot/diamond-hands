@@ -1,5 +1,5 @@
 //! A 3x5 pixel font rendered into sprites at boot, in a small (8x8) and a double-size
-//! (16x16) variant. Text is drawn as one object per character.
+//! (8x16: 7x11 with the shadow) variant. Text is drawn as one object per character.
 
 use agb::{
     display::{
@@ -39,6 +39,7 @@ const GLYPHS: &[(u8, [u8; 5])] = &[
     (b'N', [0b110, 0b101, 0b101, 0b101, 0b101]),
     (b'O', [0b010, 0b101, 0b101, 0b101, 0b010]),
     (b'P', [0b110, 0b101, 0b110, 0b100, 0b100]),
+    (b'Q', [0b010, 0b101, 0b101, 0b110, 0b011]),
     (b'R', [0b110, 0b101, 0b110, 0b101, 0b101]),
     (b'S', [0b011, 0b100, 0b010, 0b001, 0b110]),
     (b'T', [0b111, 0b010, 0b010, 0b010, 0b010]),
@@ -47,6 +48,7 @@ const GLYPHS: &[(u8, [u8; 5])] = &[
     (b'W', [0b101, 0b101, 0b111, 0b111, 0b101]),
     (b'X', [0b101, 0b101, 0b010, 0b101, 0b101]),
     (b'Y', [0b101, 0b101, 0b010, 0b010, 0b010]),
+    (b'Z', [0b111, 0b001, 0b010, 0b100, 0b111]),
     (b'!', [0b010, 0b010, 0b010, 0b000, 0b010]),
     (b':', [0b000, 0b010, 0b000, 0b010, 0b000]),
     (b'/', [0b001, 0b001, 0b010, 0b100, 0b100]),
@@ -55,6 +57,9 @@ const GLYPHS: &[(u8, [u8; 5])] = &[
     (b'.', [0b000, 0b000, 0b000, 0b000, 0b010]),
     (b'<', [0b001, 0b010, 0b100, 0b010, 0b001]),
     (b'>', [0b100, 0b010, 0b001, 0b010, 0b100]),
+    (b',', [0b000, 0b000, 0b000, 0b010, 0b100]),
+    (b'\'', [0b010, 0b010, 0b000, 0b000, 0b000]),
+    (b'?', [0b111, 0b001, 0b010, 0b000, 0b010]),
 ];
 
 pub struct Font {
@@ -100,7 +105,7 @@ impl Font {
 }
 
 fn render(rows: &[u8; 5], scale: usize) -> SpriteVram {
-    let size = if scale == 1 { Size::S8x8 } else { Size::S16x16 };
+    let size = if scale == 1 { Size::S8x8 } else { Size::S8x16 };
     // EWRAM, like `art::Canvas`: IWRAM allocations can land on the stacks.
     let mut sprite = DynamicSprite16::new_in(size, agb::ExternalAllocator);
     sprite.clear(ix::CLEAR as usize);

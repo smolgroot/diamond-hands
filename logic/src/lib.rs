@@ -8,6 +8,7 @@
 pub mod boss;
 pub mod bot;
 pub mod enemy;
+pub mod fx;
 pub mod game;
 pub mod level;
 pub mod levels;
@@ -16,6 +17,7 @@ pub mod player;
 pub mod probe;
 pub mod rng;
 pub mod shot;
+pub mod talk;
 pub mod world;
 
 pub use game::{Game, Scene, keys};

@@ -4,9 +4,11 @@ use diamond_hands_logic::{
     Difficulty, Input, Tile, World, bot,
     boss::BossState,
     enemy::{ActorKind, MAX_ACTORS},
+    keys,
     level::ARENA_TILES,
     levels,
-    player::{JUMP_APEX, PLAYER_H},
+    physics::Body,
+    player::{JUMP_APEX, PLAYER_H, PLAYER_W, Player},
 };
 
 #[test]
@@ -123,7 +125,67 @@ fn bot_clears_every_level_in_god_mode() {
         });
         assert!(world.cleared, "{}: boss not beaten, state {:?} hp {}", level.name, world.boss.state, world.boss.hp);
         assert_eq!(world.boss.state, BossState::Defeated);
-        assert!(world.sats > 0 && world.kills > 0);
+        assert!(world.diamonds > 0 && world.kills > 0);
         assert!(arena < 6_000, "{}: took {arena} frames to reach the arena", level.name);
     }
 }
+
+/// Diamonds on floating rock must be reachable: from the floor just left of the rock
+/// face, holding jump rides the jetpack up, Right once above the top drifts over it,
+/// and letting go there drops onto it.
+#[test]
+fn floating_diamond_ledges_are_reachable_on_the_jetpack() {
+    for (index, level) in levels::ALL.iter().enumerate() {
+        let mut checked = 0;
+        for (c, tx, ty) in level.markers() {
+            let top = ty + 1;
+            let floating = level.tile(tx, top) == Tile::Solid
+                && (top..level.height()).any(|y| level.tile(tx, y) == Tile::Empty);
+            if c != b'o' || !floating {
+                continue;
+            }
+            let mut left = tx;
+            while level.tile(left - 1, top) == Tile::Solid && level.tile(left - 1, top - 1) != Tile::Solid {
+                left -= 1;
+            }
+            // Hug the rock face, standing on whatever floor is below.
+            let x = left * 8 - PLAYER_W - 1;
+            let cols = [x.div_euclid(8), (x + PLAYER_W - 1).div_euclid(8)];
+            let standable = |y: i32| {
+                cols.iter().all(|&c| level.tile(c, y) != Tile::Solid)
+                    && cols.iter().any(|&c| level.is_floor(c, y + 1))
+            };
+            let Some(floor) = (top..level.height()).find(|&y| standable(y)) else {
+                continue;
+            };
+            let mut world = World::new(index as u8, Difficulty::Normal);
+            world.god = true;
+            for a in world.actors.iter_mut().filter(|a| a.kind.is_enemy()) {
+                a.alive = false;
+            }
+            let mut body = Body::standing_on_tile(0, floor, PLAYER_W, PLAYER_H);
+            body.x_fx = x * diamond_hands_logic::FX;
+            world.player = Player::new(body);
+            let mut previous = 0;
+            let mut landed = false;
+            for _ in 0..240 {
+                let r = world.player.body.rect();
+                let above = r.bottom() <= top * 8;
+                let over = r.centre_x() >= left * 8 + 4;
+                let held = if over { 0 } else { keys::A } | if above { keys::RIGHT } else { 0 };
+                world.step(&Input::from_keys(held, previous));
+                previous = held;
+                let p = &world.player;
+                if p.grounded && p.body.bottom() == top * 8 {
+                    landed = true;
+                    break;
+                }
+            }
+            let rise = (floor + 1 - top) * 8;
+            assert!(landed, "{}: diamond at ({tx},{ty}) on rock {rise} px up is out of reach", level.name);
+            checked += 1;
+        }
+        assert!(checked > 0, "{}: no floating ledges checked", level.name);
+    }
+}
+

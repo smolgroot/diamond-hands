@@ -1,5 +1,5 @@
-//! The wassie: running, jumping, getting hurt. Firing the blaster lives in `world`,
-//! which owns the shot pool.
+//! The wassie: running, jumping, hovering on its jetpack, aiming, getting hurt. Firing
+//! the blaster lives in `world`, which owns the shot pool.
 
 use crate::{
     FX,
@@ -22,6 +22,17 @@ pub const RUN_ACCEL_FX: i32 = 40;
 pub const AIR_ACCEL_FX: i32 = 28;
 pub const FRICTION_FX: i32 = 48;
 pub const STOMP_BOUNCE_FX: i32 = -7 * FX / 2;
+/// Frames jump must be held before the jetpack lights. Matches the jump buffer, so a
+/// press just before landing still jumps instead of hovering.
+pub const HOVER_DELAY: u8 = BUFFER_FRAMES;
+/// Frames of jetpack fuel per airborne stretch, refilled on landing or a stomp.
+pub const HOVER_FRAMES: u8 = 48;
+/// Vertical speed the jetpack pushes towards: a slow climb.
+pub const HOVER_LIFT_FX: i32 = -FX / 2;
+/// How fast the jetpack turns a fall into that climb, per frame.
+pub const HOVER_ACCEL_FX: i32 = 40;
+/// 1/sqrt(2) in 8-bit fixed point, for diagonal speeds.
+pub const DIAGONAL: i32 = 181;
 /// Frames after leaving a ledge during which a jump still works.
 pub const COYOTE_FRAMES: u8 = 6;
 /// Frames a jump press is remembered before landing.
@@ -49,6 +60,51 @@ pub enum PlayerState {
     Fall,
     Hurt,
     Dead,
+    /// Airborne on the jetpack, jump held.
+    Hover,
+}
+
+/// Where the blaster points, for a wassie facing right (mirrored when facing left).
+/// The down aims only work in the air.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Aim {
+    Forward,
+    UpForward,
+    Up,
+    DownForward,
+    Down,
+}
+
+impl Aim {
+    pub const ALL: [Aim; 5] = [Aim::Forward, Aim::UpForward, Aim::Up, Aim::DownForward, Aim::Down];
+
+    /// Unit steps along x and y, facing right.
+    pub fn dir(self) -> (i32, i32) {
+        match self {
+            Aim::Forward => (1, 0),
+            Aim::UpForward => (1, -1),
+            Aim::Up => (0, -1),
+            Aim::DownForward => (1, 1),
+            Aim::Down => (0, 1),
+        }
+    }
+
+    pub fn diagonal(self) -> bool {
+        matches!(self, Aim::UpForward | Aim::DownForward)
+    }
+
+    /// The barrel's tip relative to the hitbox's centre x and top y, facing right. Must
+    /// match the blaster drawings in game/src/art/wassie.rs.
+    fn muzzle(self) -> (i32, i32) {
+        match self {
+            Aim::Forward => (17, 13),
+            Aim::UpForward => (14, 4),
+            Aim::Up => (10, -6),
+            Aim::DownForward => (14, 24),
+            Aim::Down => (10, 27),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,12 +119,17 @@ pub struct Player {
     pub hurt: u8,
     coyote: u8,
     buffer: u8,
+    /// Frames the jump button has been held without a break.
+    jump_held_for: u8,
     pub fire_cooldown: u8,
     /// Frames the fire button has been held, for the charged beam.
     pub charge: u16,
     /// Frames left showing the firing pose.
     pub recoil: u8,
-    pub aim_up: bool,
+    pub aim: Aim,
+    /// Jetpack fuel left, in frames.
+    pub hover_fuel: u8,
+    pub hovering: bool,
     /// Frames left in the knocked-out pose before respawning.
     pub dead_timer: u16,
 }
@@ -85,16 +146,26 @@ impl Player {
             hurt: 0,
             coyote: 0,
             buffer: 0,
+            jump_held_for: 0,
             fire_cooldown: 0,
             charge: 0,
             recoil: 0,
-            aim_up: false,
+            aim: Aim::Forward,
+            hover_fuel: HOVER_FRAMES,
+            hovering: false,
             dead_timer: 0,
         }
     }
 
     pub fn is_dead(&self) -> bool {
         self.state == PlayerState::Dead
+    }
+
+    /// Where a shot leaves the barrel, in level pixels.
+    pub fn muzzle(&self) -> (i32, i32) {
+        let r = self.body.rect();
+        let (x, y) = self.aim.muzzle();
+        (r.centre_x() + self.facing * x, r.y + y)
     }
 
     /// One frame of movement. Ignores input while hurt.
@@ -105,12 +176,16 @@ impl Player {
         let dir = if control { input.dir_x() } else { 0 };
         if dir != 0 {
             self.facing = dir;
+        }
+        // Holding L or R on the ground plants the feet, so the d-pad only aims.
+        let push = if self.grounded && input.plant() { 0 } else { dir };
+        if push != 0 {
             let accel = if self.grounded { RUN_ACCEL_FX } else { AIR_ACCEL_FX };
             // Turning around on the ground is snappy: drop the opposing speed first.
-            if self.grounded && body.vx_fx * dir < 0 {
+            if self.grounded && body.vx_fx * push < 0 {
                 body.vx_fx = 0;
             }
-            body.vx_fx = (body.vx_fx + dir * accel).clamp(-RUN_MAX_FX, RUN_MAX_FX);
+            body.vx_fx = (body.vx_fx + push * accel).clamp(-RUN_MAX_FX, RUN_MAX_FX);
         } else if self.grounded {
             body.vx_fx = approach(body.vx_fx, 0, FRICTION_FX);
         }
@@ -134,11 +209,39 @@ impl Player {
         if control && !input.jump_held() && body.vy_fx < JUMP_CUT_FX {
             body.vy_fx = JUMP_CUT_FX;
         }
-        body.vy_fx = (body.vy_fx + GRAVITY_FX).min(MAX_FALL_FX);
+
+        // Jetpack: holding jump in the air, once the rise is spent, turns the fall into
+        // a slow climb until the fuel runs out. Letting go keeps the rest for later.
+        self.jump_held_for = if input.jump_held() {
+            self.jump_held_for.saturating_add(1)
+        } else {
+            0
+        };
+        let can_hover =
+            control && !self.grounded && self.jump_held_for > HOVER_DELAY && self.hover_fuel > 0;
+        self.hovering = can_hover && (self.hovering || body.vy_fx >= 0);
+        if self.hovering {
+            self.hover_fuel -= 1;
+            body.vy_fx = approach(body.vy_fx, HOVER_LIFT_FX, HOVER_ACCEL_FX);
+        } else {
+            body.vy_fx = (body.vy_fx + GRAVITY_FX).min(MAX_FALL_FX);
+        }
 
         let contacts = body.step(level);
         self.grounded = contacts.ground;
-        self.aim_up = control && input.up();
+        if self.grounded {
+            self.hovering = false;
+            self.hover_fuel = HOVER_FRAMES;
+        }
+        self.aim = if !control {
+            Aim::Forward
+        } else if input.up() {
+            if dir != 0 { Aim::UpForward } else { Aim::Up }
+        } else if input.down() && !self.grounded {
+            if dir != 0 { Aim::DownForward } else { Aim::Down }
+        } else {
+            Aim::Forward
+        };
 
         self.hurt = self.hurt.saturating_sub(1);
         self.invuln = self.invuln.saturating_sub(1);
@@ -147,7 +250,9 @@ impl Player {
         self.state = if self.hurt > 0 {
             PlayerState::Hurt
         } else if !self.grounded {
-            if body.vy_fx < 0 {
+            if self.hovering {
+                PlayerState::Hover
+            } else if body.vy_fx < 0 {
                 PlayerState::Jump
             } else {
                 PlayerState::Fall
@@ -170,6 +275,7 @@ impl Player {
         self.invuln = INVULN_FRAMES;
         self.hurt = HURT_FRAMES;
         self.charge = 0;
+        self.hovering = false;
         let away = if self.body.rect().centre_x() < from_x { -1 } else { 1 };
         self.body.vx_fx = away * 3 * FX / 2;
         self.body.vy_fx = -2 * FX;
@@ -198,7 +304,8 @@ mod tests {
     const FLAT: Level = Level {
         name: "TEST",
         subtitle: "",
-        theme: Theme::Canyon,
+        theme: Theme::Badlands,
+        boss_talk: &[],
         rows: &[
             "........................................",
             "........................................",
@@ -258,7 +365,9 @@ mod tests {
         let mut frames = 1;
         while !p.grounded {
             highest = highest.min(p.body.bottom());
-            step(&mut p, keys::A, keys::A);
+            // Held through the rise, let go at the top so the jetpack stays off.
+            let keys = if p.body.vy_fx < 0 { keys::A } else { 0 };
+            step(&mut p, keys, keys::A);
             frames += 1;
             assert!(frames < 100);
         }
@@ -294,6 +403,128 @@ mod tests {
             jumped |= step(&mut p, keys::A, keys::A).contains(Events::JUMP);
         }
         assert!(jumped, "a press just before landing should still jump");
+    }
+
+    /// Holds A from a standing jump to landing; returns the highest rise in pixels.
+    fn held_jump_apex(p: &mut Player) -> i32 {
+        step(p, 0, 0);
+        let ground = p.body.bottom();
+        step(p, keys::A, 0);
+        let mut highest = ground;
+        for _ in 0..200 {
+            step(p, keys::A, keys::A);
+            highest = highest.min(p.body.bottom());
+            if p.grounded {
+                break;
+            }
+        }
+        ground - highest
+    }
+
+    #[test]
+    fn holding_jump_hovers_higher_on_the_jetpack() {
+        let mut p = player();
+        let apex = held_jump_apex(&mut p);
+        // The Badlands' floating ledges sit 40 and 48 pixels above the nearest floor.
+        assert!(apex > JUMP_APEX + 16, "hover apex {apex}");
+        assert!(apex < 2 * JUMP_APEX, "hover apex {apex}");
+        assert!(p.grounded);
+        assert_eq!(p.hover_fuel, HOVER_FRAMES, "refuelled on landing");
+    }
+
+    #[test]
+    fn hover_starts_after_the_rise_and_runs_out() {
+        let mut p = player();
+        step(&mut p, 0, 0);
+        step(&mut p, keys::A, 0);
+        let mut seen = [false; 3];
+        for _ in 0..200 {
+            step(&mut p, keys::A, keys::A);
+            match p.state {
+                PlayerState::Jump if !seen[1] => seen[0] = true,
+                PlayerState::Hover => {
+                    assert!(seen[0], "the jump's own rise comes first");
+                    seen[1] = true;
+                }
+                PlayerState::Fall if seen[1] => {
+                    assert_eq!(p.hover_fuel, 0);
+                    seen[2] = true;
+                }
+                _ => {}
+            }
+            if p.grounded {
+                break;
+            }
+        }
+        assert_eq!(seen, [true; 3]);
+    }
+
+    #[test]
+    fn letting_go_keeps_the_rest_of_the_fuel() {
+        let mut p = player();
+        step(&mut p, 0, 0);
+        step(&mut p, keys::A, 0);
+        while p.state != PlayerState::Hover {
+            step(&mut p, keys::A, keys::A);
+        }
+        for _ in 0..10 {
+            step(&mut p, keys::A, keys::A);
+        }
+        let fuel = p.hover_fuel;
+        step(&mut p, 0, keys::A);
+        assert!(!p.hovering);
+        assert_eq!(p.hover_fuel, fuel);
+        step(&mut p, keys::A, 0);
+        assert!(!p.hovering, "a fresh press waits out the jump buffer");
+        for _ in 0..HOVER_DELAY {
+            step(&mut p, keys::A, keys::A);
+        }
+        assert_eq!(p.state, PlayerState::Hover, "holding again relights it");
+    }
+
+    #[test]
+    fn a_quick_tap_in_the_air_does_not_hover() {
+        let mut p = player();
+        step(&mut p, 0, 0);
+        step(&mut p, keys::A, 0);
+        for _ in 0..40 {
+            step(&mut p, 0, 0);
+        }
+        step(&mut p, keys::A, 0);
+        step(&mut p, 0, keys::A);
+        assert!(!p.hovering);
+        assert_eq!(p.hover_fuel, HOVER_FRAMES);
+    }
+
+    #[test]
+    fn aims_eight_ways_but_down_only_in_the_air() {
+        let mut p = player();
+        step(&mut p, keys::UP | keys::RIGHT, 0);
+        assert_eq!(p.aim, Aim::UpForward);
+        step(&mut p, keys::UP, keys::UP);
+        assert_eq!(p.aim, Aim::Up);
+        step(&mut p, keys::DOWN | keys::LEFT, 0);
+        assert_eq!(p.aim, Aim::Forward, "no down aim on the ground");
+        assert_eq!(p.facing, -1);
+        step(&mut p, keys::A, 0);
+        step(&mut p, keys::DOWN | keys::RIGHT, 0);
+        assert_eq!(p.aim, Aim::DownForward);
+        step(&mut p, keys::DOWN, 0);
+        assert_eq!(p.aim, Aim::Down);
+        let (mx, my) = p.muzzle();
+        assert!(my > p.body.rect().bottom() - 4 && mx > p.body.rect().centre_x());
+    }
+
+    #[test]
+    fn holding_r_plants_the_feet_to_aim() {
+        let mut p = player();
+        for _ in 0..20 {
+            step(&mut p, keys::R | keys::UP | keys::LEFT, keys::R | keys::UP | keys::LEFT);
+        }
+        assert_eq!(p.body.vx_fx, 0);
+        assert_eq!(p.facing, -1);
+        assert_eq!(p.aim, Aim::UpForward);
+        assert_eq!(p.state, PlayerState::Idle);
     }
 
     #[test]

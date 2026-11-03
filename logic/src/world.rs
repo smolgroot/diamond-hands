@@ -5,11 +5,12 @@ use crate::{
     FX, SCREEN_W, TILE,
     boss::{self, Boss, BossCtx},
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
+    fx::{FxKind, FxPool},
     game::keys,
     level::{Level, Tile},
     levels,
     physics::Body,
-    player::{MAX_HP, PLAYER_H, PLAYER_W, Player, PlayerState, STOMP_BOUNCE_FX},
+    player::{DIAGONAL, HOVER_FRAMES, MAX_HP, PLAYER_H, PLAYER_W, Player, PlayerState, STOMP_BOUNCE_FX},
     rng::Rng,
     shot::{self, MAX_SHOTS, Shot, ShotKind},
 };
@@ -34,6 +35,8 @@ pub const HEAL_AMOUNT: i32 = 2;
 const CAMERA_BAND: (i32, i32) = (96, 136);
 /// Actors wake once this close to the screen edges.
 const WAKE_MARGIN: i32 = 16;
+/// Frames between jetpack exhaust puffs.
+const PUFF_EVERY: u32 = 6;
 
 /// Buttons for one frame: what is held and what went down this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -59,6 +62,15 @@ impl Input {
 
     pub fn up(&self) -> bool {
         self.held & keys::UP != 0
+    }
+
+    pub fn down(&self) -> bool {
+        self.held & keys::DOWN != 0
+    }
+
+    /// Stand still and aim with the d-pad.
+    pub fn plant(&self) -> bool {
+        self.held & keys::PLANT != 0
     }
 
     pub fn jump_pressed(&self) -> bool {
@@ -103,6 +115,8 @@ impl Events {
     pub const RESPAWN: Events = Events(1 << 12);
     /// Progress or an option changed and should be written to SRAM.
     pub const SAVE: Events = Events(1 << 13);
+    /// The boss slammed the ground.
+    pub const SLAM: Events = Events(1 << 14);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -167,6 +181,9 @@ pub struct World {
     pub actors: [Actor; MAX_ACTORS],
     pub shots: [Shot; MAX_SHOTS],
     pub boss: Boss,
+    pub fx: FxPool,
+    /// Frames of screen shake left: kept for big hits, not every shot.
+    pub shake: u8,
     /// Left edge of the screen in level pixels.
     pub camera_x: i32,
     /// Tile the wassie respawns on, and how many checkpoints have been lit.
@@ -174,7 +191,11 @@ pub struct World {
     pub checkpoints_lit: u8,
     /// The boss arena has closed behind the wassie.
     pub arena: bool,
-    pub sats: u32,
+    /// The boss has words for the wassie once the camera settles on the arena.
+    pub talk_due: bool,
+    /// The boss has had its say this visit, so a retry goes straight to the fight.
+    pub talked: bool,
+    pub diamonds: u32,
     pub kills: u32,
     /// Frames played, for the clear time.
     pub frames: u32,
@@ -211,11 +232,15 @@ impl World {
             actors,
             shots: [Shot::EMPTY; MAX_SHOTS],
             boss: Boss::new(level),
+            fx: FxPool::new(),
+            shake: 0,
             camera_x: 0,
             checkpoint: start,
             checkpoints_lit: 0,
             arena: false,
-            sats: 0,
+            talk_due: false,
+            talked: false,
+            diamonds: 0,
             kills: 0,
             frames: 0,
             cleared: false,
@@ -228,7 +253,7 @@ impl World {
 
     pub fn score(&self) -> u32 {
         let boss = if self.boss.is_beaten() { 1000 } else { 0 };
-        self.sats * 10 + self.kills * 50 + boss
+        self.diamonds * 10 + self.kills * 50 + boss
     }
 
     pub fn player_shots(&self) -> usize {
@@ -244,6 +269,8 @@ impl World {
             return events;
         }
         self.frames += 1;
+        self.fx.update();
+        self.shake = self.shake.saturating_sub(1);
 
         if self.player.is_dead() {
             self.player.dead_timer = self.player.dead_timer.saturating_sub(1);
@@ -254,6 +281,10 @@ impl World {
         }
 
         self.player.update(input, self.level, &mut events);
+        if self.player.hovering && self.frames % PUFF_EVERY == 0 {
+            let r = self.player.body.rect();
+            self.fx.spawn(FxKind::Puff, r.centre_x() - self.player.facing * 9, r.bottom() - 4);
+        }
         self.enter_arena(&mut events);
         self.fire(input, &mut events);
         self.update_camera();
@@ -270,9 +301,26 @@ impl World {
             self.cleared = true;
             return events;
         }
+        if events.contains(Events::SLAM) {
+            self.shake = self.shake.max(10);
+        }
+        if events.contains(Events::BOSS_DOWN) {
+            self.shake = 24;
+        }
+        // The mech comes apart in a string of blasts while it goes down.
+        if self.boss.state == crate::boss::BossState::Dying && self.boss.timer % 10 == 0 {
+            let r = self.boss.rect();
+            let x = r.x + self.rng.below(r.w as u32) as i32;
+            let y = r.y + self.rng.below(r.h as u32) as i32;
+            self.fx.spawn(FxKind::Explosion, x, y);
+        }
         for s in self.shots.iter_mut().filter(|s| s.active) {
             s.update(self.level);
             let r = s.rect();
+            if !s.active && s.kind.from_player() && s.life > 0 {
+                // Ran into rock.
+                self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
+            }
             if r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16 {
                 s.active = false;
             }
@@ -289,6 +337,7 @@ impl World {
         let (left, _) = self.boss.arena;
         if !self.arena && self.player.body.x() >= left + 2 * TILE {
             self.arena = true;
+            self.talk_due = !self.talked && !self.level.boss_talk.is_empty();
             self.boss.wake();
             events.insert(Events::BOSS_START);
         }
@@ -303,24 +352,28 @@ impl World {
         if p.hurt > 0 {
             return;
         }
-        let r = p.body.rect();
-        let (dx, dy) = if p.aim_up { (0, -1) } else { (p.facing, 0) };
-        // The barrel's tip in the wassie sprite (see game/src/art/wassie.rs).
-        let muzzle = if p.aim_up {
-            (r.centre_x() + p.facing * 10, r.y - 6)
-        } else {
-            (r.centre_x() + p.facing * 17, r.y + 13)
-        };
+        let (ax, ay) = p.aim.dir();
+        let (dx, dy) = (ax * p.facing, ay);
+        let speed = |base: i32| if p.aim.diagonal() { base * DIAGONAL / FX } else { base };
+        let muzzle = p.muzzle();
 
         if input.fire_held() {
             p.charge = p.charge.saturating_add(1);
         }
         let release = !input.fire_held() && p.charge > 0;
         if release && p.charge >= CHARGE_FRAMES && p.fire_cooldown == 0 {
-            let fired = shot::spawn(&mut self.shots, ShotKind::Beam, muzzle.0, muzzle.1, dx * BEAM_FX, dy * BEAM_FX);
+            let fired = shot::spawn(
+                &mut self.shots,
+                ShotKind::Beam,
+                muzzle.0,
+                muzzle.1,
+                dx * speed(BEAM_FX),
+                dy * speed(BEAM_FX),
+            );
             if fired {
                 p.fire_cooldown = BEAM_COOLDOWN;
                 p.recoil = 10;
+                self.shake = self.shake.max(4);
                 events.insert(Events::BEAM);
             }
         }
@@ -336,7 +389,14 @@ impl World {
         if input.fire_pressed()
             && p.fire_cooldown == 0
             && in_flight < MAX_PLAYER_SHOTS
-            && shot::spawn(&mut self.shots, ShotKind::Bolt, muzzle.0, muzzle.1, dx * BOLT_FX, dy * BOLT_FX)
+            && shot::spawn(
+                &mut self.shots,
+                ShotKind::Bolt,
+                muzzle.0,
+                muzzle.1,
+                dx * speed(BOLT_FX),
+                dy * speed(BOLT_FX),
+            )
         {
             p.fire_cooldown = FIRE_COOLDOWN;
             p.recoil = 6;
@@ -401,8 +461,11 @@ impl World {
                 if !a.is_threat() || !r.overlaps(&a.rect()) || s.hits & (1u128 << i) != 0 {
                     continue;
                 }
+                let ar = a.rect();
+                self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
                 if a.damage(s.kind.damage()) {
                     self.kills += 1;
+                    self.fx.spawn(FxKind::Explosion, ar.centre_x(), ar.centre_y());
                     events.insert(Events::ENEMY_DOWN);
                 }
                 if s.kind.pierces() {
@@ -413,6 +476,7 @@ impl World {
                 }
             }
             if s.active && !s.hit_boss && self.boss.vulnerable() && r.overlaps(&self.boss.rect()) {
+                self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
                 self.boss.damage(s.kind.damage(), events);
                 if s.kind.pierces() {
                     s.hit_boss = true;
@@ -425,7 +489,7 @@ impl World {
         let player = self.player.body.rect();
         let mut hurt: Option<(i32, i32)> = None;
 
-        // Bullets, dust, shockwaves and candles against the wassie.
+        // Plasma rounds, bombs, shockwaves and missiles against the wassie.
         for s in self.shots.iter_mut().filter(|s| s.active && !s.kind.from_player()) {
             let r = s.rect();
             if r.overlaps(&player.inset(1)) && self.player.invuln == 0 {
@@ -441,15 +505,19 @@ impl World {
                 continue;
             }
             match a.kind {
-                ActorKind::Sat => {
+                ActorKind::Diamond => {
                     a.alive = false;
                     a.killed = true;
-                    self.sats += 1;
+                    self.diamonds += 1;
+                    let r = a.rect();
+                    self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
                     events.insert(Events::PICKUP);
                 }
                 ActorKind::Heal => {
                     a.alive = false;
                     a.killed = true;
+                    let r = a.rect();
+                    self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
                     self.player.hp = (self.player.hp + HEAL_AMOUNT).min(MAX_HP);
                     events.insert(Events::PICKUP);
                 }
@@ -464,11 +532,17 @@ impl World {
                     let falling = self.player.body.vy_fx > 0;
                     let stomp = falling && player.bottom() - a.rect().y <= 8;
                     if stomp {
+                        let ar = a.rect();
+                        self.fx.spawn(FxKind::Impact, player.centre_x(), player.bottom());
                         if a.damage(2) {
                             self.kills += 1;
+                            self.fx.spawn(FxKind::Explosion, ar.centre_x(), ar.centre_y());
                             events.insert(Events::ENEMY_DOWN);
                         }
                         self.player.body.vy_fx = STOMP_BOUNCE_FX;
+                        // A stomp relights the jetpack, for chaining bounces.
+                        self.player.hovering = false;
+                        self.player.hover_fuel = HOVER_FRAMES;
                     } else if self.player.invuln == 0 {
                         hurt = Some((a.kind.contact_damage(), a.rect().centre_x()));
                     }
@@ -496,6 +570,8 @@ impl World {
             return;
         }
         if self.player.hurt_by(self.difficulty.damage(damage), from_x) {
+            let r = self.player.body.rect();
+            self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
             events.insert(Events::HIT);
             if self.player.hp <= 0 {
                 self.die(DEATH_FRAMES, events);
@@ -508,6 +584,9 @@ impl World {
         self.player.state = PlayerState::Dead;
         self.player.dead_timer = frames;
         self.player.body.vx_fx = 0;
+        let r = self.player.body.rect();
+        self.fx.spawn(FxKind::Explosion, r.centre_x(), r.centre_y());
+        self.shake = self.shake.max(6);
         events.insert(Events::DIE);
     }
 
@@ -542,8 +621,10 @@ impl World {
             a.reset();
         }
         self.shots = [Shot::EMPTY; MAX_SHOTS];
+        self.fx.clear();
         if self.arena {
             self.arena = false;
+            self.talk_due = false;
             self.boss.reset();
         }
         self.snap_camera();
@@ -559,7 +640,8 @@ mod tests {
     static RANGE: Level = Level {
         name: "TEST",
         subtitle: "",
-        theme: Theme::Canyon,
+        theme: Theme::Badlands,
+        boss_talk: &[],
         rows: &[
             "....................................................................",
             "....................................................................",
@@ -612,7 +694,7 @@ mod tests {
         let events = hold(&mut w, keys::RIGHT, 120);
         assert!(events.contains(Events::PICKUP));
         assert!(events.contains(Events::CHECKPOINT));
-        assert_eq!(w.sats, 1);
+        assert_eq!(w.diamonds, 1);
         assert_eq!(w.player.hp, 3 + HEAL_AMOUNT);
         assert_eq!(w.checkpoints_lit, 1);
         assert_eq!(w.checkpoint, (18, 15));
@@ -654,6 +736,54 @@ mod tests {
     }
 
     #[test]
+    fn up_and_forward_fires_diagonally_at_the_same_speed() {
+        let mut w = world();
+        tap(&mut w, keys::UP | keys::RIGHT | keys::B);
+        let bolt = w.shots.iter().find(|s| s.active).unwrap();
+        assert!(bolt.vx_fx > 0 && bolt.vy_fx < 0);
+        assert_eq!(bolt.vx_fx, -bolt.vy_fx);
+        let speed_sq = 2 * bolt.vx_fx * bolt.vx_fx;
+        assert!((speed_sq - BOLT_FX * BOLT_FX).abs() < BOLT_FX * BOLT_FX / 50, "{speed_sq}");
+        let (w_, h) = (bolt.rect().w, bolt.rect().h);
+        assert_eq!(w_, h, "diagonal lasers have a square hitbox");
+    }
+
+    #[test]
+    fn down_aims_fire_from_the_air() {
+        let mut w = world();
+        tap(&mut w, keys::A);
+        w.step(&Input::from_keys(keys::DOWN | keys::LEFT | keys::B, 0));
+        let bolt = w.shots.iter().find(|s| s.active).unwrap();
+        assert!(bolt.vx_fx < 0 && bolt.vy_fx > 0, "down and back the way it faces");
+    }
+
+    #[test]
+    fn hovering_leaves_a_trail_of_exhaust() {
+        let mut w = world();
+        tap(&mut w, keys::A);
+        let mut puffs = 0;
+        for _ in 0..60 {
+            w.step(&Input::from_keys(keys::A, keys::A));
+            puffs += w.fx.active().filter(|f| f.kind == FxKind::Puff && f.age == 0).count();
+        }
+        assert!(puffs >= 4, "{puffs} puffs");
+    }
+
+    #[test]
+    fn stomping_refuels_the_jetpack() {
+        let mut w = world();
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        let r = w.actors[sentry].rect();
+        w.actors[sentry].awake = true;
+        w.player.hover_fuel = 0;
+        w.player.body.x_fx = r.x * FX;
+        w.player.body.y_fx = (r.y - PLAYER_H + 4) * FX;
+        w.player.body.vy_fx = 2 * FX;
+        w.collide(&mut Events::default());
+        assert_eq!(w.player.hover_fuel, HOVER_FRAMES);
+    }
+
+    #[test]
     fn holding_b_charges_a_piercing_beam() {
         let mut w = world();
         hold(&mut w, keys::B, CHARGE_FRAMES as usize + 5);
@@ -664,10 +794,10 @@ mod tests {
     }
 
     #[test]
-    fn bandit_is_shot_down_and_counts() {
+    fn sentry_is_shot_down_and_counts() {
         let mut w = world();
         w.god = true;
-        // Walk up to the bandit and keep firing.
+        // Walk up to the sentry and keep firing.
         let mut events = Events::default();
         for i in 0..400 {
             let keys = if w.player.body.x() < 170 { keys::RIGHT } else { 0 };
@@ -676,16 +806,16 @@ mod tests {
         }
         assert!(events.contains(Events::ENEMY_DOWN));
         assert_eq!(w.kills, 1);
-        assert_eq!(w.score(), w.sats * 10 + 50);
+        assert_eq!(w.score(), w.diamonds * 10 + 50);
     }
 
     #[test]
     fn beam_hits_each_enemy_once() {
         let mut w = world();
-        let bandit = w.actors.iter().position(|a| a.kind == ActorKind::Bandit).unwrap();
-        w.actors[bandit].awake = true;
-        w.actors[bandit].hp = 10;
-        let r = w.actors[bandit].rect();
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        w.actors[sentry].awake = true;
+        w.actors[sentry].hp = 10;
+        let r = w.actors[sentry].rect();
         shot::spawn(&mut w.shots, ShotKind::Beam, r.x - 30, r.centre_y(), 0, 0);
         let beam = w.shots.iter().position(|s| s.active).unwrap();
         w.shots[beam].vx_fx = FX;
@@ -696,21 +826,21 @@ mod tests {
                 s.x_fx += s.vx_fx;
             }
         }
-        assert_eq!(w.actors[bandit].hp, 10 - ShotKind::Beam.damage());
+        assert_eq!(w.actors[sentry].hp, 10 - ShotKind::Beam.damage());
     }
 
     #[test]
     fn stomping_bounces_and_damages() {
         let mut w = world();
-        let bandit = w.actors.iter().position(|a| a.kind == ActorKind::Bandit).unwrap();
-        let r = w.actors[bandit].rect();
-        w.actors[bandit].awake = true;
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        let r = w.actors[sentry].rect();
+        w.actors[sentry].awake = true;
         w.player.body.x_fx = r.x * FX;
         w.player.body.y_fx = (r.y - PLAYER_H + 4) * FX;
         w.player.body.vy_fx = 2 * FX;
         let mut events = Events::default();
         w.collide(&mut events);
-        assert_eq!(w.actors[bandit].hp, ActorKind::Bandit.max_hp() - 2);
+        assert_eq!(w.actors[sentry].hp, ActorKind::Sentry.max_hp() - 2);
         assert_eq!(w.player.body.vy_fx, STOMP_BOUNCE_FX);
         assert_eq!(w.player.hp, MAX_HP);
     }
@@ -751,9 +881,9 @@ mod tests {
     #[test]
     fn knockout_respawns_with_full_health_and_resets_villains() {
         let mut w = world();
-        let bandit = w.actors.iter().position(|a| a.kind == ActorKind::Bandit).unwrap();
-        w.actors[bandit].awake = true;
-        w.actors[bandit].body.x_fx += 40 * FX;
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        w.actors[sentry].awake = true;
+        w.actors[sentry].body.x_fx += 40 * FX;
         w.player.hp = 1;
         let mut events = Events::default();
         w.hurt_player(2, 0, &mut events);
@@ -762,8 +892,8 @@ mod tests {
         let events = hold(&mut w, 0, DEATH_FRAMES as usize);
         assert!(events.contains(Events::RESPAWN));
         assert_eq!(w.player.hp, MAX_HP);
-        assert!(!w.actors[bandit].awake);
-        assert_eq!(w.actors[bandit].body.x(), w.actors[bandit].home.0);
+        assert!(!w.actors[sentry].awake);
+        assert_eq!(w.actors[sentry].body.x(), w.actors[sentry].home.0);
     }
 
     #[test]
@@ -792,5 +922,31 @@ mod tests {
         w.god = true;
         hold(&mut w, keys::RIGHT, 600);
         assert!(!w.arena);
+    }
+
+    #[test]
+    fn hits_and_pickups_leave_effects() {
+        let mut w = world();
+        w.god = true;
+        hold(&mut w, keys::RIGHT, 50);
+        assert!(w.fx.active().any(|f| f.kind == FxKind::Glint) || w.diamonds > 0);
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        w.actors[sentry].awake = true;
+        let r = w.actors[sentry].rect();
+        shot::spawn(&mut w.shots, ShotKind::Bolt, r.centre_x(), r.centre_y(), 0, 0);
+        let mut events = Events::default();
+        w.collide(&mut events);
+        assert!(w.fx.active().any(|f| f.kind == FxKind::Impact));
+    }
+
+    #[test]
+    fn only_big_moments_shake_the_screen() {
+        let mut w = world();
+        tap(&mut w, keys::B);
+        assert_eq!(w.shake, 0, "an ordinary bolt does not shake");
+        hold(&mut w, 0, 20);
+        hold(&mut w, keys::B, CHARGE_FRAMES as usize + 1);
+        w.step(&Input::from_keys(0, keys::B));
+        assert!(w.shake > 0, "a charged beam does");
     }
 }

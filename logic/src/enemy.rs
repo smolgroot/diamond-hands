@@ -15,63 +15,63 @@ pub const MAX_ACTORS: usize = 96;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ActorKind {
-    Sat,
+    Diamond,
     Heal,
     Checkpoint,
     /// Walks ledges, turns at the edge, fires when the wassie is in line.
-    Bandit,
-    /// Coils in the sand, rattles, then lunges.
-    Snake,
-    /// Circles overhead and drops FUD dust.
-    Vulture,
+    Sentry,
+    /// Spider-bot: crouches, revs up, then lunges.
+    Crawler,
+    /// Hovers overhead and drops EMP bombs.
+    Drone,
     /// Rolls in from the right, bouncing.
-    Tumbleweed,
+    Mine,
 }
 
 impl ActorKind {
     pub fn from_marker(c: u8) -> Option<ActorKind> {
         Some(match c {
-            b'o' => ActorKind::Sat,
+            b'o' => ActorKind::Diamond,
             b'+' => ActorKind::Heal,
             b'C' => ActorKind::Checkpoint,
-            b'b' => ActorKind::Bandit,
-            b's' => ActorKind::Snake,
-            b'v' => ActorKind::Vulture,
-            b't' => ActorKind::Tumbleweed,
+            b'b' => ActorKind::Sentry,
+            b's' => ActorKind::Crawler,
+            b'v' => ActorKind::Drone,
+            b't' => ActorKind::Mine,
             _ => return None,
         })
     }
 
     pub fn size(self) -> (i32, i32) {
         match self {
-            ActorKind::Sat => (8, 8),
+            ActorKind::Diamond => (8, 8),
             ActorKind::Heal => (10, 10),
             ActorKind::Checkpoint => (8, 24),
-            ActorKind::Bandit => (14, 22),
-            ActorKind::Snake => (16, 14),
-            ActorKind::Vulture => (16, 10),
-            ActorKind::Tumbleweed => (12, 12),
+            ActorKind::Sentry => (14, 22),
+            ActorKind::Crawler => (16, 14),
+            ActorKind::Drone => (16, 10),
+            ActorKind::Mine => (12, 12),
         }
     }
 
     pub fn is_enemy(self) -> bool {
         matches!(
             self,
-            ActorKind::Bandit | ActorKind::Snake | ActorKind::Vulture | ActorKind::Tumbleweed
+            ActorKind::Sentry | ActorKind::Crawler | ActorKind::Drone | ActorKind::Mine
         )
     }
 
     pub fn max_hp(self) -> i32 {
         match self {
-            ActorKind::Bandit => 3,
-            ActorKind::Snake | ActorKind::Vulture => 2,
+            ActorKind::Sentry => 3,
+            ActorKind::Crawler | ActorKind::Drone => 2,
             _ => 1,
         }
     }
 
     pub fn contact_damage(self) -> i32 {
         match self {
-            ActorKind::Bandit | ActorKind::Snake => 2,
+            ActorKind::Sentry | ActorKind::Crawler => 2,
             _ => 1,
         }
     }
@@ -80,12 +80,12 @@ impl ActorKind {
     fn flies(self) -> bool {
         matches!(
             self,
-            ActorKind::Vulture | ActorKind::Sat | ActorKind::Heal | ActorKind::Checkpoint
+            ActorKind::Drone | ActorKind::Diamond | ActorKind::Heal | ActorKind::Checkpoint
         )
     }
 }
 
-/// Snake and bandit behaviour states.
+/// Crawler and sentry behaviour states.
 pub mod state {
     pub const IDLE: u8 = 0;
     pub const AIM: u8 = 1;
@@ -104,7 +104,7 @@ pub struct Actor {
     pub hp: i32,
     pub alive: bool,
     /// Shot down or collected: stays gone after a respawn. Actors that merely left
-    /// (a tumbleweed rolling off screen) come back.
+    /// (a mine rolling off screen) come back.
     pub killed: bool,
     pub awake: bool,
     pub facing: i32,
@@ -116,7 +116,7 @@ pub struct Actor {
 
 impl Actor {
     pub const EMPTY: Actor = Actor {
-        kind: ActorKind::Sat,
+        kind: ActorKind::Diamond,
         body: Body {
             x_fx: 0,
             y_fx: 0,
@@ -226,11 +226,11 @@ impl Actor {
         self.flash = self.flash.saturating_sub(1);
         self.timer = self.timer.saturating_sub(1);
         match self.kind {
-            ActorKind::Bandit => self.bandit(ctx),
-            ActorKind::Snake => self.snake(ctx),
-            ActorKind::Vulture => self.vulture(ctx),
-            ActorKind::Tumbleweed => self.tumbleweed(ctx),
-            ActorKind::Sat | ActorKind::Heal | ActorKind::Checkpoint => {}
+            ActorKind::Sentry => self.sentry(ctx),
+            ActorKind::Crawler => self.crawler(ctx),
+            ActorKind::Drone => self.drone(ctx),
+            ActorKind::Mine => self.mine(ctx),
+            ActorKind::Diamond | ActorKind::Heal | ActorKind::Checkpoint => {}
         }
     }
 
@@ -250,7 +250,7 @@ impl Actor {
         self.facing = if player.centre_x() < self.rect().centre_x() { -1 } else { 1 };
     }
 
-    fn bandit(&mut self, ctx: &mut Ctx) {
+    fn sentry(&mut self, ctx: &mut Ctx) {
         match self.state {
             state::AIM => {
                 self.body.vx_fx = 0;
@@ -282,7 +282,7 @@ impl Actor {
         }
     }
 
-    fn snake(&mut self, ctx: &mut Ctx) {
+    fn crawler(&mut self, ctx: &mut Ctx) {
         match self.state {
             state::IDLE => {
                 self.body.vx_fx = 0;
@@ -318,7 +318,7 @@ impl Actor {
         }
     }
 
-    fn vulture(&mut self, ctx: &mut Ctx) {
+    fn drone(&mut self, ctx: &mut Ctx) {
         let r = self.rect();
         let dx = ctx.player.centre_x() - r.centre_x();
         self.facing = if dx < 0 { -1 } else { 1 };
@@ -329,12 +329,12 @@ impl Actor {
         self.body.x_fx += self.body.vx_fx;
         self.body.y_fx = (self.home.1 + phase / 2) * FX;
         if self.timer == 0 && dx.abs() < 24 {
-            shot::spawn(ctx.shots, ShotKind::Dust, r.centre_x(), r.bottom() + 4, 0, FX);
+            shot::spawn(ctx.shots, ShotKind::Bomb, r.centre_x(), r.bottom() + 4, 0, FX);
             self.timer = ctx.difficulty.fire_interval(150);
         }
     }
 
-    fn tumbleweed(&mut self, ctx: &mut Ctx) {
+    fn mine(&mut self, ctx: &mut Ctx) {
         self.body.vx_fx = -FX;
         let contacts = self.fall(ctx.level);
         if contacts.ground {

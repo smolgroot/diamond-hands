@@ -1,6 +1,6 @@
 //! A simple route bot for tests. It runs right, fires constantly, and jumps at walls,
-//! pits, cacti and villains. In the boss arena it holds a spot near the left wall,
-//! faces the sheriff and jumps her charge and low shots. Playing in god mode, reaching
+//! pits, energy spikes and bots. In the boss arena it holds a spot near the left wall,
+//! faces the mech and jumps her charge and low shots. Playing in god mode, reaching
 //! the end of a level shows the route has no wall or gap the wassie cannot clear.
 
 use crate::{
@@ -28,8 +28,8 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
     }
     out |= keys::RIGHT;
     if !p.grounded {
-        // Hold for full-height jumps.
-        return out | (previous & keys::A);
+        // Hold for full-height jumps, but let go at the top: holding on would hover.
+        return out | if p.body.vy_fx < 0 { previous & keys::A } else { 0 };
     }
 
     let level = world.level;
@@ -44,16 +44,16 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
     // are walked off; leaping off a high ledge can overshoot into the next pit.
     let ahead = (front + 4).div_euclid(TILE);
     let gap = (feet_row..feet_row + 6).all(|ty| !level.is_floor(ahead, ty));
-    let cactus = (1..=3).any(|d| level.tile((front + d * 4).div_euclid(TILE), feet_row - 1) == Tile::Spike);
+    let spikes = (1..=3).any(|d| level.tile((front + d * 4).div_euclid(TILE), feet_row - 1) == Tile::Spike);
     let villain = world.actors.iter().any(|a| {
         let ar = a.rect();
         a.is_threat()
-            && a.kind != ActorKind::Vulture
+            && a.kind != ActorKind::Drone
             && (0..24).contains(&(ar.x - front))
             && ar.y < r.bottom()
             && r.y < ar.bottom()
     });
-    if (wall || gap || cactus || villain) && previous & keys::A == 0 {
+    if (wall || gap || spikes || villain) && previous & keys::A == 0 {
         out |= keys::A;
     }
     out
@@ -63,7 +63,7 @@ fn arena_keys(world: &World, previous: u16) -> u16 {
     let p = &world.player;
     let r = p.body.rect();
     let boss = world.boss.rect();
-    // Face the sheriff (she ends up behind after a charge), otherwise hold a spot left
+    // Face the mech (she ends up behind after a charge), otherwise hold a spot left
     // of the arena's first plank: bolts fired from up there fly over her head.
     let mut out = 0;
     let boss_left = boss.centre_x() < r.centre_x();
@@ -74,7 +74,7 @@ fn arena_keys(world: &World, previous: u16) -> u16 {
         out |= keys::RIGHT;
     }
     if !p.grounded {
-        return out | (previous & keys::A);
+        return out | if p.body.vy_fx < 0 { previous & keys::A } else { 0 };
     }
     let charging = matches!(world.boss.state, BossState::Charge | BossState::Leap)
         && (boss.centre_x() - r.centre_x()).abs() < 72;
