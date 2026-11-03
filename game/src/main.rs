@@ -15,6 +15,7 @@ mod font;
 mod probe;
 mod render;
 mod save;
+mod sound;
 
 use diamond_hands_logic::{Events, Game, Input};
 
@@ -25,6 +26,7 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut game = Game::with_difficulty(best, difficulty);
     let mut gfx = gba.graphics.get();
     let mut renderer = render::Renderer::new(&mut gfx);
+    let mut sfx = sound::Sfx::new();
     let mut previous = 0;
 
     loop {
@@ -34,6 +36,7 @@ fn main(mut gba: agb::Gba) -> ! {
         let events = game.step(&Input::from_keys(held, previous));
         previous = held;
         probe::publish(&game);
+        sfx.play(events);
 
         if events.contains(Events::SAVE) {
             store.save(game.best, game.difficulty);
