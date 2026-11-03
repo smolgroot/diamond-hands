@@ -10,7 +10,7 @@ use crate::{
     level::{Level, Tile},
     levels,
     physics::Body,
-    player::{DIAGONAL, HOVER_FRAMES, MAX_HP, PLAYER_H, PLAYER_W, Player, PlayerState, STOMP_BOUNCE_FX},
+    player::{DIAGONAL, HOVER_FRAMES, MAX_HP, PLAYER_H, PLAYER_W, Player, PlayerState, RUN_MAX_FX, STOMP_BOUNCE_FX},
     rng::Rng,
     shot::{self, MAX_SHOTS, Shot, ShotKind},
 };
@@ -37,6 +37,9 @@ const CAMERA_BAND: (i32, i32) = (96, 136);
 const WAKE_MARGIN: i32 = 16;
 /// Frames between jetpack exhaust puffs.
 const PUFF_EVERY: u32 = 6;
+/// Frames between dust puffs kicked up by running and braking.
+const DUST_EVERY: u32 = 10;
+const SKID_EVERY: u32 = 4;
 
 /// Buttons for one frame: what is held and what went down this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,6 +120,8 @@ impl Events {
     pub const SAVE: Events = Events(1 << 13);
     /// The boss slammed the ground.
     pub const SLAM: Events = Events(1 << 14);
+    /// The wassie touched down from a real fall.
+    pub const LAND: Events = Events(1 << 15);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -285,6 +290,7 @@ impl World {
             let r = self.player.body.rect();
             self.fx.spawn(FxKind::Puff, r.centre_x() - self.player.facing * 9, r.bottom() - 4);
         }
+        self.kick_up_dust(&events);
         self.enter_arena(&mut events);
         self.fire(input, &mut events);
         self.update_camera();
@@ -328,6 +334,26 @@ impl World {
         self.collide(&mut events);
         self.hazards(&mut events);
         events
+    }
+
+    /// Dust at the wassie's feet: a burst on take-off and on a hard landing, a puff
+    /// behind the heel every few strides, and a spray in front while skidding.
+    fn kick_up_dust(&mut self, events: &Events) {
+        let p = &self.player;
+        let r = p.body.rect();
+        let (x, feet) = (r.centre_x(), r.bottom() - 3);
+        if events.contains(Events::JUMP) || events.contains(Events::LAND) {
+            self.fx.spawn(FxKind::Kick, x, feet);
+        } else if p.braking && self.frames % SKID_EVERY == 0 {
+            let ahead = p.body.vx_fx.signum();
+            self.fx.spawn(FxKind::Dust, x + ahead * 6, feet);
+        } else if p.state == PlayerState::Run
+            && p.body.vx_fx.abs() >= RUN_MAX_FX
+            && self.frames % DUST_EVERY == 0
+        {
+            let behind = -p.body.vx_fx.signum();
+            self.fx.spawn(FxKind::Dust, x + behind * 6, feet);
+        }
     }
 
     fn enter_arena(&mut self, events: &mut Events) {

@@ -23,7 +23,7 @@ use diamond_hands_logic::{
     fx::FxKind,
     game::{options_menu, title_menu},
     levels::MAP,
-    player::{HOVER_FRAMES, MAX_HP, PlayerState},
+    player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
     talk::Speaker,
     world::CHARGE_FRAMES,
@@ -48,6 +48,8 @@ const TERRAIN_PALETTE: u8 = 1;
 /// Most terrain columns written per frame. Scrolling needs at most one; after the
 /// camera jumps (a respawn) the screen refills over a few frames, so no frame runs long.
 const COLUMNS_PER_FRAME: usize = 8;
+/// Falling at least this fast draws wind streaks over the wassie.
+const SPEED_LINES_FX: i32 = 4 * diamond_hands_logic::FX;
 const KEY_UNSET: u16 = u16::MAX;
 const KEY_BLANK: u16 = u16::MAX - 1;
 
@@ -484,7 +486,12 @@ impl Renderer {
         // Muzzle effects first so they sit on top of the wassie.
         let (mx, my) = p.muzzle();
         if p.recoil > 0 {
-            flipped(&self.common.muzzle[(p.recoil < 4) as usize], (mx - 4 - cam, my - 4), frame);
+            let late = (p.recoil < 4) as usize;
+            flipped(&self.common.muzzle[late], (mx - 4 - cam, my - 4), frame);
+            // A forward shot also throws a ring of light round the barrel's tip.
+            if p.aim == Aim::Forward {
+                self.put(frame, &self.common.muzzle_ring[late], mx - 4 + p.facing * 2 - cam, my - 8);
+            }
         } else if p.charge >= CHARGE_FRAMES {
             let pulse = (game.frame / 4 % 2) as usize;
             let glow = &self.common.charge[if pulse == 0 { 1 } else { 0 }];
@@ -511,6 +518,18 @@ impl Renderer {
                     flipped(&self.wassie.flames[flame], part(wassie::FLAME_AT, 8), frame);
                 }
             }
+        }
+
+        // Seeing stars while knocked back, and wind streaks over a hard fall.
+        if p.state == PlayerState::Hurt {
+            for i in 0..3 {
+                let a = (game.frame as i32 / 3 + i * 6) % 18;
+                let sx = r.centre_x() - 4 - cam + (a - 9).abs() * 2 - 9;
+                let sy = r.y - 12 + (a % 9) / 3;
+                self.put(frame, &self.villains.ursa.star, sx, sy);
+            }
+        } else if p.state == PlayerState::Fall && p.body.vy_fx >= SPEED_LINES_FX {
+            self.put(frame, &self.common.speed_lines, r.centre_x() - 4 - cam, r.y - 14);
         }
 
         flipped(self.wassie.sprite(p, anim, game.frame), (x, y), frame);
@@ -565,6 +584,25 @@ impl Renderer {
                 FxKind::Glint => (&c.glint[f.frame(2)], 4),
                 FxKind::Sparks => (&c.sparks[f.frame(2)], 4),
                 FxKind::Puff => (&c.puff[f.frame(2)], 4),
+                FxKind::Dust => {
+                    // Sits on the ground and drifts up a little as it thins.
+                    let y = f.y + 3 - 8 - f.age as i32 / 5;
+                    self.put(frame, &c.dust[f.frame(3)], f.x - 4 - cam, y);
+                    continue;
+                }
+                FxKind::Kick => {
+                    // Two mirrored halves spraying out from under the feet.
+                    let sprite = &c.kick[f.frame(3)];
+                    for left in [false, true] {
+                        let x = if left { f.x - 16 } else { f.x };
+                        Object::new(sprite.clone())
+                            .set_pos(vec2(x - cam, f.y + 3 - 8))
+                            .set_hflip(left)
+                            .set_priority(self.world_layer)
+                            .show(frame);
+                    }
+                    continue;
+                }
             };
             // Glints float up as they fade; exhaust sinks.
             let rise = match f.kind {

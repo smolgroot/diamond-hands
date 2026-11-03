@@ -17,6 +17,10 @@ pub enum FxKind {
     Sparks,
     /// Jetpack exhaust, drifting down as it fades.
     Puff,
+    /// A little cloud of dust behind a running heel or ahead of a skid.
+    Dust,
+    /// Dust kicked out both ways when the wassie jumps or lands hard.
+    Kick,
 }
 
 impl FxKind {
@@ -28,6 +32,8 @@ impl FxKind {
             FxKind::Glint => 12,
             FxKind::Sparks => 10,
             FxKind::Puff => 14,
+            FxKind::Dust => 15,
+            FxKind::Kick => 12,
         }
     }
 }

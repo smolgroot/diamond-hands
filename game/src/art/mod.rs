@@ -240,6 +240,121 @@ pub struct Common {
     pub sparks: [SpriteVram; 2],
     /// Jetpack exhaust, thick then thinning.
     pub puff: [SpriteVram; 2],
+    /// Muzzle ring for a forward shot facing right, wide then narrowing.
+    pub muzzle_ring: [SpriteVram; 2],
+    /// Dust behind a running heel, billowing then breaking up.
+    pub dust: [SpriteVram; 3],
+    /// Half of a take-off or landing burst, kicking right; flip for the left half.
+    pub kick: [SpriteVram; 3],
+    /// Wind streaks over a hard fall.
+    pub speed_lines: SpriteVram,
+}
+
+/// Cream and tan for the dust, after the sprite sheet's dust clouds.
+static DUST_PALETTE: Palette16 = Palette16::new([
+    rgb(0, 0, 0),
+    rgb(31, 29, 24),
+    rgb(27, 23, 17),
+    rgb(19, 15, 11),
+    rgb(10, 7, 6),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+]);
+/// Highlight, cream, tan shade, dark outline.
+const DUST_KEY: &[(u8, u8)] = &[(b'w', 1), (b'o', 2), (b'd', 3), (b'k', 4)];
+
+const DUST0: [&str; 6] = [
+    "..ww....",
+    ".wwoo...",
+    "wwooodd.",
+    "woooddd.",
+    ".kdddkk.",
+    "..kkk...",
+];
+const DUST1: [&str; 7] = [
+    "...ww...",
+    "..wwoo..",
+    ".woooo..",
+    "wwood.ww",
+    "woddkwod",
+    ".kkk.kdk",
+    "......k.",
+];
+const DUST2: [&str; 6] = [
+    "..w.....",
+    ".wo...w.",
+    "..d..wo.",
+    "......d.",
+    ".w......",
+    "..d.....",
+];
+/// Kick-up, the right half: grit sprays out low and wide from under the feet.
+const KICK0: [&str; 8] = [
+    "................",
+    "................",
+    "................",
+    "...w............",
+    "..woo..w........",
+    "wwoodd.wo.......",
+    "woooddwwod......",
+    "kkdddkkkdk......",
+];
+const KICK1: [&str; 8] = [
+    "................",
+    "..........w.....",
+    ".......w...o....",
+    "....w...o.......",
+    "...wo.ww...ww...",
+    "..wod.woo.wood..",
+    ".wodd.kodd.kdk..",
+    "..kk...kk.......",
+];
+const KICK2: [&str; 8] = [
+    "................",
+    "............w...",
+    "..........o.....",
+    "........w.....o.",
+    "...........d....",
+    ".....w..........",
+    "...........d..w.",
+    "................",
+];
+
+fn dust(size: Size, x: i32, y: i32, rows: &[&str]) -> SpriteVram {
+    let mut c = Canvas::new(size);
+    c.art_with(DUST_KEY, x, y, rows);
+    c.vram_with(&DUST_PALETTE)
+}
+
+/// An upright ring of laser light round the muzzle, 8x16: magenta rim, pink band,
+/// white-hot centre. `rx`, `ry` in half pixels so it can sit centred in the sprite.
+fn muzzle_ring(rx: i32, ry: i32) -> SpriteVram {
+    let mut c = Canvas::new(Size::S8x16);
+    for y in 0..16 {
+        for x in 0..8 {
+            // Distance from the centre (4, 8) on a 0..=64 scale.
+            let (dx, dy) = (2 * x + 1 - 8, 2 * y + 1 - 16);
+            let d = 64 * dx * dx / (rx * rx) + 64 * dy * dy / (ry * ry);
+            let colour = match d {
+                0..=12 => ix::WHITE,
+                13..=30 => continue,
+                31..=44 => ix::LASER_LIGHT,
+                45..=64 => ix::LASER,
+                _ => continue,
+            };
+            c.px(x, y, colour);
+        }
+    }
+    c.vram()
 }
 
 const DIAMOND0: [&str; 8] = [
@@ -422,14 +537,17 @@ const SPARK1: [&str; 7] = [
     "o.....o",
 ];
 
-/// Laser bolt heading right: white-hot core, pink edge, a few trailing sparks.
-const BOLT: [&str; 6] = [
-    "......c.....C...",
-    "..c.cCCCCCCCCc..",
-    ".cCCwwwwwwwwwwCc",
-    ".cCCwwwwwwwwwwCc",
-    "..c.cCCCCCCCCc..",
-    "......c...c.....",
+/// Laser bolt heading right: white-hot core, pink edge, a few trailing sparks, and a
+/// ring of light round the head, as in the sprite sheet.
+const BOLT: [&str; 8] = [
+    "..........cCCc..",
+    "......c...cwwC..",
+    "..c.cCCCCCcwwwC.",
+    ".cCCwwwwwwwwwwwC",
+    ".cCCwwwwwwwwwwwC",
+    "..c.cCCCCCcwwwC.",
+    "......c...cwwC..",
+    "..........cCCc..",
 ];
 
 /// Draws a small effect drawing centred in an 8x8 or 16x16 sprite.
@@ -453,7 +571,7 @@ impl Common {
             heal: cold_wallet(),
             life: core::array::from_fn(|n| life_quarter(n as i32)),
             boss_cell: core::array::from_fn(|n| boss_cell(n as i32)),
-            bolt: drawing(Size::S16x8, 0, 1, &BOLT),
+            bolt: drawing(Size::S16x8, 0, 0, &BOLT),
             bolt_up: turned(Size::S8x16, &BOLT),
             bolt_diagonal: laser_diagonal(Size::S16x16, 11, 3),
             beam: beam(),
@@ -485,6 +603,18 @@ impl Common {
             glint: [centred(Size::S8x8, &GLINT0), centred(Size::S8x8, &GLINT1)],
             sparks: [centred(Size::S8x8, &SPARK0), centred(Size::S8x8, &SPARK1)],
             puff: [centred(Size::S8x8, &PUFF0), centred(Size::S8x8, &PUFF1)],
+            muzzle_ring: [muzzle_ring(8, 16), muzzle_ring(6, 11)],
+            dust: [dust(Size::S8x8, 0, 2, &DUST0), dust(Size::S8x8, 0, 1, &DUST1), dust(Size::S8x8, 0, 2, &DUST2)],
+            kick: [&KICK0, &KICK1, &KICK2].map(|r| dust(Size::S16x8, 0, 0, r)),
+            speed_lines: drawing(
+                Size::S8x16,
+                0,
+                0,
+                &[
+                    ".S....S.", ".S....S.", ".S..g.S.", ".g..g.S.", "....g.g.", "....S...", ".S..S...",
+                    ".S..g..S", ".g.....S", ".......g", "....S...", "....g...",
+                ],
+            ),
         }
     }
 }

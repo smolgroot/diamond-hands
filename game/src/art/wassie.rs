@@ -1,7 +1,9 @@
-//! The wassie, after the cover art: a teal bean of a head with sleepy half-lidded eyes
-//! and a big white bill, a red poncho with a gold ammo bandolier, a tattered cape that
-//! streams behind it, white webbed feet, and an oversized blaster with a magenta muzzle
-//! and a little wassie-teal diamond insignia.
+//! The wassie, after the cover art and the player sprite sheet
+//! (`.claude/skills/diamond-hands-gba/sprite-sheet.png`): a teal bean of a head with a
+//! gold rim light down the back, sleepy half-lidded eyes and a broad white bill, a red
+//! scarf wrapped at the neck over a red poncho with a gold ammo bandolier, a tattered
+//! cape that streams behind it, white webbed feet, and an oversized blaster with a
+//! magenta muzzle and a little wassie-teal diamond insignia.
 //!
 //! Every body pose is a 32x32 sprite facing right (the renderer flips it), layered from
 //! back to front: cape, head, poncho, legs. The blaster and hands are a second 32x32
@@ -9,7 +11,9 @@
 //! rather than five sets of poses. The wassie has its own palette, so it can be shaded
 //! more finely than the bots. At rest it breathes (the upper body settles a pixel);
 //! firing kicks the cannon back two pixels along the aim and the upper body one, while
-//! the legs stay planted. Hovering straps on a jetpack with a flickering flame.
+//! the legs stay planted. Hovering straps on a jetpack with a flickering flame. Hard
+//! landings squash it for a few frames, skids lean it back on its heels, and a knockout
+//! slumps it and then lays it flat on its face.
 
 use agb::display::{
     Palette16,
@@ -17,6 +21,7 @@ use agb::display::{
 };
 use diamond_hands_logic::{
     PlayerState,
+    world::DEATH_FRAMES,
     player::{Aim, Player},
 };
 
@@ -35,6 +40,8 @@ const GRIP_DOWN_FORWARD: (i32, i32) = (16, 17);
 /// Jetpack and its flame, top-left in the 32x32 frame facing right.
 pub const JETPACK_AT: (i32, i32) = (0, 12);
 pub const FLAME_AT: (i32, i32) = (0, 26);
+/// Frames of the knockout spent sagging before it keels over.
+const SLUMP_FRAMES: u16 = 14;
 /// Recoil: how far the cannon and the upper body are pushed back.
 const RECOIL_BLASTER: i32 = 2;
 const RECOIL_BODY: i32 = 1;
@@ -78,82 +85,91 @@ const KEY: &[(u8, u8)] = &[
     (b'm', 15),
 ];
 
-/// Rows 0..15: head and bill.
+/// Rows 0..15: the head, after the sprite sheet. A tall dome tipped back, with the
+/// gold rim light down the back, one sleepy half-lidded eye and a broad white bill
+/// that juts well past the face, shaded underneath.
 const HEAD: [&str; 15] = [
-    "................",
-    "......kkkk......",
-    ".....kTTttk.....",
-    "....kTTttttk....",
-    "...kTTtttttdk...",
-    "...kTtttttttdk..",
-    "..kTttttttttdk..",
-    "..kTkkkttkkkkdk.",
-    "..ktwwktkwwwkdk.",
-    "..kttttttttttdk.",
-    "..kttttttkkkkkkk",
-    "..ktttttkwwwwwwk",
-    "..kdttttkwwwwwbk",
-    "..kdtttttkbbbbk.",
-    "..kddttttdkkkk..",
+    "....kkkkkk..........",
+    "...kyTTTTTkk........",
+    "..kyTTtttttTk.......",
+    ".kyTttttttttdk......",
+    ".kyTtttttttttdk.....",
+    "kyTttttttttttdk.....",
+    "kyTtttkkkkkkkdk.....",
+    "kytttkwwwwwkkdk.....",
+    "kytttttkkkkkkkkkkk..",
+    "kYttttttkwwwwwwwwwk.",
+    "kYdtttttkwwwwwwwwwwk",
+    "kYdttttttkwwwwwwwbbk",
+    ".kddttttttkbbbbbbbk.",
+    ".kdddtttttdkkkkkkk..",
+    "..kdddddddk.........",
 ];
+/// Where the head's rows sit in the sprite.
+const HEAD_Y: i32 = 0;
 
-/// Squeezed-shut eyes over rows 7..9, for hurt and knocked-out poses.
+/// The eye squeezed shut, over head rows 6..8, for hurt and knocked-out poses.
 const EYES_SHUT: [&str; 2] = [
-    "..kTttttttttdk..",
-    "..ktkkkttkkkkdk.",
+    "kyTttttttttttdk.....",
+    "kytttkkkkkkkkdk.....",
 ];
+const EYES_Y: i32 = HEAD_Y + 6;
 
-/// Rows 15..27: poncho with the bandolier, tattered at the hem.
-const PONCHO: [&str; 12] = [
-    "..kqpppppppqk...",
-    ".kqpPPpppppppk..",
-    ".kpPPyypppppppk.",
-    "kqpPpYyyppppppk.",
-    "kqpppppYyypppppk",
-    "kqppppppppYyyppk",
-    "kqqpppppppppYypk",
-    "kqqppppPpppppppk",
-    "kqqqpppPppppppqk",
-    ".kqqqpppPpppqqk.",
-    ".kqkqqpkqppqkqk.",
-    "..k.kk.k.kk.k...",
-];
-
-/// Legs and webbed feet, rows 27..32.
-const LEGS_STAND: [&str; 5] = [
-    ".....dd..dd.....",
-    ".....dd..dd.....",
-    "....kwwk.kwwk...",
-    "...kwwbwkkwwbwk.",
-    "...kkkkkkkkkkkk.",
-];
-const LEGS_STRIDE: [&str; 5] = [
-    ".....dd..dd.....",
-    "....dd....dd....",
-    "..kwwk.....kwwk.",
-    ".kwwbwk...kwwbwk",
-    ".kkkkkk...kkkkkk",
-];
-const LEGS_PASS: [&str; 5] = [
-    "......ddd.......",
-    "......dd........",
-    ".....kwwk.......",
-    "....kwwbwk......",
-    "....kkkkkk......",
-];
-const LEGS_TUCK: [&str; 5] = [
-    "....dd....dd....",
-    "...kwwk..kwwk...",
-    "..kwwbwk.kwwbwk.",
-    "..kkkkkk.kkkkkk.",
+/// The body: the scarf wrapped under the bill with a gold fold at the shoulder, over a
+/// round red belly. No neck and no legs to speak of.
+const BODY: [&str; 16] = [
+    "...kqPPPPPPk....",
+    "..kqPPyyPPPPk...",
+    ".kqpPyYPPppPk...",
+    ".kqppPPppppppk..",
+    "kqppPPpppppppk..",
+    "kqpPPppppppppk..",
+    "kqpPpppppppppk..",
+    "kqpPppppppppqk..",
+    "kqqpppppppppqk..",
+    "kqqpppppppppqk..",
+    "kqqppppppppqqk..",
+    ".kqqpppppppqk...",
+    ".kqqqppppqqqk...",
+    "..kqqqqqqqqk....",
+    "...kkkkkkkk.....",
     "................",
 ];
-const LEGS_DANGLE: [&str; 5] = [
-    ".....dd..dd.....",
-    ".....dd...dd....",
-    ".....kwk..kwwk..",
-    "....kwbwk.kwwbwk",
-    "....kkkkk.kkkkkk",
+const BODY_Y: i32 = 13;
+
+/// Little white feet tucked right under the belly, rows 29..32.
+const FEET_Y: i32 = 29;
+const FEET_STAND: [&str; 3] = [
+    "...kwwk.kwwwk...",
+    "..kwwwbkkwwwbk..",
+    "..kkkkkk.kkkkkk.",
+];
+const FEET_STRIDE: [&str; 3] = [
+    ".kwwk......kwwk.",
+    "kwwbk.....kwwwbk",
+    "kkkk......kkkkkk",
+];
+const FEET_PASS: [&str; 3] = [
+    "....kwwwk.......",
+    "...kwwwwbk......",
+    "...kkkkkkk......",
+];
+/// Drawn two rows higher, pulled up against the belly.
+const FEET_TUCK: [&str; 3] = [
+    "...kwwk..kwwk...",
+    "..kwwbk.kwwbk...",
+    "..kkkk..kkkk....",
+];
+/// Spread flat, for the landing squash.
+const FEET_SQUAT: [&str; 3] = [
+    "................",
+    ".kwwwk....kwwwk.",
+    ".kkkkkk..kkkkkk.",
+];
+const FEET_DANGLE: [&str; 3] = [
+    "....kwk...kwk...",
+    "...kwwbk.kwwbk..",
+    "...kkkk..kkkk...",
 ];
 
 /// The cape, 12 wide at the left edge, behind the body. It hangs at rest, ripples
@@ -261,7 +277,7 @@ const BLASTER: [&str; 11] = [
 ];
 
 /// Hands on the grip and foregrip, relative to the blaster.
-const HANDS: [(i32, i32, &[&str]); 2] = [(4, 8, &["kTtk", "ktdk"]), (10, 8, &["kttk"])];
+const HANDS: [(i32, i32, &[&str]); 2] = [(3, 7, &[".kk.", "kTtk", "ktdk", ".kk."]), (10, 8, &["kttk"])];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Legs {
@@ -269,6 +285,7 @@ enum Legs {
     Stride,
     Pass,
     Tuck,
+    Squat,
     Dangle,
 }
 
@@ -288,15 +305,41 @@ enum Upper {
     Settled,
     /// Just fired: the body pushed back.
     Recoil,
+    /// Touching down hard: squashed two pixels into the legs.
+    Squash,
+    /// Skidding: leaning back on the heels.
+    Lean,
+    /// Knocked out: sagging before it keels over.
+    Slump,
+}
+
+impl Upper {
+    fn offset(self) -> (i32, i32) {
+        match self {
+            Upper::Ready => (0, 0),
+            Upper::Settled => (0, 1),
+            Upper::Recoil => (-RECOIL_BODY, 0),
+            Upper::Squash => (0, 2),
+            Upper::Lean => (-1, 1),
+            Upper::Slump => (0, 3),
+        }
+    }
+}
+
+fn feet(legs: Legs) -> (i32, &'static [&'static str]) {
+    match legs {
+        Legs::Stand => (FEET_Y, &FEET_STAND),
+        Legs::Stride => (FEET_Y, &FEET_STRIDE),
+        Legs::Pass => (FEET_Y, &FEET_PASS),
+        Legs::Tuck => (FEET_Y - 2, &FEET_TUCK),
+        Legs::Squat => (FEET_Y, &FEET_SQUAT),
+        Legs::Dangle => (FEET_Y, &FEET_DANGLE),
+    }
 }
 
 fn pose(legs: Legs, cape: Cape, upper: Upper, eyes_shut: bool) -> SpriteVram {
     let mut c = Canvas::new(Size::S32x32);
-    let (dx, dy) = match upper {
-        Upper::Ready => (0, 0),
-        Upper::Settled => (0, 1),
-        Upper::Recoil => (-RECOIL_BODY, 0),
-    };
+    let (dx, dy) = upper.offset();
     let (cape_y, cape_rows): (i32, &[&str]) = match cape {
         Cape::Hang => (15, &CAPE_HANG),
         Cape::Run(0) => (15, &CAPE_RUN0),
@@ -306,19 +349,32 @@ fn pose(legs: Legs, cape: Cape, upper: Upper, eyes_shut: bool) -> SpriteVram {
         Cape::Fall => (8, &CAPE_FALL),
     };
     c.art_with(KEY, dx, cape_y + dy, cape_rows);
-    let legs: &[&str] = match legs {
-        Legs::Stand => &LEGS_STAND,
-        Legs::Stride => &LEGS_STRIDE,
-        Legs::Pass => &LEGS_PASS,
-        Legs::Tuck => &LEGS_TUCK,
-        Legs::Dangle => &LEGS_DANGLE,
-    };
-    c.art_with(KEY, BODY_X, 27, legs);
-    c.art_with(KEY, BODY_X + dx, dy, &HEAD);
+    c.art_with(KEY, BODY_X + dx, BODY_Y + dy, &BODY);
+    c.art_with(KEY, BODY_X + dx, HEAD_Y + dy, &HEAD);
     if eyes_shut {
-        c.art_with(KEY, BODY_X + dx, 7 + dy, &EYES_SHUT);
+        c.art_with(KEY, BODY_X + dx, EYES_Y + dy, &EYES_SHUT);
     }
-    c.art_with(KEY, BODY_X + dx, 15 + dy, &PONCHO);
+    // The feet stay planted and sit over the belly's hem.
+    let (feet_y, feet_rows) = feet(legs);
+    c.art_with(KEY, BODY_X, feet_y, feet_rows);
+    c.vram_with(&PALETTE)
+}
+
+/// Out cold, flat on its face: the standing layers turned a quarter clockwise, so the
+/// head lies at the right with the bill in the dirt and the cape draped over the back.
+fn lying() -> SpriteVram {
+    let mut c = Canvas::new(Size::S32x32);
+    // Upright (x, y) lands at (31 - y, x + Y0) once turned; each layer is placed by
+    // where its top-left corner would be upright.
+    const Y0: i32 = 6;
+    let turned = |c: &mut Canvas, x: i32, y: i32, rows: &[&str]| {
+        c.art_turned_cw(KEY, 32 - y - rows.len() as i32, x + Y0, rows);
+    };
+    turned(&mut c, 0, 15, &CAPE_HANG);
+    turned(&mut c, BODY_X, BODY_Y, &BODY);
+    turned(&mut c, BODY_X, FEET_Y, &FEET_STAND);
+    turned(&mut c, BODY_X, HEAD_Y, &HEAD);
+    turned(&mut c, BODY_X, EYES_Y, &EYES_SHUT);
     c.vram_with(&PALETTE)
 }
 
@@ -472,7 +528,11 @@ pub struct Wassie {
     poses: [[SpriteVram; 2]; 6],
     breathing: SpriteVram,
     hurt: SpriteVram,
-    knocked_out: SpriteVram,
+    /// Touching down hard, and skidding to a stop.
+    landing: SpriteVram,
+    braking: SpriteVram,
+    /// Sagging, then flat out.
+    knocked_out: [SpriteVram; 2],
     /// Blaster and hands per [`Aim`], in [`Aim::ALL`] order.
     blasters: [SpriteVram; 5],
     pub jetpack: SpriteVram,
@@ -487,7 +547,9 @@ impl Wassie {
             poses: STANCES.map(|(l, c)| [pose(l, c, Upper::Ready, false), pose(l, c, Upper::Recoil, false)]),
             breathing: pose(Legs::Stand, Cape::Hang, Upper::Settled, false),
             hurt: pose(Legs::Tuck, Cape::Jump, Upper::Ready, true),
-            knocked_out: pose(Legs::Stand, Cape::Hang, Upper::Settled, true),
+            landing: pose(Legs::Squat, Cape::Hang, Upper::Squash, false),
+            braking: pose(Legs::Stride, Cape::Run(0), Upper::Lean, false),
+            knocked_out: [pose(Legs::Squat, Cape::Hang, Upper::Slump, true), lying()],
             blasters: Aim::ALL.map(blaster),
             jetpack: {
                 let mut c = Canvas::new(Size::S8x16);
@@ -501,7 +563,8 @@ impl Wassie {
             }),
             portrait: {
                 let mut c = Canvas::new(Size::S32x32);
-                c.art_scaled(KEY, 0, 1, &HEAD, 2);
+                // Too wide to fit at double size: the bill runs off the frame's edge.
+                c.art_scaled(KEY, -2, 1, &HEAD, 2);
                 c.vram_with(&PALETTE)
             },
         }
@@ -510,16 +573,23 @@ impl Wassie {
     /// The body pose for this frame. `anim` advances the run cycle; `frame` paces
     /// breathing.
     pub fn sprite(&self, player: &Player, anim: u32, frame: u32) -> &SpriteVram {
+        let firing = player.recoil > 2;
         let stance = match player.state {
             PlayerState::Hurt => return &self.hurt,
-            PlayerState::Dead => return &self.knocked_out,
+            PlayerState::Dead => {
+                let sagging = player.dead_timer > DEATH_FRAMES - SLUMP_FRAMES;
+                return &self.knocked_out[!sagging as usize];
+            }
+            // Firing keeps its own recoil pose; otherwise landing and skidding win.
+            PlayerState::Idle | PlayerState::Run if player.land > 0 && !firing => return &self.landing,
+            PlayerState::Run if player.braking && !firing => return &self.braking,
             PlayerState::Idle => 0,
             PlayerState::Run => RUN[(anim / 6 % 4) as usize],
             PlayerState::Jump | PlayerState::Hover => 4,
             PlayerState::Fall => 5,
         };
         let poses = &self.poses[stance];
-        if player.recoil > 2 {
+        if firing {
             &poses[1]
         } else if stance == 0 && frame % 64 >= 32 {
             &self.breathing

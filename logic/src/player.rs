@@ -40,6 +40,12 @@ pub const BUFFER_FRAMES: u8 = 6;
 pub const INVULN_FRAMES: u16 = 60;
 /// Frames without control after a hit.
 pub const HURT_FRAMES: u8 = 14;
+/// Frames of the landing squash after a real fall.
+pub const LAND_FRAMES: u8 = 8;
+/// Falling faster than this when touching down squashes the wassie and kicks up dust.
+pub const HARD_LANDING_FX: i32 = 2 * FX;
+/// Sliding faster than this with no push (or against it) is a brake: heels dug in.
+pub const BRAKE_FX: i32 = FX / 2;
 /// Height of a full jump in pixels; velocity is integrated before position, so this is
 /// the discrete sum over the rising frames.
 pub const JUMP_APEX: i32 = {
@@ -132,6 +138,10 @@ pub struct Player {
     pub hovering: bool,
     /// Frames left in the knocked-out pose before respawning.
     pub dead_timer: u16,
+    /// Frames left in the landing squash.
+    pub land: u8,
+    /// Skidding to a stop on the ground this frame.
+    pub braking: bool,
 }
 
 impl Player {
@@ -154,6 +164,8 @@ impl Player {
             hover_fuel: HOVER_FRAMES,
             hovering: false,
             dead_timer: 0,
+            land: 0,
+            braking: false,
         }
     }
 
@@ -179,6 +191,7 @@ impl Player {
         }
         // Holding L or R on the ground plants the feet, so the d-pad only aims.
         let push = if self.grounded && input.plant() { 0 } else { dir };
+        self.braking = self.grounded && body.vx_fx.abs() > BRAKE_FX && body.vx_fx * push <= 0;
         if push != 0 {
             let accel = if self.grounded { RUN_ACCEL_FX } else { AIR_ACCEL_FX };
             // Turning around on the ground is snappy: drop the opposing speed first.
@@ -227,8 +240,15 @@ impl Player {
             body.vy_fx = (body.vy_fx + GRAVITY_FX).min(MAX_FALL_FX);
         }
 
+        let falling = body.vy_fx;
+        let was_grounded = self.grounded;
         let contacts = body.step(level);
         self.grounded = contacts.ground;
+        self.land = self.land.saturating_sub(1);
+        if self.grounded && !was_grounded && falling >= HARD_LANDING_FX {
+            self.land = LAND_FRAMES;
+            events.insert(Events::LAND);
+        }
         if self.grounded {
             self.hovering = false;
             self.hover_fuel = HOVER_FRAMES;
@@ -275,6 +295,7 @@ impl Player {
         self.invuln = INVULN_FRAMES;
         self.hurt = HURT_FRAMES;
         self.charge = 0;
+        self.land = 0;
         self.hovering = false;
         let away = if self.body.rect().centre_x() < from_x { -1 } else { 1 };
         self.body.vx_fx = away * 3 * FX / 2;
@@ -537,5 +558,40 @@ mod tests {
         step(&mut p, keys::RIGHT, 0);
         assert_eq!(p.state, PlayerState::Hurt);
         assert!(p.body.vx_fx < 0, "no control while hurt");
+    }
+
+    #[test]
+    fn a_full_jump_lands_hard_and_squashes() {
+        let mut p = player();
+        step(&mut p, keys::A, 0);
+        let mut landed = Events::default();
+        for _ in 0..60 {
+            let keys = if p.body.vy_fx < 0 { keys::A } else { 0 };
+            landed = step(&mut p, keys, keys::A);
+            if p.grounded {
+                break;
+            }
+        }
+        assert!(landed.contains(Events::LAND));
+        assert_eq!(p.land, LAND_FRAMES);
+        for _ in 0..LAND_FRAMES {
+            step(&mut p, 0, 0);
+        }
+        assert_eq!(p.land, 0, "the squash wears off");
+    }
+
+    #[test]
+    fn letting_go_at_full_speed_skids() {
+        let mut p = player();
+        for _ in 0..30 {
+            step(&mut p, keys::RIGHT, keys::RIGHT);
+        }
+        assert!(!p.braking, "running is not braking");
+        step(&mut p, 0, keys::RIGHT);
+        assert!(p.braking);
+        for _ in 0..30 {
+            step(&mut p, 0, 0);
+        }
+        assert!(!p.braking, "stopped");
     }
 }

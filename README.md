@@ -42,6 +42,14 @@ with a boss.
   how often bots fire. It is saved to SRAM with the best score.
 
 Art direction follows `cover.png` and the project skill in `.claude/skills/diamond-hands-gba/`.
+The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
+- the wassie has a gold rim light, a broad bill and a red neck scarf
+- it squashes on a hard landing and leans back when it skids
+- it sees stars when hit, and when knocked out it slumps, then falls flat
+- dust puffs behind its heels when it runs, sprays ahead when it skids, and kicks up both
+  ways on take-off and landing
+- wind streaks show over a hard fall
+- a forward shot throws a ring of light at the muzzle, and the laser bolt has a ringed head
 
 ## Layout
 
