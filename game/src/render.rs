@@ -17,21 +17,23 @@ use agb::{
     fixnum::{num, vec2},
 };
 use diamond_hands_logic::{
-    Difficulty, Game, Level, Scene, TILE,
+    Difficulty, Game, Level, Progress, Scene, TILE,
     boss::BossState,
     enemy::{ActorKind, state},
     fx::FxKind,
-    game::{options_menu, title_menu},
+    game::{FILES, file_menu, options_menu, title_menu},
     levels::MAP,
     player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
-    talk::Speaker,
+    arrival::Gear,
+    talk::{ROW_CHARS, Speaker},
     world::CHARGE_FRAMES,
 };
 
 use crate::{
     art::{
         Common, SPRITE_PALETTE, TileCache,
+        arrival::{self, ArrivalArt},
         badlands::{self, SKY_PALETTES, Villains},
         ui::{self, BOX_TOP},
         wassie::{self, Wassie},
@@ -57,6 +59,7 @@ pub struct Renderer {
     common: Common,
     wassie: Wassie,
     villains: Villains,
+    arrival: ArrivalArt,
     font: Font,
     sky: RegularBackground,
     city: RegularBackground,
@@ -92,13 +95,14 @@ impl Renderer {
             SKY_PALETTES[0].clone(),
             ground_palettes[0].clone(),
             SPRITE_PALETTE.clone(),
+            ui::DIALOG_PALETTE.clone(),
         ]);
 
         let mut sky = layer(Priority::P3, RegularBackgroundSize::Background32x32);
         badlands::paint_sky(&mut sky);
         let mut city = layer(Priority::P2, RegularBackgroundSize::Background32x32);
         badlands::paint_city(&mut city);
-        let mut dialog_box = layer(Priority::P0, RegularBackgroundSize::Background32x32);
+        let mut dialog_box = layer(Priority::P0, RegularBackgroundSize::Background32x64);
         ui::paint_dialog_box(&mut dialog_box);
         let mut map = layer(Priority::P0, RegularBackgroundSize::Background32x32);
         ui::paint_map(&mut map);
@@ -107,6 +111,7 @@ impl Renderer {
             common: Common::new(),
             wassie: Wassie::new(),
             villains: Villains::new(),
+            arrival: ArrivalArt::new(),
             font: Font::new(),
             sky,
             city,
@@ -136,16 +141,18 @@ impl Renderer {
             return;
         }
         let world = &game.world;
-        // Big hits jolt the view a pixel or two.
-        let shake = if world.shake > 0 && game.scene == Scene::Play {
-            [2, -2, 1, -1][(world.shake % 4) as usize]
-        } else {
-            0
+        // Big hits jolt the view a pixel or two; each ordinary shot, a pixel each way.
+        let shake = match () {
+            _ if game.scene != Scene::Play => 0,
+            _ if world.shake > 0 => [2, -2, 1, -1][(world.shake % 4) as usize],
+            _ if world.kick > 0 => [1, -1][(world.kick % 2) as usize],
+            _ => 0,
         };
         let cam = world.camera_x + shake;
         self.view_x = cam;
-        self.world_layer = if game.scene == Scene::Dialog { Priority::P1 } else { Priority::P0 };
-        let in_menu = matches!(game.scene, Scene::Title | Scene::Options);
+        self.world_layer = if game.talking() { Priority::P1 } else { Priority::P0 };
+        let in_menu =
+            matches!(game.scene, Scene::Title | Scene::Options | Scene::Files | Scene::FileChoice);
 
         // Dusk, then night, then the city burning as the wassie crosses the level.
         let stage = if in_menu {
@@ -163,18 +170,19 @@ impl Renderer {
         self.terrain
             .set_scroll_pos(vec2(cam.rem_euclid(TERRAIN_COLS * TILE), 0));
         self.city.set_scroll_pos(vec2((cam / 3).rem_euclid(256), 0));
-        if game.scene == Scene::Dialog {
-            // The boss talks from the right: scroll the box so its frame sits there.
-            let right = self.speaker(game) == Some(Speaker::Ursa);
+        if game.talking() {
+            // Everyone but the wassie talks from the right: scroll to the copy of the box
+            // with its frame there.
+            let right = self.speaker(game).is_some_and(|s| s != Speaker::Wassie);
             self.dialog_box
-                .set_scroll_pos(vec2(if right { ui::BOX_SCROLL_RIGHT } else { 0 }, 0));
+                .set_scroll_pos(vec2(0, if right { ui::BOX_SCROLL_RIGHT } else { 0 }));
             self.dialog_box.show(frame);
         }
         let terrain_id = terrain_ready.then(|| self.terrain.show(frame));
         let city_id = self.city.show(frame);
         let sky_id = self.sky.show(frame);
         // Dim the scene behind text screens so the words read clearly.
-        if matches!(game.scene, Scene::Paused | Scene::Intro | Scene::LevelClear | Scene::Dialog) {
+        if game.talking() || matches!(game.scene, Scene::Paused | Scene::Intro | Scene::LevelClear) {
             let mut dim = frame.blend().darken(num!(0.5));
             dim.enable_background(city_id).enable_background(sky_id).enable_backdrop();
             if let Some(id) = terrain_id {
@@ -188,6 +196,7 @@ impl Renderer {
         }
         self.draw_fx(game, frame);
         self.draw_player(game, frame);
+        self.draw_arrival(game, frame);
         self.draw_shots(game, frame);
         self.draw_boss(game, frame);
         // The menus need every object for their text, and the bots are frozen anyway.
@@ -197,7 +206,7 @@ impl Renderer {
     }
 
     fn speaker(&self, game: &Game) -> Option<Speaker> {
-        let lines = game.world.level.boss_talk;
+        let lines = game.talk_lines();
         lines.get(game.talk_line as usize).map(|line| line.speaker)
     }
 
@@ -246,6 +255,8 @@ impl Renderer {
         match game.scene {
             Scene::Title => self.draw_title(game, frame),
             Scene::Options => self.draw_options(game, frame),
+            Scene::Files => self.draw_files(game, frame),
+            Scene::FileChoice => self.draw_file_choice(game, frame),
             Scene::Intro => {
                 let mut buf = [0; 10];
                 let n = font::number(game.world.level_index as u32 + 1, &mut buf);
@@ -255,7 +266,9 @@ impl Renderer {
                 self.font.draw_centred(frame, level.name, 56, true);
                 self.font.draw_centred(frame, level.subtitle, 72, false);
             }
-            Scene::Play | Scene::Map => {}
+            Scene::Play | Scene::Map | Scene::Splash => {}
+            Scene::Arrival if game.talking() => self.draw_dialog(game, frame),
+            Scene::Arrival => {}
             Scene::Dialog => self.draw_dialog(game, frame),
             Scene::Paused => {
                 self.font.draw_centred(frame, "PAUSED", 36, true);
@@ -281,12 +294,13 @@ impl Renderer {
         self.font.draw_centred(frame, "DIAMOND HANDS", 12, true);
         self.font.draw_centred(frame, "A WASSIE ADVENTURE", 26, false);
 
+        let play = if game.resumable().is_some() { "CONTINUE" } else { "PLAY" };
         let items = [
-            (title_menu::PLAY, "PLAY"),
+            (title_menu::PLAY, play),
             (title_menu::MAP, "MAP"),
             (title_menu::OPTIONS, "OPTIONS"),
         ];
-        let x = (WIDTH - Font::width("OPTIONS", true)) / 2;
+        let x = (WIDTH - Font::width("CONTINUE", true)) / 2;
         for (i, (row, label)) in items.into_iter().enumerate() {
             let y = 38 + i as i32 * 13;
             self.font.draw(frame, label, x, y, true);
@@ -294,8 +308,9 @@ impl Renderer {
                 self.draw_cursor(game, frame, x, y);
             }
         }
+        self.label_number(frame, "FILE ", game.file as u32 + 1, 79);
         if game.best > 0 {
-            self.label_number(frame, "BEST ", game.best, 80);
+            self.label_number(frame, "BEST ", game.best, 87);
         }
 
         // Controls, right of where the wassie stands.
@@ -317,6 +332,71 @@ impl Renderer {
             self.font.draw(frame, keys, keys_x, y, false);
             self.font.draw(frame, action, action_x, y, false);
         }
+    }
+
+    /// The three save files, right of where the wassie stands.
+    fn draw_files(&self, game: &Game, frame: &mut GraphicsFrame) {
+        self.font.draw_centred(frame, "SELECT FILE", 12, true);
+        let x = 84;
+        for i in 0..FILES {
+            let y = 34 + i as i32 * 26;
+            let mut buf = [0; 10];
+            self.font.draw(frame, "FILE", x, y, true);
+            let n = font::number(i as u32 + 1, &mut buf);
+            self.font.draw(frame, n, x + Font::width("FILE ", true), y, true);
+            self.draw_run(frame, game.files[i], x, y + 13);
+            if game.cursor as usize == i {
+                self.draw_cursor(game, frame, x, y);
+            }
+        }
+    }
+
+    /// A file's run on one small line from (x, y): where it stands and its score.
+    fn draw_run(&self, frame: &mut GraphicsFrame, run: Option<Progress>, x: i32, y: i32) {
+        let Some(run) = run else {
+            self.font.draw(frame, "NEW", x, y, false);
+            return;
+        };
+        // A space within a field, two between fields.
+        let mut x = x;
+        let mut text = |frame: &mut GraphicsFrame, s: &str, gap: &str| {
+            self.font.draw(frame, s, x, y, false);
+            x += Font::width(s, false) + Font::width(gap, false);
+        };
+        let mut buf = [0; 10];
+        if run.complete {
+            text(frame, "ALL CLEAR", "  ");
+        } else {
+            text(frame, diamond_hands_logic::levels::get(run.level).name, "  ");
+            if run.beacons > 0 {
+                text(frame, "BEACON", " ");
+                text(frame, font::number(run.beacons as u32, &mut buf), "  ");
+            }
+        }
+        text(frame, "SCORE", " ");
+        text(frame, font::number(run.score(), &mut buf), "");
+    }
+
+    /// Continue the chosen file's run, or start a new one in it.
+    fn draw_file_choice(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let mut buf = [0; 10];
+        let n = font::number(game.file as u32 + 1, &mut buf);
+        let x = (WIDTH - Font::width("FILE ", true) - Font::width(n, true)) / 2;
+        self.font.draw(frame, "FILE", x, 12, true);
+        self.font.draw(frame, n, x + Font::width("FILE ", true), 12, true);
+        let x = 84;
+        self.draw_run(frame, game.files[game.file as usize], x, 30);
+        let rows = [(file_menu::CONTINUE, "CONTINUE"), (file_menu::NEW_GAME, "NEW GAME")];
+        for (i, (row, label)) in rows.into_iter().enumerate() {
+            let y = 46 + i as i32 * 13;
+            self.font.draw(frame, label, x, y, true);
+            if game.cursor == row {
+                self.draw_cursor(game, frame, x, y);
+            }
+        }
+        self.font.draw(frame, "THE FILE KEEPS THIS RUN", x, 80, false);
+        self.font.draw(frame, "UNTIL A NEW ONE SAVES.", x, 88, false);
+        self.font.draw(frame, "B: BACK", x, 100, false);
     }
 
     fn draw_options(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -350,22 +430,26 @@ impl Renderer {
     /// The current line of dialogue, typed out beside the speaker's portrait: the
     /// wassie on the left, the boss on the right.
     fn draw_dialog(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let lines = game.world.level.boss_talk;
+        let lines = game.talk_lines();
         let Some(line) = lines.get(game.talk_line as usize) else {
             return;
         };
         let shown = game.talk_shown as usize;
         let typing = shown < line.len();
         let (portrait, (px, py), text_x) = match line.speaker {
-            Speaker::Wassie => (&self.wassie.portrait, ui::PORTRAIT_LEFT, 50),
-            Speaker::Ursa => (&self.villains.ursa.portrait, ui::PORTRAIT_RIGHT, 10),
+            Speaker::Wassie => (&self.wassie.portrait, ui::PORTRAIT_LEFT, ui::TEXT_LEFT),
+            Speaker::Ursa => (&self.villains.ursa.portrait, ui::PORTRAIT_RIGHT, ui::TEXT_RIGHT),
+            Speaker::Cl207 => (&self.arrival.portrait, ui::PORTRAIT_RIGHT, ui::TEXT_RIGHT),
         };
-        self.font.draw(frame, line.speaker.name(), text_x, BOX_TOP + 6, true);
+        // Everything in the big font, so it reads at a glance: the name, then up to
+        // three rows of `talk::ROW_CHARS`.
+        self.font.draw(frame, line.speaker.name(), text_x, BOX_TOP + 5, true);
         for (i, row) in line.visible(shown).enumerate() {
-            self.font.draw(frame, row, text_x, BOX_TOP + 22 + i as i32 * 9, false);
+            self.font.draw(frame, row, text_x, BOX_TOP + 19 + i as i32 * 13, true);
         }
         if !typing && (game.frame / 16).is_multiple_of(2) {
-            self.font.draw(frame, ">", text_x + 176, BOX_TOP + 40, false);
+            let end = text_x + Font::width(" ", true) * ROW_CHARS as i32;
+            self.font.draw(frame, ">", end - 6, BOX_TOP + 5, true);
         }
         // The speaker bobs while the words come out.
         let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
@@ -385,8 +469,8 @@ impl Renderer {
         // The wassie hops in place on the chosen spot.
         let hop = (game.frame / 12 % 2) as i32;
         let (x, y) = (place.x - wassie::CENTRE_COL, place.y - 30 - hop);
-        for sprite in self.wassie.standing(game.frame) {
-            show(frame, sprite, x, y);
+        for (sprite, dx) in self.wassie.standing(game.frame) {
+            show(frame, sprite, x + dx, y);
         }
         for (i, p) in MAP.iter().enumerate() {
             let sprite = if !p.open() {
@@ -417,8 +501,11 @@ impl Renderer {
     fn draw_hud(&self, game: &Game, frame: &mut GraphicsFrame) {
         let world = &game.world;
         let hp = world.player.hp.clamp(0, MAX_HP);
-        show(frame, &self.common.life[hp.min(4) as usize], 4, 4);
-        show(frame, &self.common.life[(hp - 4).clamp(0, 4) as usize], 36, 4);
+        show(frame, &self.common.life_caps[0], 4, 4);
+        for (i, cell) in self.common.life[hp as usize].iter().enumerate() {
+            show(frame, cell, 8 + 8 * i as i32, 4);
+        }
+        show(frame, &self.common.life_caps[1], 64, 4);
 
         let mut buf = [0; 10];
         show(frame, &self.common.diamond[0], 70, 0);
@@ -465,9 +552,13 @@ impl Renderer {
         let cam = self.view_x;
         let blinking = p.invuln > 0 && !p.is_dead() && (game.frame / 3).is_multiple_of(2);
         let r = p.body.rect();
-        if blinking || r.y > 160 {
+        // On arrival the wassie starts inside the ship, and owns nothing but its scarf
+        // until CL207 hands over the blaster and the jetpack.
+        let arrival = game.arrival_view();
+        if blinking || r.y > 160 || arrival.is_some_and(|v| !v.wassie_out) {
             return;
         }
+        let (armed, strapped) = arrival.map_or((true, false), |v| (v.blaster, v.jetpack));
         let left = p.facing < 0;
         let anim = (r.x.unsigned_abs()) / 2;
         // Top-left of the wassie's 32x32 frame. Parts are placed in it facing right and
@@ -500,12 +591,19 @@ impl Renderer {
             self.put(frame, &self.common.charge[0], mx - 4 - cam, my - 4);
         }
 
+        // Objects shown first sit on top. Pointing straight up, the cannon would hide
+        // the bill, so it goes behind the body instead.
+        let alive = !matches!(p.state, PlayerState::Dead | PlayerState::Hurt);
         let (blaster, (kx, ky)) = self.wassie.blaster(p);
-        flipped(blaster, (x + kx * p.facing, y + ky), frame);
+        let blaster_behind = alive && p.aim == Aim::Up;
+        let (bx, by) = part((wassie::BLASTER_SHIFT, 0), 32);
+        let blaster_at = (bx + kx * p.facing, by + ky);
+        if armed && !blaster_behind {
+            flipped(blaster, blaster_at, frame);
+        }
 
         // The jetpack straps on at the first hover and stays until landing.
-        let alive = !matches!(p.state, PlayerState::Dead | PlayerState::Hurt);
-        if alive && (p.hovering || (!p.grounded && p.hover_fuel < HOVER_FRAMES)) {
+        if alive && (strapped || p.hovering || (!p.grounded && p.hover_fuel < HOVER_FRAMES)) {
             flipped(&self.wassie.jetpack, part(wassie::JETPACK_AT, 8), frame);
             if p.hovering {
                 // Flickers, then sputters as the fuel runs out.
@@ -533,6 +631,51 @@ impl Renderer {
         }
 
         flipped(self.wassie.sprite(p, anim, game.frame), (x, y), frame);
+        if armed && blaster_behind {
+            flipped(blaster, blaster_at, frame);
+        }
+    }
+
+    /// The cargo ship, CL207, and the gear in flight while the arrival plays.
+    fn draw_arrival(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let Some(v) = game.arrival_view() else {
+            return;
+        };
+        let cam = self.view_x;
+        let show_at = |frame: &mut GraphicsFrame, sprite: &SpriteVram, (x, y): (i32, i32), flip: bool| {
+            Object::new(sprite.clone())
+                .set_pos(vec2(x - cam, y))
+                .set_hflip(flip)
+                .set_priority(self.world_layer)
+                .show(frame);
+        };
+        if let Some((gear, x, y)) = v.thrown {
+            let sprite = match gear {
+                Gear::Blaster => self.wassie.standing(game.frame)[1].0,
+                Gear::Jetpack => &self.wassie.jetpack,
+            };
+            // Tumbling end over end.
+            let spin = (game.frame / 6) % 2 == 1;
+            let (w, h) = match gear {
+                Gear::Blaster => (32, 32),
+                Gear::Jetpack => (8, 16),
+            };
+            show_at(frame, sprite, (x - w / 2, y - h / 2), spin);
+        }
+        let stride = v.guide_walking && (game.frame / 8) % 2 == 1;
+        let (gx, feet) = v.guide;
+        show_at(frame, &self.arrival.guide[stride as usize], (gx, feet - 32), v.guide_facing > 0);
+        let (sx, sy) = v.ship;
+        if v.hatch >= 2 {
+            let (hx, hy) = arrival::HATCH_AT;
+            show_at(frame, &self.arrival.hatch_open, (sx + hx, sy + hy), false);
+        }
+        show_at(frame, &self.arrival.ship_half, (sx, sy), false);
+        show_at(frame, &self.arrival.ship_half, (sx + 32, sy), true);
+        let flame = &self.arrival.flames[(game.frame / 3 % 2) as usize];
+        for (fx, fy) in arrival::FLAMES_AT {
+            show_at(frame, flame, (sx + fx, sy + fy), false);
+        }
     }
 
     fn draw_shots(&self, game: &Game, frame: &mut GraphicsFrame) {

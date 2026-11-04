@@ -20,8 +20,17 @@ with a boss.
 | A           | Jump (hold for higher); keep holding to hover on the jetpack    |
 | B           | Fire; hold and release for a charged beam                       |
 | L or R      | Hold to plant your feet, so the d-pad only aims                 |
-| Start       | Pause (the controls are shown there too); skips dialogue        |
+| Start       | Leaves the splash; pause (the controls are shown there too); skips dialogue |
 
+- **Splash:** the game boots to the cover art. After 1.5 s "PRESS START TO PLAY" blinks in,
+  and Start (or A) opens the save files.
+- **Save files:** there are three. An empty file goes straight to the title. A file with a run in
+  it asks CONTINUE or NEW GAME. A new game leaves the old run in place until the new one saves,
+  so a wrong pick loses nothing. Lighting a beacon saves the run, and so does clearing a level.
+  CONTINUE (on the title, B goes back to the files) starts at the last beacon with full health;
+  the diamonds and bots behind it stay collected or beaten. Levels played from the world map
+  are free play and don't save. The save format changed with this, so older cartridges start
+  fresh once, losing their best score and difficulty.
 - **Combat:** you can stomp bots by landing on them. A "!" over a bot means it is about to
   attack. The blaster fires in eight directions; diagonal shots fly at the same speed.
 - **Jetpack:** after a jump's rise, keeping A held lights a jetpack that climbs slowly for
@@ -29,6 +38,10 @@ with a boss.
   the floating rocks are reachable. Letting go saves the rest of the fuel, landing or
   stomping a bot refuels it, and a quick tap in the air never hovers (it stays a buffered
   jump).
+- **Arrival:** starting the Badlands fresh plays its arrival on CryptoTerra. A cargo ship drops the
+  wassie off, rekt and owning nothing but its scarf. CL207, a grey cat in a yellow hazmat suit,
+  explains the rules, then hands over the blaster and the jetpack. A reads the lines and Start
+  skips the scene. Continuing a saved run never replays it.
 - **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie
   trade a few lines. A finishes a line and then turns the page; Start skips the rest. It
   plays once per visit, so retries go straight to the fight.
@@ -58,7 +71,16 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
   - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`. Each
     level also carries its boss dialogue; places on the world map are in `logic/src/levels.rs`.
 - `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
-  - All art is drawn in code at boot, in `game/src/art/`.
+  - All art is drawn in code at boot, in `game/src/art/`, except the splash. That is
+    `cover.png` cropped and fitted to 16 palettes by `scripts/make-splash.py` (needs Pillow),
+    which writes the tiles, palettes and a preview to `game/gfx/`. Rerun it when the cover
+    changes; the ROM includes those files as they are.
+  - Music is tracker modules in `game/music/*.xm`, played by agb-tracker on the mixer
+    (`game/src/music.rs` picks the cue from the scene); the blaster effects stay on the DMG
+    channels (`game/src/sound.rs`). The songs are written in code by
+    `game/music/src/soundtrack.py` with synthesized instruments: run
+    `python3 game/music/src/soundtrack.py` after changing it. Cues: title, Badlands, boss,
+    level clear, knocked out.
   - It builds with its own nightly toolchain and target (`game/rust-toolchain.toml`,
     `game/.cargo/config.toml`), so it is excluded from the workspace.
 - `harness/`: headless ROM tests on the [gba-wasm](https://github.com/smolgroot/gba-wasm) core,
@@ -118,3 +140,9 @@ hovering, aiming and each line of dialogue.
 If a harness test fails, try the ROM in mGBA. If it behaves correctly there, the bug is in gba-wasm:
 1. Record it in gba-wasm as a failing test or a `TASKS.md` entry.
 2. Mark the harness test `#[ignore = "gba-wasm: …"]`.
+
+## Website
+
+The showcase site is a [VitePress](https://vitepress.dev) project in `site/` (custom theme matching wassie.wtf:
+its MUI palette and Londrina Solid). `cd site && npm ci && npm run dev` to preview it; pushes to `master`
+deploy it to GitHub Pages. Set `SITE_BASE=/` to build for a root domain.

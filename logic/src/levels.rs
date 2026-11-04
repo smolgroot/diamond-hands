@@ -2,9 +2,17 @@
 
 pub mod badlands;
 
-use crate::level::Level;
+use crate::{arrival::Arrival, level::Level};
 
 pub static ALL: [&Level; 1] = [&badlands::BADLANDS];
+
+/// Level `index`'s arrival scene, played when a run starts it fresh.
+pub fn arrival(index: u8) -> Option<&'static Arrival> {
+    match index {
+        0 => Some(&badlands::ARRIVAL),
+        _ => None,
+    }
+}
 
 /// Level `index`, or the last one when out of range.
 pub fn get(index: u8) -> &'static Level {

@@ -2,15 +2,69 @@
 //! night, ending in URSA-9000's arena. See `level.rs` for the map legend.
 
 use crate::{
+    arrival::Arrival,
     level::{Level, Theme},
     talk::{Line, Speaker},
 };
 
+/// The wassie lands on CryptoTerra with nothing but its scarf. CL207 meets it.
+static WELCOME: [Line; 10] = [
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["WELCOME TO", "CRYPTOTERRA, STRANGER."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["THAT CARGO ONLY STOPS", "HERE ONCE."],
+    },
+    Line {
+        speaker: Speaker::Wassie,
+        rows: &["I'M REKT. ALL I HAVE", "LEFT IS THIS SCARF."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["IF YOU WANT TO SURVIVE", "ON CRYPTOTERRA..."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["YOU NEED TO BE A", "DIAMOND HAND."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["AND TO SECURE YOUR", "BAGS AT ANY PRICE."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["SCAMMERS, ROBBERS AND", "BAD ACTORS ARE", "PROLIFERATING."],
+    },
+    Line {
+        speaker: Speaker::Wassie,
+        rows: &["WITH WHAT? I DON'T", "OWN A THING."],
+    },
+    Line {
+        speaker: Speaker::Cl207,
+        rows: &["YOU WILL NEED THIS TO", "SURVIVE IN YOUR QUEST."],
+    },
+    Line {
+        speaker: Speaker::Wassie,
+        rows: &["THANKS, CL207. TIME", "TO SECURE SOME BAGS."],
+    },
+];
+
+pub static ARRIVAL: Arrival = Arrival {
+    lines: &WELCOME,
+    gift_after: 8,
+};
+
 /// URSA-9000 and the wassie, before the fight.
-static TALK: [Line; 6] = [
+static TALK: [Line; 9] = [
     Line {
         speaker: Speaker::Ursa,
-        rows: &["SO. THE LITTLE WASSIE CROSSED MY BADLANDS.", "MY BOTS TELL ME YOU ARE CARRYING DIAMONDS."],
+        rows: &["SO. THE LITTLE WASSIE", "CROSSED MY BADLANDS."],
+    },
+    Line {
+        speaker: Speaker::Ursa,
+        rows: &["MY BOTS TELL ME YOU", "ARE CARRYING DIAMONDS."],
     },
     Line {
         speaker: Speaker::Wassie,
@@ -18,15 +72,23 @@ static TALK: [Line; 6] = [
     },
     Line {
         speaker: Speaker::Ursa,
-        rows: &["EVERYONE SELLS TO THE BEARS IN THE END.", "HAND THEM OVER AND I MAKE IT QUICK."],
-    },
-    Line {
-        speaker: Speaker::Wassie,
-        rows: &["THESE HANDS DON'T SELL."],
+        rows: &["EVERYONE SELLS TO THE", "BEARS IN THE END."],
     },
     Line {
         speaker: Speaker::Ursa,
-        rows: &["THEN I WILL PRY THEM FROM YOUR LITTLE HANDS.", "LIQUIDATION PROTOCOL: ENGAGED!"],
+        rows: &["HAND THEM OVER AND I", "MAKE IT QUICK."],
+    },
+    Line {
+        speaker: Speaker::Wassie,
+        rows: &["THESE HANDS", "DON'T SELL."],
+    },
+    Line {
+        speaker: Speaker::Ursa,
+        rows: &["THEN I WILL PRY THEM", "FROM YOUR LITTLE", "HANDS."],
+    },
+    Line {
+        speaker: Speaker::Ursa,
+        rows: &["LIQUIDATION PROTOCOL:", "ENGAGED!"],
     },
     Line {
         speaker: Speaker::Wassie,

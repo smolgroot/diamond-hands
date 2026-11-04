@@ -8,7 +8,7 @@
 use diamond_hands_harness::{Runner, keys, read_rom};
 use diamond_hands_logic::{
     Difficulty, Game, Input, PlayerState, Probe, Scene, bot,
-    game::{INTRO_FRAMES, title_menu},
+    game::{INTRO_FRAMES, SPLASH_PROMPT_FRAMES, title_menu},
     player::JUMP_APEX,
 };
 
@@ -24,22 +24,51 @@ fn scene(probe: &Probe) -> Scene {
         5 => Scene::Intro,
         6 => Scene::Dialog,
         7 => Scene::Map,
+        8 => Scene::Splash,
+        9 => Scene::Files,
+        10 => Scene::FileChoice,
+        11 => Scene::Arrival,
         other => panic!("unknown scene {other}"),
     }
 }
 
+/// Power-on to the splash's "PRESS START" prompt.
+fn boot_to_splash_prompt(runner: &mut Runner) -> Probe {
+    let prompt = SPLASH_PROMPT_FRAMES + 1;
+    let ready = runner.run_until(5 * SECOND, 0, |p| scene(p) == Scene::Splash && p.frame > prompt);
+    screenshot(runner, "splash");
+    ready
+}
+
+/// Power-on, through the splash, to the title in file 1, which must be empty.
 fn boot_to_title(runner: &mut Runner) -> Probe {
-    let title = runner.run_until(5 * SECOND, 0, |p| scene(p) == Scene::Title && p.frame > 0);
+    boot_to_splash_prompt(runner);
+    boot_to_files_from_prompt(runner);
+    runner.tap(keys::A);
+    let title = runner.run_until(5, 0, |p| scene(p) == Scene::Title);
+    runner.frames(2, 0);
     screenshot(runner, "title");
     title
 }
 
-/// From power-on to control of the wassie in level 1.
+/// From the splash prompt to the file menu with its first frame drawn: the renderer is
+/// built on the way in, which takes a few frames, and keys are ignored meanwhile.
+fn boot_to_files_from_prompt(runner: &mut Runner) -> Probe {
+    runner.tap(keys::START);
+    let entered = runner.run_until(5, 0, |p| scene(p) == Scene::Files);
+    let files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
+    screenshot(runner, "files");
+    files
+}
+
+/// From power-on to control of the wassie in level 1, skipping the arrival.
 fn start_level(runner: &mut Runner) -> Probe {
     boot_to_title(runner);
     runner.tap(keys::START);
     runner.run_until(10, 0, |p| scene(p) == Scene::Intro);
-    runner.run_until(INTRO_FRAMES as usize + 10, 0, |p| scene(p) == Scene::Play)
+    runner.run_until(INTRO_FRAMES as usize + 10, 0, |p| scene(p) == Scene::Arrival);
+    runner.tap(keys::START);
+    runner.run_until(5, 0, |p| scene(p) == Scene::Play)
 }
 
 #[test]
@@ -50,6 +79,16 @@ fn boots_to_title_and_counts_frames() {
     let later = runner.expect_probe();
     assert_eq!(scene(&later), Scene::Title);
     assert!(later.frame >= first.frame + 29, "game loop stalled: {first:?} → {later:?}");
+}
+
+#[test]
+fn the_splash_ignores_start_until_its_prompt_shows() {
+    let mut runner = Runner::new(&read_rom());
+    runner.run_until(5 * SECOND, 0, |p| p.frame > 0);
+    runner.tap(keys::START);
+    runner.frames(10, 0);
+    assert_eq!(scene(&runner.expect_probe()), Scene::Splash, "too soon to skip");
+    boot_to_title(&mut runner);
 }
 
 #[test]
@@ -103,11 +142,14 @@ fn holding_a_hovers_and_the_blaster_aims_diagonally() {
     let aim = keys::R | keys::UP | keys::RIGHT;
     runner.frames(3, aim);
     runner.frame(aim | keys::B);
+    // A mine rolls in here, and the bolt can leave the muzzle right on top of it: a
+    // bolt in flight or a kill both mean it fired.
+    let fired = runner.expect_probe();
+    assert!(fired.shots == 1 || fired.kills > planted.kills, "{fired:?}");
     runner.frames(3, aim);
     screenshot(&runner, "aim-diagonal");
     let after = runner.expect_probe();
     assert_eq!(after.player_x, planted.player_x, "planted feet");
-    assert_eq!(after.shots, 1);
 
     // Down+Left in the air fires down and back.
     runner.frames(20, 0);
@@ -167,6 +209,47 @@ fn difficulty_persists_across_a_power_cycle() {
 }
 
 #[test]
+fn a_file_continues_from_its_beacon_after_a_power_cycle() {
+    let rom = read_rom();
+    let mut runner = Runner::new(&rom);
+    start_level(&mut runner);
+    let mut previous = 0;
+    let mut world = Game::new(0).world;
+    let lit = loop {
+        // The route bot only reads the level and the wassie, which the probe can't
+        // carry, so drive the ROM with a host model of the same run.
+        let p = runner.expect_probe();
+        if p.checkpoints > 0 {
+            break p;
+        }
+        let keys = bot::keys_for(&world, previous);
+        runner.frame(keys);
+        world.step(&Input::from_keys(keys, previous));
+        previous = keys;
+        assert!(runner.expect_probe().frame < 60 * SECOND as u32, "no beacon reached");
+    };
+    runner.frames(10, 0);
+    let save = runner.save_data();
+
+    let mut rebooted = Runner::with_save(&rom, Some(&save));
+    boot_to_splash_prompt(&mut rebooted);
+    boot_to_files_from_prompt(&mut rebooted);
+    rebooted.tap(keys::A);
+    rebooted.run_until(5, 0, |p| scene(p) == Scene::FileChoice);
+    screenshot(&rebooted, "file-choice");
+    rebooted.tap(keys::A);
+    rebooted.run_until(5, 0, |p| scene(p) == Scene::Title);
+    rebooted.tap(keys::START);
+    let resumed = rebooted.run_until(INTRO_FRAMES as usize + 30, 0, |p| scene(p) == Scene::Play);
+    assert_eq!(resumed.checkpoints, lit.checkpoints);
+    assert_eq!(resumed.diamonds, lit.diamonds);
+    assert!(
+        (resumed.player_x - lit.player_x).abs() < 32,
+        "should stand at the beacon: {lit:?} → {resumed:?}"
+    );
+}
+
+#[test]
 fn the_map_starts_the_badlands_and_shows_coming_soon_places() {
     let mut runner = Runner::new(&read_rom());
     boot_to_title(&mut runner);
@@ -210,24 +293,35 @@ fn screenshot(runner: &Runner, name: &str) {
 #[test]
 fn rom_matches_host_model_frame_by_frame() {
     let mut runner = Runner::new(&read_rom());
-    let title = boot_to_title(&mut runner);
-
-    let mut model = Game::new(title.best);
-    while model.frame < title.frame {
+    let ready = boot_to_splash_prompt(&mut runner);
+    let mut model = Game::new(ready.best);
+    while model.frame < ready.frame {
         model.step(&Input::default());
     }
-    assert_eq!(Probe::from_game(&model), title, "out of sync at the title screen");
+    assert_eq!(Probe::from_game(&model), ready, "out of sync at the splash");
+
+    // The ROM takes the next frame's Start and then builds its renderer, so it runs
+    // slower than the emulator until the file menu is up. Catch the model up there.
+    let files = boot_to_files_from_prompt(&mut runner);
+    model.step(&Input::from_keys(keys::START, 0));
+    while model.frame < files.frame {
+        model.step(&Input::default());
+    }
+    assert_eq!(Probe::from_game(&model), files, "out of sync at the file menu");
 
     let mut previous = 0u16;
     let mut saw_hit = false;
     let mut saw_dialog = false;
     let mut dialog_frames = 0;
-    for i in 0..(75 * SECOND) {
+    let mut arrival_frames = 0;
+    let mut beats_seen = 0;
+    for i in 0..(100 * SECOND) {
         let keys = match model.scene {
+            Scene::Files => keys::A,
             Scene::Title if i == 20 => keys::START,
             Scene::Play => bot::keys_for(&model.world, previous),
             // Read each line for a moment, then press on.
-            Scene::Dialog => {
+            Scene::Dialog | Scene::Arrival if model.talking() => {
                 dialog_frames += 1;
                 if dialog_frames % 50 == 0 { keys::A } else { 0 }
             }
@@ -241,8 +335,16 @@ fn rom_matches_host_model_frame_by_frame() {
         let probe = runner.expect_probe();
         assert_eq!(probe, Probe::from_game(&model), "ROM diverged from the model at step {i}");
         saw_dialog |= model.scene == Scene::Dialog;
-        if model.scene == Scene::Dialog && dialog_frames % 50 == 49 {
-            screenshot(&runner, &format!("dialog-{}", model.talk_line));
+        let talk = if model.scene == Scene::Arrival { "arrival-talk" } else { "dialog" };
+        if model.talking() && dialog_frames % 50 == 49 {
+            screenshot(&runner, &format!("{talk}-{}", model.talk_line));
+        }
+        if model.scene == Scene::Arrival {
+            beats_seen |= 1 << model.beat as u32;
+            arrival_frames += 1;
+            if !model.talking() && arrival_frames % 30 == 0 {
+                screenshot(&runner, &format!("arrival-{arrival_frames:04}"));
+            }
         }
         if model.scene == Scene::LevelClear {
             break;
@@ -252,5 +354,6 @@ fn rom_matches_host_model_frame_by_frame() {
     assert!(end.kills > 0 && end.diamonds > 0, "{end:?}");
     assert!(saw_hit, "the run should exercise damage too");
     assert!(saw_dialog, "URSA-9000 should have her say");
+    assert_eq!(beats_seen, 0b11_1111, "CL207's welcome should play every beat");
     assert_eq!(scene(&end), Scene::LevelClear, "the bot should beat the Badlands: {end:?}");
 }

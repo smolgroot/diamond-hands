@@ -1,6 +1,7 @@
 //! Pixel art drawn in code at boot: small ASCII drawings and shape primitives become
 //! sprites and background tiles.
 
+pub mod arrival;
 pub mod badlands;
 pub mod ui;
 pub mod wassie;
@@ -214,8 +215,10 @@ pub struct Common {
     /// Blue diamond and its glinting frame.
     pub diamond: [SpriteVram; 2],
     pub heal: SpriteVram,
-    /// Life bar quarters: index = segments filled (0..=4).
-    pub life: [SpriteVram; 5],
+    /// Life bar: the two 4px end caps, and the seven 8px body cells for each HP
+    /// (0..=MAX_HP). Cells that look the same share one sprite.
+    pub life_caps: [SpriteVram; 2],
+    pub life: [[SpriteVram; LIFE_CELLS]; 9],
     /// Boss bar cells: index = pixels filled (0..=8).
     pub boss_cell: [SpriteVram; 9],
     /// Laser bolt heading right, up, and up-right (flip for the other headings).
@@ -238,7 +241,7 @@ pub struct Common {
     pub explosion: [SpriteVram; 3],
     pub glint: [SpriteVram; 2],
     pub sparks: [SpriteVram; 2],
-    /// Jetpack exhaust, thick then thinning.
+    /// Jetpack exhaust, laser pink: a glowing blob, then sparks.
     pub puff: [SpriteVram; 2],
     /// Muzzle ring for a forward shot facing right, wide then narrowing.
     pub muzzle_ring: [SpriteVram; 2],
@@ -512,20 +515,20 @@ const SPARK0: [&str; 7] = [
     ".y...y.",
     "y.....y",
 ];
-const PUFF0: [&str; 6] = [
-    ".kkkk.",
-    "kSSSgk",
-    "kSSggk",
-    "kSgggk",
-    "kgggGk",
-    ".kkkk.",
+/// Jetpack exhaust: laser energy, not smoke. A glowing blob, then sparks.
+const PUFF0: [&str; 5] = [
+    ".cCc.",
+    "cCwCc",
+    "CwwwC",
+    "cCwCc",
+    ".cCc.",
 ];
 const PUFF1: [&str; 5] = [
-    ".g.g.",
-    "g.S.g",
-    ".SgS.",
-    "g.g.g",
-    ".g.g.",
+    "c...c",
+    "..C..",
+    ".CwC.",
+    "..C..",
+    "c...c",
 ];
 const SPARK1: [&str; 7] = [
     "o.....o",
@@ -569,7 +572,8 @@ impl Common {
         Self {
             diamond: [centred(Size::S16x16, &DIAMOND0), centred(Size::S16x16, &DIAMOND1)],
             heal: cold_wallet(),
-            life: core::array::from_fn(|n| life_quarter(n as i32)),
+            life_caps: life_caps(),
+            life: life_bars(),
             boss_cell: core::array::from_fn(|n| boss_cell(n as i32)),
             bolt: drawing(Size::S16x8, 0, 0, &BOLT),
             bolt_up: turned(Size::S8x16, &BOLT),
@@ -640,20 +644,98 @@ fn cold_wallet() -> SpriteVram {
     )
 }
 
-/// Four life segments, `filled` of them lit.
-fn life_quarter(filled: i32) -> SpriteVram {
-    let mut c = Canvas::new(Size::S32x8);
-    for i in 0..4 {
-        let x = i * 8;
-        c.block(x, 0, 8, 8, ix::RED_DARK, ix::OUTLINE);
-        if i < filled {
-            c.rect(x + 1, 1, 6, 6, ix::RED);
-            c.rect(x + 1, 1, 6, 2, ix::WHITE);
-            c.rect(x + 1, 2, 6, 1, ix::RED);
-            c.px(x + 2, 2, ix::WHITE);
-        }
+/// Green, yellow and red candle bodies for the life bar.
+static LIFE_PALETTE: Palette16 = Palette16::new([
+    rgb(0, 0, 0),
+    rgb(2, 2, 6),
+    rgb(31, 31, 31),
+    rgb(4, 24, 9),
+    rgb(2, 12, 5),
+    rgb(30, 25, 4),
+    rgb(15, 12, 2),
+    rgb(28, 5, 6),
+    rgb(15, 2, 4),
+    rgb(7, 7, 11),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+]);
+
+/// Body cells in the life bar, 8px of fill each.
+pub const LIFE_CELLS: usize = 7;
+
+/// Life bar cells for every HP.
+fn life_bars() -> [[SpriteVram; LIFE_CELLS]; 9] {
+    let mut made: Vec<((i32, i32), SpriteVram)> = Vec::new();
+    core::array::from_fn(|hp| {
+        core::array::from_fn(|cell| {
+            let hp = hp as i32;
+            let shown = (life_fill(hp) - cell as i32 * 8).clamp(0, 8);
+            // An empty cell is the same whatever the colour.
+            let key = (shown, if shown > 0 { life_tier(hp) } else { 0 });
+            if let Some((_, sprite)) = made.iter().find(|(k, _)| *k == key) {
+                return sprite.clone();
+            }
+            let sprite = life_cell(shown, key.1);
+            made.push((key, sprite.clone()));
+            sprite
+        })
+    })
+}
+
+/// Pixels of fill at `hp`, over the 56px interior.
+fn life_fill(hp: i32) -> i32 {
+    hp * 56 / diamond_hands_logic::player::MAX_HP
+}
+
+/// Green when nearly full (3), yellow half way (2), red when critical (1).
+fn life_tier(hp: i32) -> i32 {
+    match hp * 4 / diamond_hands_logic::player::MAX_HP {
+        3.. => 3,
+        2 => 2,
+        _ => 1,
     }
-    c.vram()
+}
+
+/// The life bar is a horizontal candlestick, 64px wide: a 4px wick cap at each end and
+/// seven 8px cells of body between them, filled in proportion to HP. A cell holds
+/// `shown` pixels of fill.
+fn life_cell(shown: i32, tier: i32) -> SpriteVram {
+    // Body colours: lit, shade, dark track.
+    let (lit, shade) = match tier {
+        3 => (3, 4),
+        2 => (5, 6),
+        _ => (7, 8),
+    };
+    let mut c = Canvas::new(Size::S8x8);
+    for y in 0..8 {
+        c.rect(0, y, 8, 1, if y == 0 || y == 7 { 1 } else { 9 });
+    }
+    for x in 0..shown {
+        for y in 1..7 {
+            c.px(x, y, if y >= 5 { shade } else { lit });
+        }
+        c.px(x, 1, 2);
+    }
+    c.vram_with(&LIFE_PALETTE)
+}
+
+/// The wicks: thin stalks, and the body's outline closing the track.
+fn life_caps() -> [SpriteVram; 2] {
+    [0, 1].map(|right| {
+        let mut c = Canvas::new(Size::S8x8);
+        // The 4px cap: three of stalk and one of body wall, mirrored on the right.
+        let (stalk, wall) = if right == 0 { (0..3, 3) } else { (1..4, 0) };
+        for x in stalk {
+            c.rect(x, 3, 1, 2, 9);
+        }
+        c.rect(wall, 0, 1, 8, 1);
+        c.rect(wall, 1, 1, 6, 9);
+        c.vram_with(&LIFE_PALETTE)
+    })
 }
 
 fn boss_cell(filled: i32) -> SpriteVram {

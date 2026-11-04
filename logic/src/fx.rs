@@ -15,7 +15,7 @@ pub enum FxKind {
     Glint,
     /// Sparks off the wassie when something hits it.
     Sparks,
-    /// Jetpack exhaust, drifting down as it fades.
+    /// Jetpack exhaust, pink laser energy drifting down as it fades.
     Puff,
     /// A little cloud of dust behind a running heel or ahead of a skid.
     Dust,

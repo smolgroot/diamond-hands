@@ -6,7 +6,7 @@ use crate::{
     boss::{self, Boss, BossCtx},
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
-    game::keys,
+    game::{Progress, keys},
     level::{Level, Tile},
     levels,
     physics::Body,
@@ -26,6 +26,8 @@ const BOLT_FX: i32 = 4 * FX;
 const BEAM_FX: i32 = 6 * FX;
 /// Frames the knocked-out pose shows before respawning.
 pub const DEATH_FRAMES: u16 = 90;
+/// Frames an ordinary shot jolts the screen for, a pixel each way.
+pub const KICK_FRAMES: u8 = 4;
 /// Frames between falling into a pit and respawning.
 pub const PIT_FRAMES: u16 = 30;
 pub const SPIKE_DAMAGE: i32 = 2;
@@ -189,6 +191,8 @@ pub struct World {
     pub fx: FxPool,
     /// Frames of screen shake left: kept for big hits, not every shot.
     pub shake: u8,
+    /// Frames of the light jolt each ordinary shot gives the screen.
+    pub kick: u8,
     /// Left edge of the screen in level pixels.
     pub camera_x: i32,
     /// Tile the wassie respawns on, and how many checkpoints have been lit.
@@ -239,6 +243,7 @@ impl World {
             boss: Boss::new(level),
             fx: FxPool::new(),
             shake: 0,
+            kick: 0,
             camera_x: 0,
             checkpoint: start,
             checkpoints_lit: 0,
@@ -257,8 +262,46 @@ impl World {
     }
 
     pub fn score(&self) -> u32 {
-        let boss = if self.boss.is_beaten() { 1000 } else { 0 };
-        self.diamonds * 10 + self.kills * 50 + boss
+        Self::score_for(self.diamonds, self.kills, self.boss.is_beaten())
+    }
+
+    pub fn score_for(diamonds: u32, kills: u32, boss_beaten: bool) -> u32 {
+        let boss = if boss_beaten { 1000 } else { 0 };
+        diamonds * 10 + kills * 50 + boss
+    }
+
+    /// The level of a saved run, picked up at its last beacon. Everything that started
+    /// behind the beacon was dealt with on the way: pickups and villains there are gone,
+    /// and the beacons there are lit.
+    pub fn resume(progress: &Progress, difficulty: Difficulty) -> Self {
+        let mut world = Self::new(progress.level, difficulty);
+        world.pick_up(progress);
+        world
+    }
+
+    fn pick_up(&mut self, progress: &Progress) {
+        let Some((tx, ty)) = progress.checkpoint else {
+            return;
+        };
+        let edge = (tx + 1) * TILE;
+        for a in self.actors.iter_mut().filter(|a| a.alive) {
+            if a.home.0 + a.kind.size().0 / 2 >= edge {
+                continue;
+            }
+            if a.kind == ActorKind::Checkpoint {
+                a.state = enemy::state::LIT;
+            } else {
+                a.alive = false;
+                a.killed = true;
+            }
+        }
+        self.checkpoint = (tx, ty);
+        self.checkpoints_lit = progress.beacons;
+        self.diamonds = progress.diamonds;
+        self.kills = progress.kills;
+        self.frames = progress.frames;
+        self.place_player(MAX_HP);
+        self.snap_camera();
     }
 
     pub fn player_shots(&self) -> usize {
@@ -276,6 +319,7 @@ impl World {
         self.frames += 1;
         self.fx.update();
         self.shake = self.shake.saturating_sub(1);
+        self.kick = self.kick.saturating_sub(1);
 
         if self.player.is_dead() {
             self.player.dead_timer = self.player.dead_timer.saturating_sub(1);
@@ -426,6 +470,7 @@ impl World {
         {
             p.fire_cooldown = FIRE_COOLDOWN;
             p.recoil = 6;
+            self.kick = KICK_FRAMES;
             events.insert(Events::SHOOT);
         }
     }
@@ -635,13 +680,30 @@ impl World {
         }
     }
 
+    /// Where a fresh wassie stands at the last checkpoint: its centre x and feet.
+    pub fn start_feet(&self) -> (i32, i32) {
+        let (tx, ty) = self.checkpoint;
+        let r = Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H).rect();
+        (r.centre_x(), r.bottom())
+    }
+
+    /// A fresh wassie at full health on the last checkpoint.
+    pub fn reset_player(&mut self) {
+        self.place_player(MAX_HP);
+    }
+
+    /// A fresh wassie with `hp`, standing on the last checkpoint.
+    fn place_player(&mut self, hp: i32) {
+        let (tx, ty) = self.checkpoint;
+        self.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+        self.player.hp = hp;
+    }
+
     /// Back to the last checkpoint. A knockout restores full health; a pit keeps what
     /// was left. Living villains return to their posts.
     fn respawn(&mut self, events: &mut Events) {
-        let (tx, ty) = self.checkpoint;
         let hp = if self.player.hp > 0 { self.player.hp } else { MAX_HP };
-        self.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
-        self.player.hp = hp;
+        self.place_player(hp);
         self.player.invuln = crate::player::INVULN_FRAMES;
         for a in self.actors.iter_mut() {
             a.reset();
@@ -710,6 +772,25 @@ mod tests {
         let events = w.step(&Input::from_keys(keys, 0));
         w.step(&Input::default());
         events
+    }
+
+    #[test]
+    fn a_resumed_run_starts_at_its_beacon_with_whats_behind_it_gone() {
+        let mut w = world();
+        w.pick_up(&Progress {
+            checkpoint: Some((18, 15)),
+            beacons: 1,
+            diamonds: 1,
+            kills: 2,
+            ..Progress::default()
+        });
+        assert_eq!(w.player.body.rect().centre_x().div_euclid(TILE), 18);
+        assert_eq!(w.player.hp, MAX_HP);
+        assert_eq!((w.checkpoints_lit, w.diamonds, w.kills), (1, 1, 2));
+        let of = |kind| w.actors.iter().find(|a| a.kind == kind).unwrap();
+        assert!(of(ActorKind::Diamond).killed && of(ActorKind::Heal).killed);
+        assert_eq!(of(ActorKind::Checkpoint).state, state::LIT);
+        assert!(of(ActorKind::Sentry).alive, "villains ahead of the beacon stay");
     }
 
     #[test]
@@ -970,6 +1051,9 @@ mod tests {
         let mut w = world();
         tap(&mut w, keys::B);
         assert_eq!(w.shake, 0, "an ordinary bolt does not shake");
+        assert!(w.kick > 0, "but it gives the screen a light jolt");
+        hold(&mut w, 0, KICK_FRAMES as usize);
+        assert_eq!(w.kick, 0, "which settles at once");
         hold(&mut w, 0, 20);
         hold(&mut w, keys::B, CHARGE_FRAMES as usize + 1);
         w.step(&Input::from_keys(0, keys::B));

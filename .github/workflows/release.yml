@@ -1,0 +1,42 @@
+name: Release ROM
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # game/rust-toolchain.toml pins the nightly; rustup installs it on first cargo call.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/agb-gbafix
+            game/target
+          key: rom-${{ runner.os }}-${{ hashFiles('game/Cargo.lock', 'game/rust-toolchain.toml') }}
+      - name: Install agb-gbafix
+        run: command -v agb-gbafix || cargo install agb-gbafix
+      - name: Build ROM
+        run: ./scripts/build-rom.sh
+      - name: Name ROM after the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cp dist/diamond-hands.gba "dist/diamond-hands-${GITHUB_REF_NAME}.gba"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diamond-hands-rom
+          path: dist/*.gba
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/diamond-hands-${{ github.ref_name }}.gba
+          generate_release_notes: true

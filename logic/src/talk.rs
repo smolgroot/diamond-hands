@@ -1,8 +1,10 @@
-//! Conversations: a few lines between the wassie and a boss before the fight. The text
-//! is typed out a character per frame; A finishes the line, then moves to the next.
+//! Conversations: a few lines between the wassie and a boss before the fight, or a
+//! guide on arrival. The text is typed out a character per frame; A finishes the line,
+//! then moves to the next.
 
-/// Characters a dialogue row may hold, so it fits beside the portrait.
-pub const ROW_CHARS: usize = 44;
+/// Characters a dialogue row may hold, so it fits beside the portrait in the ROM's big
+/// font (8 pixels a character).
+pub const ROW_CHARS: usize = 22;
 /// Rows per line of dialogue.
 pub const MAX_ROWS: usize = 3;
 /// Characters (spaces excluded) a line may show at once. The ROM draws one object per
@@ -14,6 +16,8 @@ pub const MAX_GLYPHS: usize = 72;
 pub enum Speaker {
     Wassie,
     Ursa,
+    /// The grey cat in the yellow hazmat suit who meets the wassie on CryptoTerra.
+    Cl207,
 }
 
 impl Speaker {
@@ -21,6 +25,7 @@ impl Speaker {
         match self {
             Speaker::Wassie => "WASSIE",
             Speaker::Ursa => "URSA-9000",
+            Speaker::Cl207 => "CL207",
         }
     }
 }
@@ -73,8 +78,10 @@ mod tests {
     #[test]
     fn every_line_fits_and_is_printable() {
         const FONT: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!:/-+.<>,'? ";
-        for level in levels::ALL {
-            for line in level.boss_talk {
+        let arrivals = (0..levels::ALL.len() as u8).filter_map(levels::arrival);
+        let all = levels::ALL.iter().map(|l| l.boss_talk).chain(arrivals.map(|a| a.lines));
+        for lines in all {
+            for line in lines {
                 assert!(!line.is_empty() && line.rows.len() <= MAX_ROWS, "{line:?}");
                 let glyphs = line.rows.iter().flat_map(|r| r.bytes()).filter(|&c| c != b' ').count();
                 assert!(glyphs <= MAX_GLYPHS, "{glyphs} glyphs: {line:?}");

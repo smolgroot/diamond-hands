@@ -104,11 +104,11 @@ impl Aim {
     /// match the blaster drawings in game/src/art/wassie.rs.
     fn muzzle(self) -> (i32, i32) {
         match self {
-            Aim::Forward => (17, 13),
-            Aim::UpForward => (14, 4),
-            Aim::Up => (10, -6),
-            Aim::DownForward => (14, 24),
-            Aim::Down => (10, 27),
+            Aim::Forward => (21, 14),
+            Aim::UpForward => (17, 8),
+            Aim::Up => (13, -6),
+            Aim::DownForward => (16, 25),
+            Aim::Down => (12, 25),
         }
     }
 }

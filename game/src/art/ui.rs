@@ -1,62 +1,118 @@
 //! Screens drawn on their own background layer: the dialogue box and the world map.
-//! Both use the sprite palette's colours (see [`super::ix`]) as background palette
-//! [`UI_PALETTE`], and are painted once at boot from flat fills and repeating patterns,
-//! so most of their cells share tiles.
+//! The map uses the sprite palette's colours (see [`super::ix`]) as background palette
+//! [`UI_PALETTE`]; the dialogue box has its own greys in [`DIALOG_PALETTE`]. Both are
+//! painted once at boot from flat fills and repeating patterns, so most of their cells
+//! share tiles.
 
 use alloc::vec;
 
 use agb::display::{
-    WIDTH,
+    Palette16, WIDTH,
     object::{Size, SpriteVram},
     tiled::RegularBackground,
 };
 use diamond_hands_logic::levels::MAP;
 
-use super::{Canvas, TileCache, ix};
+use super::{Canvas, TileCache, ix, rgb};
 
 /// Background palette slot for these layers.
 pub const UI_PALETTE: u8 = 2;
-/// Top of the dialogue box, in screen pixels.
-pub const BOX_TOP: i32 = 112;
-/// The portrait frame's left edge in the box's map. The renderer scrolls the box by
-/// [`BOX_SCROLL_RIGHT`] to put the frame on the right for the boss.
-pub const FRAME_X: i32 = 4;
-pub const BOX_SCROLL_RIGHT: i32 = 64;
-/// Where a portrait sits on screen, left or right side.
-pub const PORTRAIT_LEFT: (i32, i32) = (FRAME_X + 4, BOX_TOP + 8);
-pub const PORTRAIT_RIGHT: (i32, i32) = (FRAME_X + 4 + 256 - BOX_SCROLL_RIGHT, BOX_TOP + 8);
+/// Background palette slot for the dialogue box's greys.
+pub const DIALOG_SLOT: u8 = 3;
 
-/// A dark violet box across the bottom of the screen with a magenta trim, and a steel
-/// portrait frame at [`FRAME_X`]. The map is 256 pixels wide, so the box wraps
-/// seamlessly when scrolled.
+/// The dialogue box's colours: neutral greys for a raised panel and a sunken frame.
+pub static DIALOG_PALETTE: Palette16 = Palette16::new([
+    rgb(0, 0, 0),
+    rgb(2, 2, 3),
+    rgb(31, 31, 31),
+    rgb(23, 23, 24),
+    rgb(16, 16, 17),
+    rgb(10, 10, 11),
+    rgb(5, 5, 6),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+    rgb(0, 0, 0),
+]);
+
+/// [`DIALOG_PALETTE`] indices.
+mod grey {
+    pub const CLEAR: u8 = 0;
+    pub const BLACK: u8 = 1;
+    pub const WHITE: u8 = 2;
+    pub const LIGHT: u8 = 3;
+    pub const MID: u8 = 4;
+    pub const DARK: u8 = 5;
+    pub const DARKER: u8 = 6;
+}
+
+/// The dialogue box spans the top of the screen, clear of everyone standing below.
+pub const BOX_TOP: i32 = 0;
+pub const BOX_HEIGHT: i32 = 64;
+/// The box's map holds two copies, 256 rows apart: the portrait frame on the left
+/// (the wassie talking) and on the right (anyone else). The renderer scrolls to one.
+pub const BOX_SCROLL_RIGHT: i32 = 256;
+/// The sunken portrait frame: 40x40, its left edge on each side.
+const FRAME_SIZE: i32 = 40;
+const FRAME_LEFT: i32 = 6;
+const FRAME_RIGHT: i32 = WIDTH - 6 - FRAME_SIZE;
+const FRAME_TOP: i32 = BOX_TOP + (BOX_HEIGHT - FRAME_SIZE) / 2;
+/// Where a 32x32 portrait sits on screen, left or right side.
+pub const PORTRAIT_LEFT: (i32, i32) = (FRAME_LEFT + 4, FRAME_TOP + 4);
+pub const PORTRAIT_RIGHT: (i32, i32) = (FRAME_RIGHT + 4, FRAME_TOP + 4);
+/// Where the text starts beside the frame on each side.
+pub const TEXT_LEFT: i32 = FRAME_LEFT + FRAME_SIZE + 6;
+pub const TEXT_RIGHT: i32 = 8;
+
+/// A grey panel across the top of the screen with a raised 3D border (lit from the top
+/// left), and a sunken frame for the portrait.
 pub fn paint_dialog_box(bg: &mut RegularBackground) {
-    let frame = (FRAME_X, BOX_TOP + 4, 40, 40);
+    // Two-step bevel: the outer step strongest. `lit` picks the highlight side.
+    let bevel = |step: i32, lit: bool| match (step, lit) {
+        (0, true) => grey::WHITE,
+        (_, true) => grey::LIGHT,
+        (0, false) => grey::DARKER,
+        (_, false) => grey::DARK,
+    };
     let pixel = |x: i32, y: i32| {
-        let d = y - BOX_TOP;
-        let (fx, fy, fw, fh) = frame;
-        let in_frame = (fx..fx + fw).contains(&x) && (fy..fy + fh).contains(&y);
-        match d {
-            ..0 => ix::CLEAR,
-            0 | 2 => ix::OUTLINE,
-            1 => ix::LASER,
-            _ if in_frame => {
-                let edge = x == fx || x == fx + fw - 1 || y == fy || y == fy + fh - 1;
-                let inner = x == fx + 1 || x == fx + fw - 2 || y == fy + 1 || y == fy + fh - 2;
-                match () {
-                    _ if edge => ix::STEEL_LIGHT,
-                    _ if inner => ix::STEEL,
-                    _ => ix::OUTLINE,
-                }
-            }
-            // Faint scanlines.
-            _ if d % 4 == 3 => ix::PURPLE,
-            _ => ix::PURPLE_DARK,
+        let frame_x = if y >= BOX_SCROLL_RIGHT { FRAME_RIGHT } else { FRAME_LEFT };
+        let y = y % BOX_SCROLL_RIGHT - BOX_TOP;
+        if !(0..BOX_HEIGHT).contains(&y) || x >= WIDTH {
+            return grey::CLEAR;
         }
+        let (right, bottom) = (WIDTH - 1, BOX_HEIGHT - 1);
+        if x == 0 || y == 0 || x == right || y == bottom {
+            return grey::BLACK;
+        }
+        // The panel's edge, raised: lit along the top and left.
+        let (top, left, low, end) = (y - 1, x - 1, bottom - 1 - y, right - 1 - x);
+        if top.min(left).min(low).min(end) < 2 {
+            let lit = (top < 2 && top <= end) || (left < 2 && left <= low);
+            return bevel(if lit { top.min(left) } else { low.min(end) }, lit);
+        }
+        // The portrait frame, sunken: shadowed along the top and left.
+        let (fx, fy) = (x - frame_x, y + BOX_TOP - FRAME_TOP);
+        if (0..FRAME_SIZE).contains(&fx) && (0..FRAME_SIZE).contains(&fy) {
+            let (fl, ft, fr, fb) = (fx, fy, FRAME_SIZE - 1 - fx, FRAME_SIZE - 1 - fy);
+            if ft.min(fl).min(fr).min(fb) >= 2 {
+                return grey::BLACK;
+            }
+            let shadowed = (ft < 2 && ft <= fr) || (fl < 2 && fl <= fb);
+            return bevel(if shadowed { ft.min(fl) } else { fb.min(fr) }, !shadowed);
+        }
+        grey::MID
     };
     let mut cache = TileCache::new();
-    for ty in BOX_TOP / 8..20 {
-        for tx in 0..32 {
-            cache.paint(bg, (tx, ty), UI_PALETTE, &pixel);
+    for base in [0, BOX_SCROLL_RIGHT / 8] {
+        for ty in base + BOX_TOP / 8..base + (BOX_TOP + BOX_HEIGHT) / 8 {
+            for tx in 0..32 {
+                cache.paint(bg, (tx, ty), DIALOG_SLOT, &pixel);
+            }
         }
     }
 }

@@ -5,6 +5,7 @@
 //! pixels unless a name ends in `_fx`, which means 24.8 fixed point.
 #![no_std]
 
+pub mod arrival;
 pub mod boss;
 pub mod bot;
 pub mod enemy;
@@ -20,7 +21,7 @@ pub mod shot;
 pub mod talk;
 pub mod world;
 
-pub use game::{Game, Scene, keys};
+pub use game::{Game, Progress, Scene, keys};
 pub use level::{Level, Tile};
 pub use player::PlayerState;
 pub use probe::Probe;
