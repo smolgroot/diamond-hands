@@ -4,7 +4,7 @@ import { withBase } from 'vitepress'
 import { RELEASE_URL, REPO_URL } from './links'
 
 const levels = [
-  { name: 'The Badlands', status: 'Playable', text: 'Mossy cliffs below a ruined city, from a violet dusk to a burning night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then URSA-9000, a bear-shaped war mech.' },
+  { name: 'The Badlands', status: 'Playable', text: 'Mossy cliffs below a ruined city, from a violet dusk to a burning night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then BERA 3000, a bear-shaped war mech.' },
   { name: 'Solana Trenches', status: 'Planned', text: 'A neon casino strip full of hustlers.' },
   { name: 'Ethereum City', status: 'Planned', text: 'A futuristic city of gas drones and MEV bots.' },
 ]
@@ -12,7 +12,7 @@ const levels = [
 const shots = [
   { file: 'level-start', caption: 'Level 1: The Badlands' },
   { file: 'hover', caption: 'Jetpack hover over the ruined skyline' },
-  { file: 'dialog-1', caption: 'URSA-9000 offers a deal' },
+  { file: 'dialog-1', caption: 'BERA 3000 offers a deal' },
   { file: 'dialog-3', caption: '“Hold this.”' },
   { file: 'map-badlands', caption: 'The world map' },
   { file: 'title', caption: 'Title screen' },

@@ -104,6 +104,12 @@ impl Font {
     }
 }
 
+/// The 3x5 bitmap for `byte`, if the font has it: five rows of three bits, most
+/// significant bit on the left. For text painted into background tiles.
+pub fn glyph(byte: u8) -> Option<&'static [u8; 5]> {
+    GLYPHS.iter().find(|(c, _)| *c == byte).map(|(_, rows)| rows)
+}
+
 fn render(rows: &[u8; 5], scale: usize) -> SpriteVram {
     let size = if scale == 1 { Size::S8x8 } else { Size::S8x16 };
     // EWRAM, like `art::Canvas`: IWRAM allocations can land on the stacks.

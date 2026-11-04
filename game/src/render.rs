@@ -25,8 +25,8 @@ use diamond_hands_logic::{
     levels::MAP,
     player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
-    arrival::Gear,
-    talk::{ROW_CHARS, Speaker},
+    arrival::{GUIDE_W, Gear},
+    talk::{self, Speaker},
     world::CHARGE_FRAMES,
 };
 
@@ -35,7 +35,7 @@ use crate::{
         Common, SPRITE_PALETTE, TileCache,
         arrival::{self, ArrivalArt},
         badlands::{self, SKY_PALETTES, Villains},
-        ui::{self, BOX_TOP},
+        ui,
         wassie::{self, Wassie},
     },
     font::{self, Font},
@@ -54,6 +54,8 @@ const COLUMNS_PER_FRAME: usize = 8;
 const SPEED_LINES_FX: i32 = 4 * diamond_hands_logic::FX;
 const KEY_UNSET: u16 = u16::MAX;
 const KEY_BLANK: u16 = u16::MAX - 1;
+/// How far BERA 3000's head lifts through one breath, a step every few frames.
+const BERA_BREATH: [i32; 8] = [0, 1, 2, 2, 2, 1, 0, 0];
 
 pub struct Renderer {
     common: Common,
@@ -65,6 +67,9 @@ pub struct Renderer {
     city: RegularBackground,
     terrain: RegularBackground,
     dialog_box: RegularBackground,
+    dialog_text: ui::DialogText,
+    /// The line, characters shown and prompt arrow last painted into `dialog_text`.
+    dialog_painted: Option<(u8, u16, Option<i32>)>,
     map: RegularBackground,
     /// Map marker for places still being built.
     soon: SpriteVram,
@@ -76,8 +81,9 @@ pub struct Renderer {
     /// Level column held by each terrain map slot.
     columns: [i32; TERRAIN_COLS as usize],
     level: Option<&'static Level>,
-    ground_palettes: [agb::display::Palette16; 3],
     stage: u8,
+    /// Fence wire state last shown, see [`diamond_hands_logic::world::fence_state`].
+    fence: u8,
     /// This frame's camera, including screen shake.
     view_x: i32,
     /// Priority for the world's objects: below the dialogue box while it is up.
@@ -90,10 +96,9 @@ fn layer(priority: Priority, size: RegularBackgroundSize) -> RegularBackground {
 
 impl Renderer {
     pub fn new(gfx: &mut agb::display::Graphics) -> Self {
-        let ground_palettes = [0, 1, 2].map(badlands::ground_palette);
         gfx.set_background_palettes(&[
             SKY_PALETTES[0].clone(),
-            ground_palettes[0].clone(),
+            badlands::ground_palette(0, 0),
             SPRITE_PALETTE.clone(),
             ui::DIALOG_PALETTE.clone(),
         ]);
@@ -104,6 +109,7 @@ impl Renderer {
         badlands::paint_city(&mut city);
         let mut dialog_box = layer(Priority::P0, RegularBackgroundSize::Background32x64);
         ui::paint_dialog_box(&mut dialog_box);
+        let dialog_text = ui::DialogText::new(&mut dialog_box);
         let mut map = layer(Priority::P0, RegularBackgroundSize::Background32x32);
         ui::paint_map(&mut map);
 
@@ -117,6 +123,8 @@ impl Renderer {
             city,
             terrain: layer(Priority::P1, RegularBackgroundSize::Background64x32),
             dialog_box,
+            dialog_text,
+            dialog_painted: None,
             map,
             soon: ui::soon_marker(),
             terrain_tiles: TileCache::new(),
@@ -124,8 +132,8 @@ impl Renderer {
             blank: DynamicTile16::new().fill_with(0),
             columns: [i32::MIN; TERRAIN_COLS as usize],
             level: None,
-            ground_palettes,
             stage: 0,
+            fence: 0,
             view_x: 0,
             world_layer: Priority::P0,
         };
@@ -160,10 +168,15 @@ impl Renderer {
         } else {
             ((cam + WIDTH / 2) * 3 / world.level.px_width()).clamp(0, 2) as u8
         };
+        let fence = diamond_hands_logic::world::fence_state(world.frames);
         if stage != self.stage {
             frame.set_background_palette(0, &SKY_PALETTES[stage as usize]);
-            frame.set_background_palette(TERRAIN_PALETTE, &self.ground_palettes[stage as usize]);
             self.stage = stage;
+            self.fence = u8::MAX;
+        }
+        if fence != self.fence {
+            frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence));
+            self.fence = fence;
         }
 
         let terrain_ready = self.stream_terrain(world.level, cam);
@@ -174,9 +187,12 @@ impl Renderer {
             // Everyone but the wassie talks from the right: scroll to the copy of the box
             // with its frame there.
             let right = self.speaker(game).is_some_and(|s| s != Speaker::Wassie);
+            self.paint_dialog_text(game, right);
             self.dialog_box
                 .set_scroll_pos(vec2(0, if right { ui::BOX_SCROLL_RIGHT } else { 0 }));
             self.dialog_box.show(frame);
+        } else {
+            self.dialog_painted = None;
         }
         let terrain_id = terrain_ready.then(|| self.terrain.show(frame));
         let city_id = self.city.show(frame);
@@ -203,6 +219,28 @@ impl Renderer {
         if !in_menu {
             self.draw_actors(game, frame);
         }
+    }
+
+    /// Paints the current line into the dialogue box, if it changed since last frame:
+    /// the speaker's nameplate, up to three rows of `talk::ROW_CHARS`, and a bobbing
+    /// arrow once the line is typed out.
+    fn paint_dialog_text(&mut self, game: &Game, right: bool) {
+        let Some(line) = game.talk_lines().get(game.talk_line as usize) else {
+            return;
+        };
+        let shown = game.talk_shown as usize;
+        let arrow = (shown >= line.len()).then(|| ((game.frame / 8) % 2) as i32);
+        let key = (game.talk_line, game.talk_shown, arrow);
+        if self.dialog_painted == Some(key) {
+            return;
+        }
+        self.dialog_painted = Some(key);
+        let mut rows = [""; talk::MAX_ROWS];
+        for (slot, row) in rows.iter_mut().zip(line.visible(shown)) {
+            *slot = row;
+        }
+        let page = ui::Page { name: line.speaker.name(), rows, arrow };
+        self.dialog_text.paint(right, &page);
     }
 
     fn speaker(&self, game: &Game) -> Option<Speaker> {
@@ -427,33 +465,28 @@ impl Renderer {
         self.font.draw_centred(frame, "B: BACK", 104, false);
     }
 
-    /// The current line of dialogue, typed out beside the speaker's portrait: the
-    /// wassie on the left, the boss on the right.
+    /// The speaker's portrait beside the line of dialogue (painted into the box by
+    /// [`Self::paint_dialog_text`]): the wassie on the left, anyone else on the right.
     fn draw_dialog(&self, game: &Game, frame: &mut GraphicsFrame) {
         let lines = game.talk_lines();
         let Some(line) = lines.get(game.talk_line as usize) else {
             return;
         };
-        let shown = game.talk_shown as usize;
-        let typing = shown < line.len();
-        let (portrait, (px, py), text_x) = match line.speaker {
-            Speaker::Wassie => (&self.wassie.portrait, ui::PORTRAIT_LEFT, ui::TEXT_LEFT),
-            Speaker::Ursa => (&self.villains.ursa.portrait, ui::PORTRAIT_RIGHT, ui::TEXT_RIGHT),
-            Speaker::Cl207 => (&self.arrival.portrait, ui::PORTRAIT_RIGHT, ui::TEXT_RIGHT),
-        };
-        // Everything in the big font, so it reads at a glance: the name, then up to
-        // three rows of `talk::ROW_CHARS`.
-        self.font.draw(frame, line.speaker.name(), text_x, BOX_TOP + 5, true);
-        for (i, row) in line.visible(shown).enumerate() {
-            self.font.draw(frame, row, text_x, BOX_TOP + 19 + i as i32 * 13, true);
-        }
-        if !typing && (game.frame / 16).is_multiple_of(2) {
-            let end = text_x + Font::width(" ", true) * ROW_CHARS as i32;
-            self.font.draw(frame, ">", end - 6, BOX_TOP + 5, true);
-        }
+        let typing = (game.talk_shown as usize) < line.len();
+        let (px, py) = ui::portrait_pos(line.speaker != Speaker::Wassie);
         // The speaker bobs while the words come out.
         let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
-        show(frame, portrait, px, py - bob);
+        show(frame, self.portrait(line.speaker), px, py - bob);
+    }
+
+    /// Each speaker's face for the dialogue box. A new speaker needs a 32x32 portrait
+    /// here and a name in `talk::Speaker`.
+    fn portrait(&self, speaker: Speaker) -> &SpriteVram {
+        match speaker {
+            Speaker::Wassie => &self.wassie.portrait,
+            Speaker::Bera => &self.villains.bera.portrait,
+            Speaker::Cl207 => &self.arrival.portrait,
+        }
     }
 
     /// The world map: every place with its marker, the wassie standing on the chosen
@@ -517,7 +550,7 @@ impl Renderer {
 
         if world.boss.is_active() && !world.boss.is_beaten() {
             let y = 148;
-            self.font.draw(frame, "URSA-9000", 4, y + 1, false);
+            self.font.draw(frame, "BERA 3000", 4, y + 1, false);
             let full = world.boss.hp * 64 / diamond_hands_logic::boss::BOSS_HP;
             for i in 0..8 {
                 let filled = (full - i * 8).clamp(0, 8);
@@ -624,7 +657,7 @@ impl Renderer {
                 let a = (game.frame as i32 / 3 + i * 6) % 18;
                 let sx = r.centre_x() - 4 - cam + (a - 9).abs() * 2 - 9;
                 let sy = r.y - 12 + (a % 9) / 3;
-                self.put(frame, &self.villains.ursa.star, sx, sy);
+                self.put(frame, &self.villains.bera.star, sx, sy);
             }
         } else if p.state == PlayerState::Fall && p.body.vy_fx >= SPEED_LINES_FX {
             self.put(frame, &self.common.speed_lines, r.centre_x() - 4 - cam, r.y - 14);
@@ -662,9 +695,13 @@ impl Renderer {
             };
             show_at(frame, sprite, (x - w / 2, y - h / 2), spin);
         }
-        let stride = v.guide_walking && (game.frame / 8) % 2 == 1;
+        // Standing, or alternating the stride and the passing frame.
+        let pose = if v.guide_walking { 1 + (game.frame / 8) % 2 } else { 0 };
         let (gx, feet) = v.guide;
-        show_at(frame, &self.arrival.guide[stride as usize], (gx, feet - 32), v.guide_facing > 0);
+        let left = gx + GUIDE_W / 2 - 16;
+        let flip = v.guide_facing < 0;
+        show_at(frame, &self.arrival.guide_top, (left, feet - 32), flip);
+        show_at(frame, &self.arrival.guide_legs[pose as usize], (left, feet - 16), flip);
         let (sx, sy) = v.ship;
         if v.hatch >= 2 {
             let (hx, hy) = arrival::HATCH_AT;
@@ -772,39 +809,68 @@ impl Renderer {
         if blink {
             return;
         }
-        let ursa = &self.villains.ursa;
+        let bera = &self.villains.bera;
         let flip = boss.facing > 0;
         let stalled = matches!(boss.state, BossState::Stunned | BossState::Dying);
-        let (sprite, h) = match boss.state {
-            BossState::Charge => (&ursa.charge, 32),
-            BossState::Aim => (&ursa.aim, 64),
-            _ => (&ursa.stand, 64),
-        };
-        let x = r.centre_x() - 32 - cam;
         // Telegraphing the charge: a crouch-and-shake.
         let shake = if boss.state == BossState::Telegraph { (game.frame % 2) as i32 * 2 - 1 } else { 0 };
+        let x = r.centre_x() - 32 - cam + shake;
+        let part = |sprite: &SpriteVram, (px, py): (i32, i32), w: i32, top: i32, frame: &mut GraphicsFrame| {
+            Object::new(sprite.clone())
+                .set_pos(vec2(x + badlands::flip_x(px, w, flip), top + py))
+                .set_hflip(flip)
+                .set_priority(self.world_layer)
+                .show(frame);
+        };
+
+        if boss.state == BossState::Charge {
+            // A galloping bounce, the head bobbing against the body.
+            let top = r.bottom() - 32 - (game.frame / 3 % 2) as i32;
+            let (hx, hy) = badlands::BERA_CHARGE_HEAD_AT;
+            part(&bera.head, (hx, hy + (game.frame / 3 % 2) as i32), 32, top, frame);
+            part(&bera.charge, (0, 0), 64, top, frame);
+            return;
+        }
+
+        // Breathing: the chest swells and the head lifts, then both settle. Stalled, she
+        // pants fast; walking, each heavy step jolts the upper body down.
+        let pace = if stalled { 3 } else { 8 };
+        let breath = BERA_BREATH[(game.frame / pace) as usize % BERA_BREATH.len()];
+        let sink = match boss.state {
+            BossState::Telegraph => 2,
+            BossState::Walk => (r.x.unsigned_abs() / 8 % 2) as i32,
+            _ => 0,
+        };
+        let top = r.bottom() - 64;
+        let (hx, hy) = badlands::BERA_HEAD_AT;
+        let head = (hx, hy - breath + sink * 3 / 2);
+        let (tx, ty) = badlands::BERA_TORSO_AT;
+        let torso = (tx, ty - (breath + 1) / 2 + sink);
+
         if boss.state == BossState::Stunned {
             for i in 0..3 {
                 let a = (game.frame as i32 / 4 + i * 8) % 24;
                 let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
-                let sy = r.y - 14 + (a % 12) / 3;
-                self.put(frame, &ursa.star, sx, sy);
+                let sy = top + head.1 - 6 + (a % 12) / 3;
+                self.put(frame, &bera.star, sx, sy);
             }
         }
         if stalled {
-            let (ox, oy) = badlands::DIZZY_AT;
-            let ox = if flip { 64 - ox - 32 } else { ox };
-            Object::new(ursa.dizzy.clone())
-                .set_pos(vec2(x + shake + ox, r.bottom() - h + oy))
-                .set_hflip(flip)
-                .set_priority(self.world_layer)
-                .show(frame);
+            // Smoke curling up off the back of her head.
+            for i in 0..2 {
+                let t = (game.frame as i32 + i * 20) % 40;
+                part(&bera.smoke, (head.0 + 18 + t / 8, head.1 - t / 3), 8, top, frame);
+            }
+        } else {
+            // The core rides with the torso.
+            let (cx, cy) = badlands::BERA_CORE_AT;
+            let core = (cx, cy + torso.1 - ty);
+            part(&bera.core[(breath == 2) as usize], core, 8, top, frame);
         }
-        Object::new(sprite.clone())
-            .set_pos(vec2(x + shake, r.bottom() - h))
-            .set_hflip(flip)
-            .set_priority(self.world_layer)
-            .show(frame);
+        part(if stalled { &bera.head_dead } else { &bera.head }, head, 32, top, frame);
+        let body = if boss.state == BossState::Aim { &bera.torso_aim } else { &bera.torso };
+        part(body, torso, 64, top, frame);
+        part(&bera.legs, badlands::BERA_LEGS_AT, 64, top, frame);
     }
 
     fn draw_actors(&self, game: &Game, frame: &mut GraphicsFrame) {

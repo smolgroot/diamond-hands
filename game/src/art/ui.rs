@@ -1,119 +1,484 @@
 //! Screens drawn on their own background layer: the dialogue box and the world map.
 //! The map uses the sprite palette's colours (see [`super::ix`]) as background palette
-//! [`UI_PALETTE`]; the dialogue box has its own greys in [`DIALOG_PALETTE`]. Both are
+//! [`UI_PALETTE`]; the dialogue box has its own metal and neon in [`DIALOG_PALETTE`]. Both are
 //! painted once at boot from flat fills and repeating patterns, so most of their cells
 //! share tiles.
 
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use agb::display::{
     Palette16, WIDTH,
     object::{Size, SpriteVram},
-    tiled::RegularBackground,
+    tiled::{DynamicTile16, RegularBackground, TileEffect},
 };
-use diamond_hands_logic::levels::MAP;
+use diamond_hands_logic::{levels::MAP, talk};
 
 use super::{Canvas, TileCache, ix, rgb};
+use crate::font::{self, Font};
 
 /// Background palette slot for these layers.
 pub const UI_PALETTE: u8 = 2;
-/// Background palette slot for the dialogue box's greys.
+/// Background palette slot for the dialogue box's colours.
 pub const DIALOG_SLOT: u8 = 3;
 
-/// The dialogue box's colours: neutral greys for a raised panel and a sunken frame.
+/// The dialogue box's colours: gunmetal and night purple, lit by magenta neon, with a
+/// hazard-yellow nameplate.
 pub static DIALOG_PALETTE: Palette16 = Palette16::new([
     rgb(0, 0, 0),
-    rgb(2, 2, 3),
-    rgb(31, 31, 31),
-    rgb(23, 23, 24),
-    rgb(16, 16, 17),
-    rgb(10, 10, 11),
-    rgb(5, 5, 6),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
-    rgb(0, 0, 0),
+    rgb(3, 1, 6),
+    rgb(7, 3, 13),
+    rgb(5, 2, 10),
+    rgb(9, 6, 15),
+    rgb(15, 11, 21),
+    rgb(23, 19, 28),
+    rgb(31, 5, 21),
+    rgb(31, 21, 29),
+    rgb(29, 28, 25),
+    rgb(31, 25, 5),
+    rgb(25, 14, 2),
+    rgb(20, 4, 17),
+    rgb(14, 2, 13),
     rgb(0, 0, 0),
     rgb(0, 0, 0),
 ]);
 
 /// [`DIALOG_PALETTE`] indices.
-mod grey {
+mod pal {
     pub const CLEAR: u8 = 0;
-    pub const BLACK: u8 = 1;
-    pub const WHITE: u8 = 2;
-    pub const LIGHT: u8 = 3;
-    pub const MID: u8 = 4;
-    pub const DARK: u8 = 5;
-    pub const DARKER: u8 = 6;
+    /// Outlines, the text's shadow and the name.
+    pub const INK: u8 = 1;
+    /// The text panel, and every other row of it a shade darker: scanlines.
+    pub const PANEL: u8 = 2;
+    pub const SCAN: u8 = 3;
+    pub const STEEL_DARK: u8 = 4;
+    pub const STEEL: u8 = 5;
+    pub const STEEL_LIGHT: u8 = 6;
+    pub const NEON: u8 = 7;
+    pub const NEON_LIGHT: u8 = 8;
+    pub const TEXT: u8 = 9;
+    pub const PLATE: u8 = 10;
+    pub const PLATE_DARK: u8 = 11;
+    /// Behind the portrait, scanlined like the panel.
+    pub const SCREEN: u8 = 12;
+    pub const SCREEN_SCAN: u8 = 13;
 }
 
 /// The dialogue box spans the top of the screen, clear of everyone standing below.
-pub const BOX_TOP: i32 = 0;
-pub const BOX_HEIGHT: i32 = 64;
+pub const BOX_HEIGHT: i32 = 56;
 /// The box's map holds two copies, 256 rows apart: the portrait frame on the left
 /// (the wassie talking) and on the right (anyone else). The renderer scrolls to one.
 pub const BOX_SCROLL_RIGHT: i32 = 256;
-/// The sunken portrait frame: 40x40, its left edge on each side.
-const FRAME_SIZE: i32 = 40;
-const FRAME_LEFT: i32 = 6;
-const FRAME_RIGHT: i32 = WIDTH - 6 - FRAME_SIZE;
-const FRAME_TOP: i32 = BOX_TOP + (BOX_HEIGHT - FRAME_SIZE) / 2;
-/// Where a 32x32 portrait sits on screen, left or right side.
-pub const PORTRAIT_LEFT: (i32, i32) = (FRAME_LEFT + 4, FRAME_TOP + 4);
-pub const PORTRAIT_RIGHT: (i32, i32) = (FRAME_RIGHT + 4, FRAME_TOP + 4);
-/// Where the text starts beside the frame on each side.
-pub const TEXT_LEFT: i32 = FRAME_LEFT + FRAME_SIZE + 6;
-pub const TEXT_RIGHT: i32 = 8;
 
-/// A grey panel across the top of the screen with a raised 3D border (lit from the top
-/// left), and a sunken frame for the portrait.
+/// The portrait's metal frame, 44x44 with chamfered corners, and the 32x32 portrait
+/// inside it.
+const FRAME_SIZE: i32 = 44;
+const FRAME_TOP: i32 = 4;
+const PORTRAIT_INSET: i32 = 6;
+/// The text panel's top and bottom; the nameplate and a vented header sit on its rim.
+const PANEL_TOP: i32 = 8;
+const PANEL_BOTTOM: i32 = 54;
+
+/// Where things go with the portrait on one side: left for the wassie, right for
+/// everyone else.
+#[derive(Clone, Copy)]
+struct Layout {
+    frame_x: i32,
+    panel: (i32, i32),
+    text_x: i32,
+}
+
+const fn layout(right: bool) -> Layout {
+    if right {
+        Layout { frame_x: WIDTH - 4 - FRAME_SIZE, panel: (2, 190), text_x: 8 }
+    } else {
+        Layout { frame_x: 4, panel: (50, WIDTH - 2), text_x: 56 }
+    }
+}
+
+/// Where a 32x32 portrait sits on screen with the frame on the right or the left.
+pub const fn portrait_pos(right: bool) -> (i32, i32) {
+    (layout(right).frame_x + PORTRAIT_INSET, FRAME_TOP + PORTRAIT_INSET)
+}
+
+/// The first row of text, and the step between rows: the big font is 10 pixels tall,
+/// 11 with its shadow.
+const ROWS_Y: i32 = 16;
+const ROW_STEP: i32 = 11;
+/// The name's top, inside the nameplate.
+const NAME_Y: i32 = 4;
+/// Big-font glyph advance.
+const ADVANCE: i32 = 8;
+
+/// A glowing neon tube, 3 pixels thick, from `(x, y)` running `len` pixels across or
+/// down; `(along, across)` is the pixel's position on it. Rounded ends.
+fn tube(along: i32, across: i32, len: i32) -> Option<u8> {
+    if !(0..len).contains(&along) || !(0..3).contains(&across) {
+        return None;
+    }
+    let end = along == 0 || along == len - 1;
+    match (across, end) {
+        (1, true) => Some(pal::NEON),
+        (_, true) => None,
+        (1, false) => Some(pal::NEON_LIGHT),
+        _ => Some(pal::NEON),
+    }
+}
+
+/// The portrait frame at `(fx, fy)` from its corner: a dark rim, a bevel lit from the
+/// top left, gunmetal with rivets, an inner lip, then a scanlined magenta screen.
+fn frame_pixel(fx: i32, fy: i32) -> Option<u8> {
+    let s = FRAME_SIZE;
+    if !(0..s).contains(&fx) || !(0..s).contains(&fy) {
+        return None;
+    }
+    let (cx, cy) = (fx.min(s - 1 - fx), fy.min(s - 1 - fy));
+    if cx + cy < 4 {
+        return None;
+    }
+    let depth = cx.min(cy).min(cx + cy - 4);
+    Some(match depth {
+        0 => pal::INK,
+        1 if fx + fy < s => pal::STEEL_LIGHT,
+        1 => pal::STEEL_DARK,
+        2 if (cx, cy) == (2, 9) || (cx, cy) == (9, 2) => pal::STEEL_LIGHT,
+        2 => pal::STEEL,
+        3 => pal::STEEL_DARK,
+        4 => pal::INK,
+        _ if fy & 1 == 1 => pal::SCREEN_SCAN,
+        _ => pal::SCREEN,
+    })
+}
+
+/// The text panel at `(px, py)` from its corner, `w` wide: a bevelled metal rim with a
+/// vent grille along the bottom, around dark scanlined glass.
+fn panel_pixel(px: i32, py: i32, w: i32) -> Option<u8> {
+    let h = PANEL_BOTTOM - PANEL_TOP;
+    if !(0..w).contains(&px) || !(0..h).contains(&py) {
+        return None;
+    }
+    let (cx, cy) = (px.min(w - 1 - px), py.min(h - 1 - py));
+    if cx + cy < 3 {
+        return None;
+    }
+    let depth = cx.min(cy).min(cx + cy - 3);
+    let lit = if cy <= cx { py < h / 2 } else { px < w / 2 };
+    let grille = py >= h - 3 && (px - w / 2).abs() < 24;
+    Some(match depth {
+        0 => pal::INK,
+        1 | 2 if grille => {
+            if px & 1 == 0 { pal::INK } else { pal::STEEL_DARK }
+        }
+        1 if lit => pal::STEEL_LIGHT,
+        1 => pal::STEEL_DARK,
+        2 => pal::STEEL,
+        3 => pal::INK,
+        _ if py & 1 == 1 => pal::SCAN,
+        _ => pal::PANEL,
+    })
+}
+
+/// The raised header on the panel's top rim, at its far end, with magenta hazard
+/// stripes. Its ends slope out towards the panel.
+fn header_pixel(x: i32, y: i32, (_, x1): (i32, i32)) -> Option<u8> {
+    const TOP: i32 = 2;
+    if !(TOP..PANEL_TOP).contains(&y) {
+        return None;
+    }
+    let slope = PANEL_TOP - y;
+    let (left, right) = (x1 - 72 + slope, x1 - 8 - slope);
+    if !(left..right).contains(&x) {
+        return None;
+    }
+    Some(match () {
+        _ if y == TOP || x == left || x == right - 1 => pal::INK,
+        _ if y == TOP + 1 => pal::STEEL_LIGHT,
+        _ if x >= right - 34 && x < right - 4 && y > TOP + 1 && (x + y) & 7 < 4 => pal::NEON,
+        _ => pal::STEEL,
+    })
+}
+
+/// The box's colour at (x, y) on screen, with the portrait frame on the right side or
+/// the left.
+fn box_pixel(x: i32, y: i32, right: bool) -> u8 {
+    let l = layout(right);
+    let (x0, x1) = l.panel;
+    let fy = y - FRAME_TOP;
+    // Neon tubes: on the frame's outer side and under it, and on the panel's far end
+    // and bottom rim.
+    let frame_side = if right { l.frame_x + FRAME_SIZE } else { l.frame_x - 3 };
+    let panel_side = if right { x0 - 1 } else { x1 - 2 };
+    let tubes = [
+        tube(y - 18, x - frame_side, 16),
+        tube(x - (l.frame_x + 12), y - (FRAME_TOP + FRAME_SIZE + 1), 20),
+        tube(y - 22, x - panel_side, 16),
+        tube(x - (x1 - 44), y - (PANEL_BOTTOM - 2), 24),
+    ];
+    tubes
+        .into_iter()
+        .flatten()
+        .next()
+        .or_else(|| header_pixel(x, y, l.panel))
+        .or_else(|| frame_pixel(x - l.frame_x, fy))
+        .or_else(|| panel_pixel(x - x0, y - PANEL_TOP, x1 - x0))
+        .unwrap_or(pal::CLEAR)
+}
+
+/// The metal frame and scanlined panel, painted once at boot in both copies.
 pub fn paint_dialog_box(bg: &mut RegularBackground) {
-    // Two-step bevel: the outer step strongest. `lit` picks the highlight side.
-    let bevel = |step: i32, lit: bool| match (step, lit) {
-        (0, true) => grey::WHITE,
-        (_, true) => grey::LIGHT,
-        (0, false) => grey::DARKER,
-        (_, false) => grey::DARK,
-    };
-    let pixel = |x: i32, y: i32| {
-        let frame_x = if y >= BOX_SCROLL_RIGHT { FRAME_RIGHT } else { FRAME_LEFT };
-        let y = y % BOX_SCROLL_RIGHT - BOX_TOP;
-        if !(0..BOX_HEIGHT).contains(&y) || x >= WIDTH {
-            return grey::CLEAR;
-        }
-        let (right, bottom) = (WIDTH - 1, BOX_HEIGHT - 1);
-        if x == 0 || y == 0 || x == right || y == bottom {
-            return grey::BLACK;
-        }
-        // The panel's edge, raised: lit along the top and left.
-        let (top, left, low, end) = (y - 1, x - 1, bottom - 1 - y, right - 1 - x);
-        if top.min(left).min(low).min(end) < 2 {
-            let lit = (top < 2 && top <= end) || (left < 2 && left <= low);
-            return bevel(if lit { top.min(left) } else { low.min(end) }, lit);
-        }
-        // The portrait frame, sunken: shadowed along the top and left.
-        let (fx, fy) = (x - frame_x, y + BOX_TOP - FRAME_TOP);
-        if (0..FRAME_SIZE).contains(&fx) && (0..FRAME_SIZE).contains(&fy) {
-            let (fl, ft, fr, fb) = (fx, fy, FRAME_SIZE - 1 - fx, FRAME_SIZE - 1 - fy);
-            if ft.min(fl).min(fr).min(fb) >= 2 {
-                return grey::BLACK;
-            }
-            let shadowed = (ft < 2 && ft <= fr) || (fl < 2 && fl <= fb);
-            return bevel(if shadowed { ft.min(fl) } else { fb.min(fr) }, !shadowed);
-        }
-        grey::MID
-    };
+    let pixel = |x: i32, y: i32| box_pixel(x, y % BOX_SCROLL_RIGHT, y >= BOX_SCROLL_RIGHT);
     let mut cache = TileCache::new();
     for base in [0, BOX_SCROLL_RIGHT / 8] {
-        for ty in base + BOX_TOP / 8..base + (BOX_TOP + BOX_HEIGHT) / 8 {
+        for ty in base..base + BOX_HEIGHT / 8 {
             for tx in 0..32 {
                 cache.paint(bg, (tx, ty), DIALOG_SLOT, &pixel);
             }
         }
+    }
+}
+
+/// The cells holding the panel's changing parts: the nameplate, the text and the
+/// prompt. The same tiles sit at a different column in each copy of the box: right
+/// of the frame on the left, and left of it on the right.
+const TEXT_COLS: i32 = 24;
+const TEXT_ROWS: i32 = BOX_HEIGHT / 8;
+const TEXT_W: usize = TEXT_COLS as usize * 8;
+const TEXT_H: usize = TEXT_ROWS as usize * 8;
+
+const fn first_col(right: bool) -> i32 {
+    if right { 0 } else { WIDTH / 8 - TEXT_COLS }
+}
+
+/// One page of dialogue as shown: who speaks, the rows typed so far, and the bob of
+/// the continue arrow once the line is done.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Page<'a> {
+    pub name: &'a str,
+    pub rows: [&'a str; talk::MAX_ROWS],
+    pub arrow: Option<i32>,
+}
+
+/// The dialogue's text, painted into tiles of the box's own background rather than
+/// drawn as objects: there is no room left in sprite VRAM for a second font, and it
+/// leaves the GBA's 128 objects to the scene. Repainting stamps the page into a copy
+/// of the box's pixels and writes only the tiles that changed, so typing a character
+/// touches a tile or two.
+pub struct DialogText {
+    /// One tile per cell, row by row, shown in both copies of the box.
+    tiles: Vec<DynamicTile16>,
+    /// The box's own pixels under the cells, frame on the left then on the right.
+    base: [Vec<u8>; 2],
+    /// The pixels being composed, and those in the tiles now.
+    next: Vec<u8>,
+    shown: Vec<u8>,
+    /// The page in `next`, and which side it was painted for.
+    last: Option<(bool, Page<'static>)>,
+}
+
+impl DialogText {
+    pub fn new(bg: &mut RegularBackground) -> Self {
+        let mut tiles = Vec::new();
+        for ty in 0..TEXT_ROWS {
+            for tx in 0..TEXT_COLS {
+                let tile = DynamicTile16::new().fill_with(pal::CLEAR);
+                for right in [false, true] {
+                    let base = if right { BOX_SCROLL_RIGHT / 8 } else { 0 };
+                    let effect = TileEffect::new(false, false, DIALOG_SLOT);
+                    bg.set_tile_dynamic16((first_col(right) + tx, base + ty), &tile, effect);
+                }
+                tiles.push(tile);
+            }
+        }
+        let base = [false, true].map(|right| {
+            let x0 = first_col(right) * 8;
+            let mut pixels = vec![0; TEXT_W * TEXT_H];
+            for (i, p) in pixels.iter_mut().enumerate() {
+                let (x, y) = ((i % TEXT_W) as i32, (i / TEXT_W) as i32);
+                *p = box_pixel(x0 + x, y, right);
+            }
+            pixels
+        });
+        Self {
+            tiles,
+            base,
+            next: vec![0; TEXT_W * TEXT_H],
+            // Matches no colour, so the first paint writes every tile.
+            shown: vec![u8::MAX; TEXT_W * TEXT_H],
+            last: None,
+        }
+    }
+
+    fn put(&mut self, x: i32, y: i32, colour: u8) {
+        if (0..TEXT_W as i32).contains(&x) && (0..TEXT_H as i32).contains(&y) {
+            self.next[y as usize * TEXT_W + x as usize] = colour;
+        }
+    }
+
+    /// Stamps `text` in the big font (3x5 doubled) at `(x, y)` in cell pixels, with a
+    /// drop shadow if given.
+    fn stamp(&mut self, text: &str, x: i32, y: i32, colour: u8, shadow: Option<u8>) {
+        let layers = [shadow.map(|s| (1, s)), Some((0, colour))];
+        for (offset, colour) in layers.into_iter().flatten() {
+            for (i, byte) in text.bytes().enumerate() {
+                let Some(rows) = font::glyph(byte) else {
+                    continue;
+                };
+                let gx = x + i as i32 * ADVANCE + offset;
+                for (dy, bits) in rows.iter().enumerate() {
+                    for dx in 0..3 {
+                        if bits & (0b100 >> dx) == 0 {
+                            continue;
+                        }
+                        let (px, py) = (gx + dx * 2, y + offset + dy as i32 * 2);
+                        for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            self.put(px + sx, py + sy, colour);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The speaker's name on a hazard-yellow plate across the panel's top rim, its
+    /// right end slanted, trailed by three chevrons.
+    fn nameplate(&mut self, name: &str, text_x: i32) {
+        let (x0, x1) = (text_x - 4, text_x + Font::width(name, true) + 2);
+        for y in 2..16 {
+            let right = x1 + (15 - y) / 2;
+            for x in x0..=right {
+                let colour = match () {
+                    _ if y == 2 || y == 15 || x == x0 || x == right => pal::INK,
+                    _ if y == 14 => pal::PLATE_DARK,
+                    _ => pal::PLATE,
+                };
+                self.put(x, y, colour);
+            }
+            if (3..9).contains(&y) {
+                for k in 0..3 {
+                    let bx = right + 3 + k * 5;
+                    for x in bx..bx + 3 {
+                        self.put(x, y, if k == 2 { pal::PLATE_DARK } else { pal::PLATE });
+                    }
+                }
+            }
+        }
+        self.stamp(name, text_x, NAME_Y, pal::INK, None);
+    }
+
+    /// A small downward arrow at the end of the last row: more to come.
+    fn arrow(&mut self, x: i32, y: i32) {
+        for r in 0..4 {
+            for dx in r..7 - r {
+                self.put(x + dx + 1, y + r + 1, pal::INK);
+            }
+        }
+        for r in 0..4 {
+            for dx in r..7 - r {
+                self.put(x + dx, y + r, if r == 0 { pal::NEON_LIGHT } else { pal::NEON });
+            }
+        }
+    }
+
+    /// Paints `page`, with the frame on the right side or the left. Typing on from the
+    /// last page stamps only the new characters, and a bob redraws only the arrow; a
+    /// new line or speaker repaints everything. Either way, only the tiles whose pixels
+    /// changed are written.
+    pub fn paint(&mut self, right: bool, page: &Page<'static>) {
+        let text_x = layout(right).text_x - first_col(right) * 8;
+        let follows = self.last.as_ref().is_some_and(|(was_right, old)| {
+            *was_right == right
+                && old.name == page.name
+                && old.rows.iter().zip(&page.rows).all(|(o, n)| n.starts_with(o))
+        });
+        let mut dirty = Dirty::NONE;
+        if let (true, Some((_, old))) = (follows, self.last) {
+            for (i, (o, n)) in old.rows.iter().zip(&page.rows).enumerate() {
+                if n.len() > o.len() {
+                    let (x, y) = (text_x + o.len() as i32 * ADVANCE, row_y(i));
+                    self.stamp(&n[o.len()..], x, y, pal::TEXT, Some(pal::INK));
+                    dirty.add(x, y, text_x + n.len() as i32 * ADVANCE, y + ROW_STEP);
+                }
+            }
+            if old.arrow != page.arrow {
+                let (x, y) = arrow_pos(text_x);
+                for py in y..y + 6 {
+                    let r = py as usize * TEXT_W + x as usize..py as usize * TEXT_W + x as usize + 8;
+                    self.next[r.clone()].copy_from_slice(&self.base[right as usize][r]);
+                }
+                if let Some(bob) = page.arrow {
+                    self.arrow(x, y + bob);
+                }
+                dirty.add(x, y, x + 8, y + 6);
+            }
+        } else {
+            self.next.copy_from_slice(&self.base[right as usize]);
+            self.nameplate(page.name, text_x);
+            for (i, row) in page.rows.iter().enumerate() {
+                self.stamp(row, text_x, row_y(i), pal::TEXT, Some(pal::INK));
+            }
+            if let Some(bob) = page.arrow {
+                let (x, y) = arrow_pos(text_x);
+                self.arrow(x, y + bob);
+            }
+            dirty = Dirty::ALL;
+        }
+        self.last = Some((right, *page));
+        self.flush(dirty);
+    }
+
+    /// Writes the tiles under `dirty` whose pixels changed.
+    fn flush(&mut self, dirty: Dirty) {
+        let cols = TEXT_COLS as usize;
+        for ty in dirty.y0.max(0) / 8..(dirty.y1.min(TEXT_H as i32) + 7) / 8 {
+            for tx in dirty.x0.max(0) / 8..(dirty.x1.min(TEXT_W as i32) + 7) / 8 {
+                let (cx, cy) = (tx as usize * 8, ty as usize * 8);
+                let rows = (cy..cy + 8).map(|y| y * TEXT_W + cx..y * TEXT_W + cx + 8);
+                if rows.clone().all(|r| self.next[r.clone()] == self.shown[r]) {
+                    continue;
+                }
+                let tile = &mut self.tiles[ty as usize * cols + tx as usize];
+                // A whole row of the tile per word, a nibble a pixel, leftmost lowest.
+                for (word, r) in tile.data_mut().iter_mut().zip(rows) {
+                    let pixels = &self.next[r.clone()];
+                    *word = pixels.iter().rev().fold(0, |acc, &p| acc << 4 | u32::from(p));
+                    self.shown[r.clone()].copy_from_slice(pixels);
+                }
+            }
+        }
+    }
+}
+
+/// The top of row `i` of text.
+const fn row_y(i: usize) -> i32 {
+    ROWS_Y + i as i32 * ROW_STEP
+}
+
+/// Where the continue arrow sits, before its bob: the end of the last row.
+const fn arrow_pos(text_x: i32) -> (i32, i32) {
+    let x = text_x + (talk::ROW_CHARS as i32 - 1) * ADVANCE;
+    (x, row_y(talk::MAX_ROWS - 1) + 3)
+}
+
+/// A rectangle of cell pixels to flush, `x1` and `y1` exclusive.
+#[derive(Clone, Copy)]
+struct Dirty {
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+}
+
+impl Dirty {
+    const NONE: Self = Self { x0: i32::MAX, y0: i32::MAX, x1: i32::MIN, y1: i32::MIN };
+    const ALL: Self = Self { x0: 0, y0: 0, x1: TEXT_W as i32, y1: TEXT_H as i32 };
+
+    /// Grows to cover `(x0, y0)..(x1, y1)` and a pixel more right and down for shadows.
+    fn add(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        *self = Self {
+            x0: self.x0.min(x0),
+            y0: self.y0.min(y0),
+            x1: self.x1.max(x1 + 1),
+            y1: self.y1.max(y1 + 1),
+        };
     }
 }
 

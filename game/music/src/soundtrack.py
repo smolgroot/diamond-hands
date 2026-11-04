@@ -217,7 +217,7 @@ def badlands():
     save(song)
 
 
-# --- Boss: URSA-9000. E Phrygian, ~179 BPM, industrial. -----------------------------
+# --- Boss: BERA 3000. E Phrygian, ~179 BPM, industrial. -----------------------------
 
 def boss():
     song = Song("boss", channels=6, speed=5, bpm=150)

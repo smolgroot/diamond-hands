@@ -339,6 +339,9 @@ fn rom_matches_host_model_frame_by_frame() {
         if model.talking() && dialog_frames % 50 == 49 {
             screenshot(&runner, &format!("{talk}-{}", model.talk_line));
         }
+        if model.scene == Scene::Play && model.world.boss.is_active() && i % 10 == 0 {
+            screenshot(&runner, &format!("boss-{i:05}"));
+        }
         if model.scene == Scene::Arrival {
             beats_seen |= 1 << model.beat as u32;
             arrival_frames += 1;
@@ -353,7 +356,7 @@ fn rom_matches_host_model_frame_by_frame() {
     let end = runner.expect_probe();
     assert!(end.kills > 0 && end.diamonds > 0, "{end:?}");
     assert!(saw_hit, "the run should exercise damage too");
-    assert!(saw_dialog, "URSA-9000 should have her say");
+    assert!(saw_dialog, "BERA 3000 should have her say");
     assert_eq!(beats_seen, 0b11_1111, "CL207's welcome should play every beat");
     assert_eq!(scene(&end), Scene::LevelClear, "the bot should beat the Badlands: {end:?}");
 }

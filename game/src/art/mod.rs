@@ -89,6 +89,8 @@ pub struct Canvas {
     sprite: DynamicSprite16<ExternalAllocator>,
     w: i32,
     h: i32,
+    /// Drawing coordinates of the sprite's top-left pixel; see [`Canvas::at`].
+    origin: (i32, i32),
 }
 
 impl Canvas {
@@ -100,10 +102,20 @@ impl Canvas {
             sprite,
             w: w as i32,
             h: h as i32,
+            origin: (0, 0),
         }
     }
 
+    /// A canvas for one part of a bigger drawing, whose top-left sits at (x, y) in that
+    /// drawing: everything is drawn in the drawing's coordinates and clipped to the part.
+    pub fn at(size: Size, x: i32, y: i32) -> Self {
+        let mut c = Self::new(size);
+        c.origin = (x, y);
+        c
+    }
+
     pub fn px(&mut self, x: i32, y: i32, colour: u8) {
+        let (x, y) = (x - self.origin.0, y - self.origin.1);
         if (0..self.w).contains(&x) && (0..self.h).contains(&y) {
             self.sprite.set_pixel(x as usize, y as usize, colour);
         }
@@ -141,6 +153,50 @@ impl Canvas {
         self.ellipse(cx, cy, rx, ry, fill);
     }
 
+    /// Cel-shaded ellipse lit from the upper left: an outline, then a `base` body with
+    /// a `shade` rim on the lower right.
+    pub fn ball(&mut self, cx: i32, cy: i32, rx: i32, ry: i32, base: u8, shade: u8) {
+        self.ellipse(cx, cy, rx + 1, ry + 1, ix::OUTLINE);
+        self.ellipse(cx, cy, rx, ry, shade);
+        let (ox, oy) = ((rx / 5).max(1), (ry / 5).max(1));
+        self.ellipse(cx - ox, cy - oy, rx - ox, ry - oy, base);
+    }
+
+    /// Cel-shaded box with rounded corners: an outline with the corners clipped, a
+    /// `base` body, a `lit` edge on the top and left and a `shade` rim on the bottom
+    /// and right.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pod(&mut self, x: i32, y: i32, w: i32, h: i32, lit: u8, base: u8, shade: u8) {
+        self.rect(x + 1, y, w - 2, h, ix::OUTLINE);
+        self.rect(x, y + 1, w, h - 2, ix::OUTLINE);
+        self.rect(x + 1, y + 1, w - 2, h - 2, shade);
+        self.rect(x + 1, y + 1, w - 3, h - 3, base);
+        self.rect(x + 2, y + 1, w - 5, 1, lit);
+        self.rect(x + 1, y + 2, 1, h - 5, lit);
+    }
+
+    /// 1px line from (x0, y0) to (x1, y1), both ends included.
+    pub fn line(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, colour: u8) {
+        let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+        let (sx, sy) = ((x1 - x0).signum(), (y1 - y0).signum());
+        let mut err = dx + dy;
+        loop {
+            self.px(x0, y0, colour);
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+
     /// Draws `rows` of [`SPRITE_KEY`] characters with the top-left at (x, y).
     pub fn art(&mut self, x: i32, y: i32, rows: &[&str]) {
         self.art_with(SPRITE_KEY, x, y, rows);
@@ -152,17 +208,6 @@ impl Canvas {
             for (dx, ch) in row.bytes().enumerate() {
                 if let Some(&(_, colour)) = key.iter().find(|(c, _)| *c == ch) {
                     self.px(x + dx as i32, y + dy as i32, colour);
-                }
-            }
-        }
-    }
-
-    /// Draws `rows` with every pixel a `scale` x `scale` block.
-    pub fn art_scaled(&mut self, key: &[(u8, u8)], x: i32, y: i32, rows: &[&str], scale: i32) {
-        for (dy, row) in rows.iter().enumerate() {
-            for (dx, ch) in row.bytes().enumerate() {
-                if let Some(&(_, colour)) = key.iter().find(|(c, _)| *c == ch) {
-                    self.rect(x + dx as i32 * scale, y + dy as i32 * scale, scale, scale, colour);
                 }
             }
         }

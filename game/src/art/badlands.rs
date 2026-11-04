@@ -1,6 +1,6 @@
 //! Level 1, the Badlands: a dystopian dusk over a ruined city, mossy cliffs with
 //! crystal veins, steel girders and energy spikes; the cyber bots that guard it, and
-//! URSA-9000.
+//! BERA 3000.
 
 use agb::display::{
     Palette16, Rgb15,
@@ -20,69 +20,83 @@ const SKY_ROWS: i32 = HORIZON / 8;
 
 /// Backdrop (BG palette 0) indices. Index 0 is the backdrop colour.
 mod sky_ix {
-    pub const SKY: [u8; 4] = [1, 2, 3, 4];
-    pub const MOON: u8 = 5;
-    pub const STAR: u8 = 6;
-    pub const TOWER: u8 = 7;
-    pub const TOWER_DARK: u8 = 8;
-    pub const TOWER_EDGE: u8 = 9;
-    pub const WINDOW: u8 = 10;
-    pub const WINDOW_HOT: u8 = 11;
-    pub const CRATER: u8 = 12;
+    pub const SKY_BANDS: i32 = 6;
+    pub const SKY: [u8; 6] = [1, 2, 3, 4, 5, 6];
+    pub const MOON_LIGHT: u8 = 7;
+    pub const MOON: u8 = 8;
+    pub const CRATER: u8 = 9;
+    pub const STAR: u8 = 10;
+    pub const TOWER: u8 = 11;
+    pub const TOWER_DARK: u8 = 12;
+    pub const TOWER_EDGE: u8 = 13;
+    pub const WINDOW: u8 = 14;
+    pub const WINDOW_HOT: u8 = 15;
+}
+
+type Colour = (u16, u16, u16);
+
+/// Colour `i` of `n` steps along a three-stop gradient (top, middle, horizon).
+const fn grad(stops: [Colour; 3], i: u16, n: u16) -> Rgb15 {
+    let t = i * 2 * 16 / (n - 1);
+    let (a, b, t) = if t < 16 { (stops[0], stops[1], t) } else { (stops[1], stops[2], t - 16) };
+    rgb(
+        (a.0 * (16 - t) + b.0 * t) / 16,
+        (a.1 * (16 - t) + b.1 * t) / 16,
+        (a.2 * (16 - t) + b.2 * t) / 16,
+    )
 }
 
 /// One backdrop palette per stage of the level: a violet dusk, a deep night, and the
 /// city burning under a blood moon.
 pub static SKY_PALETTES: [Palette16; 3] = [
-    sky_palette([
-        rgb(8, 5, 20),
-        rgb(16, 8, 26),
-        rgb(26, 10, 24),
-        rgb(31, 16, 24),
-        rgb(26, 24, 30),
-        rgb(28, 26, 31),
-        rgb(10, 6, 20),
-        rgb(5, 3, 12),
-        rgb(20, 10, 26),
-        rgb(14, 28, 31),
-        rgb(31, 8, 22),
-        rgb(19, 17, 25),
-    ]),
-    sky_palette([
-        rgb(2, 2, 8),
-        rgb(5, 3, 14),
-        rgb(10, 5, 20),
-        rgb(16, 7, 24),
-        rgb(24, 24, 28),
-        rgb(28, 28, 31),
-        rgb(5, 3, 12),
-        rgb(2, 1, 6),
-        rgb(12, 6, 20),
-        rgb(14, 28, 31),
-        rgb(31, 8, 22),
-        rgb(16, 16, 22),
-    ]),
-    sky_palette([
-        rgb(8, 1, 6),
-        rgb(16, 2, 8),
-        rgb(26, 6, 6),
-        rgb(31, 14, 4),
-        rgb(31, 20, 14),
-        rgb(31, 20, 16),
-        rgb(8, 2, 6),
-        rgb(4, 1, 3),
-        rgb(20, 6, 8),
-        rgb(31, 24, 8),
-        rgb(31, 6, 4),
-        rgb(24, 12, 10),
-    ]),
+    sky_palette(
+        [(5, 3, 16), (18, 8, 26), (31, 17, 24)],
+        [(29, 28, 31), (22, 21, 28), (14, 12, 22)],
+        (28, 26, 31),
+        [(10, 6, 20), (5, 3, 12), (20, 10, 26), (14, 28, 31), (31, 8, 22)],
+    ),
+    sky_palette(
+        [(1, 1, 6), (8, 4, 17), (17, 8, 25)],
+        [(27, 28, 31), (19, 20, 27), (11, 11, 20)],
+        (28, 28, 31),
+        [(5, 3, 12), (2, 1, 6), (12, 6, 20), (14, 28, 31), (31, 8, 22)],
+    ),
+    sky_palette(
+        [(6, 1, 5), (20, 3, 7), (31, 17, 6)],
+        [(31, 22, 16), (28, 11, 9), (17, 4, 7)],
+        (31, 20, 16),
+        [(8, 2, 6), (4, 1, 3), (20, 6, 8), (31, 24, 8), (31, 6, 4)],
+    ),
 ];
 
-const fn sky_palette(c: [Rgb15; 12]) -> Palette16 {
-    let black = rgb(0, 0, 0);
+const fn col(c: Colour) -> Rgb15 {
+    rgb(c.0, c.1, c.2)
+}
+
+/// `moon` is lit, mid and shadow; `city` is tower, dark, edge, window, hot window.
+const fn sky_palette(
+    stops: [Colour; 3],
+    moon: [Colour; 3],
+    star: Colour,
+    city: [Colour; 5],
+) -> Palette16 {
     Palette16::new([
-        c[0], c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], black,
-        black, black,
+        grad(stops, 0, sky_ix::SKY_BANDS as u16),
+        grad(stops, 0, sky_ix::SKY_BANDS as u16),
+        grad(stops, 1, sky_ix::SKY_BANDS as u16),
+        grad(stops, 2, sky_ix::SKY_BANDS as u16),
+        grad(stops, 3, sky_ix::SKY_BANDS as u16),
+        grad(stops, 4, sky_ix::SKY_BANDS as u16),
+        grad(stops, 5, sky_ix::SKY_BANDS as u16),
+        col(moon[0]),
+        col(moon[1]),
+        col(moon[2]),
+        col(star),
+        col(city[0]),
+        col(city[1]),
+        col(city[2]),
+        col(city[3]),
+        col(city[4]),
     ])
 }
 
@@ -126,7 +140,7 @@ const GROUND_COLOURS: [(u16, u16, u16); 16] = [
 
 /// Terrain palette for a stage: as drawn at dusk, dimmer at night, and red-lit while
 /// the city burns.
-pub fn ground_palette(stage: u8) -> Palette16 {
+pub fn ground_palette(stage: u8, fence: u8) -> Palette16 {
     let (num, den, red) = [(1, 1, 0), (4, 5, 0), (3, 4, 4)][stage.min(2) as usize];
     let mut colours = [rgb(0, 0, 0); 16];
     for (i, (out, &(r, g, b))) in colours.iter_mut().zip(GROUND_COLOURS.iter()).enumerate() {
@@ -134,6 +148,12 @@ pub fn ground_palette(stage: u8) -> Palette16 {
         let (num, den) = if matches!(i, 11 | 12 | 15) { (1, 1) } else { (num, den) };
         *out = rgb((r * num / den + red).min(31), g * num / den, b * num / den);
     }
+    // Fence wire: dead and dark, a dim blink as a warning, or crackling hot.
+    colours[ground_ix::ENERGY as usize] = match fence {
+        0 => rgb(5, 6, 9),
+        1 => rgb(14, 8, 12),
+        _ => rgb(31, 6, 22),
+    };
     Palette16::new(colours)
 }
 
@@ -141,24 +161,45 @@ pub fn ground_palette(stage: u8) -> Palette16 {
 const BAYER: [[i32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 /// Moon centre and radius; right of every menu line so text never sits on it.
-const MOON: (i32, i32, i32) = (212, 46, 12);
-const CRATERS: [(i32, i32, i32); 3] = [(207, 42, 3), (216, 51, 3), (214, 38, 2)];
+const MOON: (i32, i32, i32) = (214, 44, 15);
+/// Craters (centre, radius): dark bowls with a lit rim on the side away from the light.
+const CRATERS: [(i32, i32, i32); 5] = [(208, 40, 4), (219, 52, 3), (221, 38, 2), (210, 53, 2), (216, 45, 2)];
+/// Dark lunar seas.
+const MARIA: [(i32, i32, i32); 3] = [(210, 46, 5), (218, 41, 4), (213, 35, 3)];
+/// How far the moon's glow reaches past its edge.
+const HALO: i32 = 14;
 
-/// Static sky: a dithered four-band gradient, the cratered moon, and stars.
+/// Static sky: a smooth dithered gradient, a shaded cratered moon with a soft glow, and
+/// stars.
 pub fn paint_sky(bg: &mut RegularBackground) {
     let pixel = |x: i32, y: i32| {
         let (mx, my, r) = MOON;
         let inside = |cx: i32, cy: i32, r: i32| (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
+        let bayer = BAYER[(y % 4) as usize][(x % 4) as usize];
         if inside(mx, my, r) {
-            return if CRATERS.iter().any(|&(cx, cy, cr)| inside(cx, cy, cr)) || inside(mx + 4, my + 4, r - 1) && !inside(mx, my, r - 1) {
-                sky_ix::CRATER
-            } else {
-                sky_ix::MOON
-            };
+            // Lit from the upper left: -100..100 across the disc, dithered between tones.
+            let s = -((x - mx) + (y - my)) * 100 / (r * 3 / 2) + (bayer - 8) * 4;
+            let mut tone = if s > 40 { 2 } else if s > -35 { 1 } else { 0 };
+            if MARIA.iter().any(|&(cx, cy, cr)| inside(cx, cy, cr)) {
+                tone = (tone - 1 + (bayer < 5) as i32).max(0);
+            }
+            for &(cx, cy, cr) in &CRATERS {
+                if inside(cx, cy, cr) {
+                    tone = if inside(cx - 1, cy - 1, cr - 1) { 0 } else { 2 };
+                }
+            }
+            return [sky_ix::CRATER, sky_ix::MOON, sky_ix::MOON_LIGHT][tone as usize];
         }
-        let t = y * 4 * 16 / HORIZON;
-        let band = (t / 16 + (BAYER[(y % 4) as usize][(x % 4) as usize] < t % 16) as i32).min(3);
-        if band <= 1 && (x * 37 + y * 101 + x * y * 7) % 89 == 0 {
+        let steps = (sky_ix::SKY_BANDS - 1) * 16;
+        let base = y * steps / HORIZON;
+        // Moonlight lifts the sky around the disc.
+        let (dx, dy) = (x - mx, y - my);
+        let reach = r + HALO;
+        let d2 = dx * dx + dy * dy;
+        let glow = if d2 < reach * reach { (reach * reach - d2) * 36 / (reach * reach) } else { 0 };
+        let t = (base + glow).min(steps);
+        let band = (t / 16 + (bayer < t % 16) as i32).min(sky_ix::SKY_BANDS - 1);
+        if base < 40 && glow == 0 && (x * 37 + y * 101 + x * y * 7) % 89 == 0 {
             return sky_ix::STAR;
         }
         sky_ix::SKY[band as usize]
@@ -300,14 +341,15 @@ const BOT_HEAD_ART: [&[u8; 8]; 8] = [
     b"kSSSggSk",
     b".kkkkkk.",
 ];
-/// Magenta energy flames over an emitter strip.
+/// An electric fence: a post with live wire strung to the next tile. The wire is the
+/// only thing drawn in [`ground_ix::ENERGY`], so the palette switches the current on and off.
 const SPIKES_ART: [&[u8; 8]; 8] = [
-    b"..e.....",
-    b"..e...e.",
-    b".ewe..e.",
-    b".ewe.ewe",
-    b"ewwe.ewe",
-    b"ewwweewe",
+    b"Sg......",
+    b"Sgeeeeee",
+    b"Sg......",
+    b"Sgeeeeee",
+    b"Sg......",
+    b"Sgeeeeee",
     b"SSSSSSSS",
     b"gkgkgkgk",
 ];
@@ -439,7 +481,7 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
                 px[y * 8 + x] = METAL_DARK;
             }
         }
-        3 => stamp(&mut px, &SPIKES_ART, col4 % 2 == 1),
+        3 => stamp(&mut px, &SPIKES_ART, false),
         5 => stamp(&mut px, &MOSS_ART, col4 % 2 == 1),
         6 => stamp(&mut px, &SCRAP_ART, col4 >= 2),
         7 => stamp(&mut px, &BOT_HEAD_ART, col4 % 2 == 1),
@@ -461,7 +503,7 @@ pub struct Villains {
     pub bomb: SpriteVram,
     pub shockwave: SpriteVram,
     pub missile: SpriteVram,
-    pub ursa: Ursa,
+    pub bera: Bera,
 }
 
 /// Sentry bot, facing left: red armour, red visor, a steel arm cannon. The body is
@@ -605,7 +647,7 @@ const MISSILE: [&str; 12] = [
     "..o...",
 ];
 
-/// Energy wave thrown along the ground by URSA-9000's slam.
+/// Energy wave thrown along the ground by BERA 3000's slam.
 const SHOCKWAVE: [&str; 12] = [
     "....i.....",
     "...iwi..i.",
@@ -635,7 +677,7 @@ impl Villains {
             bomb: drawing(Size::S8x8, 0, 0, &BOMB),
             shockwave: drawing(Size::S16x16, 3, 4, &SHOCKWAVE),
             missile: drawing(Size::S8x16, 1, 2, &MISSILE),
-            ursa: Ursa::new(),
+            bera: Bera::new(),
         }
     }
 }
@@ -651,146 +693,281 @@ fn sentry(legs: &[&str], aim: bool) -> SpriteVram {
     c.vram()
 }
 
-/// URSA-9000, facing left: a bear-shaped war mech in red armour with steel limbs, a
-/// glowing visor, an arm cannon and back thrusters. Standing poses are 64x64 with feet
-/// on row 63; the charge is 64x32 with feet on row 31.
-pub struct Ursa {
-    pub stand: SpriteVram,
-    pub aim: SpriteVram,
-    /// Laid over `stand` when stalled: a dead visor and venting smoke. Placed at
-    /// [`DIZZY_AT`] in the standing sprite (mirror it when flipped).
-    pub dizzy: SpriteVram,
+/// BERA 3000, facing left, after `.claude/skills/diamond-hands-gba/bera-mockup.png`: a
+/// hulking bear mech in red armour, with a gold visor, a vented steel snout, a steel
+/// strap over the far shoulder, a star core in the chest, hazard stripes, big steel
+/// gauntlets with magenta lights, and gold-capped boots.
+///
+/// The standing mech is built from parts so it can breathe without spending VRAM on
+/// whole extra frames: [`Bera::legs`] stays planted while [`Bera::torso`] and
+/// [`Bera::head`] rise and fall on top of it. Every part is drawn in the coordinates
+/// of one 64x64 frame with the feet on row 63, and placed at its `BERA_*_AT` corner
+/// (mirror it with [`flip_x`] when facing right).
+pub struct Bera {
+    pub head: SpriteVram,
+    /// The head with the visor gone dark, while stalled.
+    pub head_dead: SpriteVram,
+    pub torso: SpriteVram,
+    /// The torso with the near gauntlet raised and aimed.
+    pub torso_aim: SpriteVram,
+    pub legs: SpriteVram,
+    /// The star in the chest core, normal and flaring on each breath in. Left off
+    /// (dark) while stalled.
+    pub core: [SpriteVram; 2],
+    /// A puff of smoke venting off a stalled mech.
+    pub smoke: SpriteVram,
+    /// Hunched and charging, 64x32 with the feet on row 31; [`Bera::head`] goes on top
+    /// at [`BERA_CHARGE_HEAD_AT`].
     pub charge: SpriteVram,
     /// Sparks circling a stalled mech.
     pub star: SpriteVram,
-    /// Her helmet, facing left, for the dialogue box.
+    /// Her head, facing left, for the dialogue box: the same sprite as [`Bera::head`].
     pub portrait: SpriteVram,
 }
 
-impl Ursa {
+/// Top-left of the 32x32 head, 64x32 torso, 64x32 legs and 8x8 core in the 64x64 frame,
+/// at rest.
+pub const BERA_HEAD_AT: (i32, i32) = (17, 0);
+pub const BERA_TORSO_AT: (i32, i32) = (0, 22);
+pub const BERA_LEGS_AT: (i32, i32) = (0, 32);
+pub const BERA_CORE_AT: (i32, i32) = (25, 34);
+/// Top-left of the head within the 64x32 charge sprite.
+pub const BERA_CHARGE_HEAD_AT: (i32, i32) = (0, -1);
+
+/// X of a part `w` wide at `x` in a 64-wide frame, once the frame is mirrored.
+pub const fn flip_x(x: i32, w: i32, flip: bool) -> i32 {
+    if flip { 64 - x - w } else { x }
+}
+
+fn red(c: &mut Canvas, cx: i32, cy: i32, rx: i32, ry: i32) {
+    c.ball(cx, cy, rx, ry, ix::RED, ix::RED_DARK);
+}
+
+fn red_pod(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.pod(x, y, w, h, ix::ORANGE, ix::RED, ix::RED_DARK);
+}
+
+fn steel_pod(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.pod(x, y, w, h, ix::STEEL_LIGHT, ix::STEEL, ix::STEEL_DARK);
+}
+
+/// A dark steel joint or fist.
+fn dark_pod(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.pod(x, y, w, h, ix::STEEL, ix::STEEL_DARK, ix::STEEL_DARK);
+}
+
+/// Two bold hazard stripes slanting up to the right from (x, y), `len` wide.
+fn hazard_stripes(c: &mut Canvas, x: i32, y: i32, len: i32, under: Option<u8>) {
+    for i in [0, 4] {
+        for d in 0..len {
+            c.rect(x + d, y + i - d / 2, 2, 2, ix::GOLD);
+            if let Some(colour) = under {
+                c.px(x + d, y + 2 + i - d / 2, colour);
+            }
+        }
+    }
+}
+
+/// A steel gauntlet with a magenta light panel on its outer face at `light_x`.
+fn gauntlet(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, light_x: i32) {
+    steel_pod(c, x, y, w, h);
+    c.rect(light_x, y + 3, 3, 8, ix::LASER);
+    c.rect(light_x + 1, y + 4, 1, 2, ix::LASER_LIGHT);
+    c.px(light_x + 1, y + 8, ix::LASER_LIGHT);
+    c.rect(x, y + 6, w, 1, ix::STEEL_DARK);
+}
+
+/// A dark steel fist with gold knuckles under a gauntlet.
+fn fist(c: &mut Canvas, x: i32, y: i32, w: i32) {
+    dark_pod(c, x, y, w, 5);
+    for k in [2, 5, 8] {
+        c.px(x + k, y + 1, ix::GOLD);
+    }
+}
+
+impl Bera {
     fn new() -> Self {
+        let head = bera_head(true);
         Self {
-            stand: ursa_standing(false, false),
-            aim: ursa_standing(true, false),
-            dizzy: {
-                let mut c = Canvas::new(Size::S32x16);
-                let (x, y) = DIZZY_AT;
-                // The visor, unlit, in overlay coordinates.
-                c.rect(31 - 9 - x, 18 - 3 - y, 16, 4, ix::OUTLINE);
-                c.rect(31 - 8 - x, 18 - 2 - y, 14, 2, ix::STEEL);
-                c.rect(31 - 7 - x, 18 - 2 - y, 4, 1, ix::STEEL_DARK);
-                c.rect(31 + 1 - x, 18 - 2 - y, 4, 1, ix::STEEL_DARK);
-                for (sx, sy, r) in [(40, 7, 2), (44, 6, 2), (36, 6, 1)] {
-                    c.ellipse(sx - x, sy - y, r, r, ix::STEEL);
-                }
-                c.vram()
-            },
-            charge: ursa_charging(),
+            portrait: head.clone(),
+            head,
+            head_dead: bera_head(false),
+            torso: bera_torso(false),
+            torso_aim: bera_torso(true),
+            legs: bera_legs(),
+            core: [bera_core(false), bera_core(true)],
+            smoke: drawing(Size::S8x8, 1, 1, &["..gg..", ".gSSg.", "gSSSgg", "gSggGg", ".gGGg.", "..gg.."]),
+            charge: bera_charging(),
             star: drawing(Size::S8x8, 1, 1, &["..y..", ".yoy.", "yowoy", ".yoy.", "..y.."]),
-            portrait: {
-                let mut c = Canvas::new(Size::S32x32);
-                ursa_head(&mut c, 18, 18, true);
-                c.vram()
-            },
         }
     }
 }
 
-/// Bear-head helmet centred on `(cx, cy)`: round ears, armoured dome, visor slit, snout grill.
-fn ursa_head(c: &mut Canvas, cx: i32, cy: i32, visor_lit: bool) {
-    for ex in [cx - 10, cx + 9] {
-        c.blob(ex, cy - 8, 4, 4, ix::RED);
-        c.ellipse(ex, cy - 8, 2, 2, ix::STEEL);
+/// Round ears with steel linings, the armoured dome with the visor band, the vented
+/// snout with its magenta lamp, and the steel strap down to the far shoulder.
+fn bera_head(lit: bool) -> SpriteVram {
+    let (x, y) = BERA_HEAD_AT;
+    let mut c = Canvas::at(Size::S32x32, x, y);
+    for ex in [22, 40] {
+        red(&mut c, ex, 6, 5, 5);
+        c.ellipse(ex, 6, 3, 3, ix::OUTLINE);
+        c.ellipse(ex, 6, 2, 2, ix::STEEL);
+        c.px(ex - 1, 5, ix::STEEL_LIGHT);
+        c.px(ex + 1, 7, ix::STEEL_DARK);
+        c.px(ex + 2, 6, ix::STEEL_DARK);
+        c.px(ex, 8, ix::STEEL_DARK);
     }
-    c.blob(cx, cy, 12, 10, ix::RED);
-    c.ellipse(cx + 2, cy - 4, 8, 4, ix::ORANGE);
-    c.ellipse(cx + 2, cy - 3, 9, 4, ix::RED);
-    // Visor slit.
-    c.rect(cx - 9, cy - 3, 16, 4, ix::OUTLINE);
-    let (lit, glow) = if visor_lit { (ix::GOLD, ix::ORANGE) } else { (ix::STEEL_DARK, ix::STEEL) };
-    c.rect(cx - 8, cy - 2, 14, 2, glow);
-    c.rect(cx - 7, cy - 2, 4, 1, lit);
-    c.rect(cx + 1, cy - 2, 4, 1, lit);
-    // Snout plate with a vent grill, pointing left.
-    c.block(cx - 16, cy + 2, 12, 8, ix::STEEL_LIGHT, ix::OUTLINE);
-    for x in [cx - 14, cx - 11, cx - 8] {
-        c.rect(x, cy + 4, 1, 4, ix::STEEL_DARK);
-    }
-    c.rect(cx - 17, cy + 3, 3, 3, ix::OUTLINE);
-}
-
-/// Top-left of the stalled overlay within the 64x64 standing sprite.
-pub const DIZZY_AT: (i32, i32) = (20, 4);
-
-fn ursa_standing(aim: bool, stalled: bool) -> SpriteVram {
-    let mut c = Canvas::new(Size::S64x64);
-    // Back thrusters.
-    c.block(48, 26, 8, 18, ix::STEEL, ix::OUTLINE);
-    c.rect(49, 27, 2, 16, ix::STEEL_LIGHT);
-    c.block(47, 43, 10, 4, ix::STEEL_DARK, ix::OUTLINE);
-    // Piston legs and heavy feet.
-    for x in [20, 35] {
-        c.block(x + 2, 48, 7, 10, ix::STEEL, ix::OUTLINE);
-        c.rect(x + 3, 49, 2, 8, ix::STEEL_LIGHT);
-        c.block(x, 56, 12, 8, ix::RED, ix::OUTLINE);
-        c.rect(x + 1, 57, 10, 2, ix::ORANGE);
-        c.rect(x, 62, 12, 2, ix::OUTLINE);
-    }
-    // Armoured torso with a reactor core.
-    c.blob(33, 38, 16, 12, ix::RED);
-    c.ellipse(36, 32, 11, 4, ix::ORANGE);
-    c.ellipse(36, 34, 12, 4, ix::RED);
-    c.rect(19, 44, 28, 2, ix::RED_DARK);
-    c.blob(32, 40, 5, 5, ix::STEEL_DARK);
-    c.ellipse(32, 40, 3, 3, if stalled { ix::STEEL } else { ix::GOLD });
-    c.ellipse(31, 39, 1, 1, ix::WHITE);
-    // Warning stripes on the belt.
-    for x in (21..45).step_by(4) {
-        c.rect(x, 46, 2, 2, ix::GOLD);
-    }
-    // Arms: the left one is a cannon, raised and glowing when aiming.
-    if aim {
-        c.block(4, 32, 22, 9, ix::STEEL, ix::OUTLINE);
-        c.rect(5, 33, 20, 2, ix::STEEL_LIGHT);
-        c.block(0, 30, 7, 13, ix::STEEL_DARK, ix::OUTLINE);
-        c.rect(1, 34, 3, 5, ix::ORANGE);
-        c.rect(1, 35, 2, 3, ix::GOLD);
+    // Jaw, then the dome with a highlight on its upper left.
+    red(&mut c, 32, 18, 12, 6);
+    red(&mut c, 31, 13, 12, 10);
+    c.rect(25, 4, 6, 1, ix::ORANGE);
+    c.rect(23, 5, 3, 1, ix::ORANGE);
+    c.rect(22, 6, 1, 3, ix::ORANGE);
+    c.line(36, 17, 40, 19, ix::RED_DARK);
+    // Visor.
+    c.rect(20, 11, 18, 5, ix::OUTLINE);
+    if lit {
+        c.rect(21, 12, 16, 2, ix::GOLD);
+        c.rect(21, 14, 16, 1, ix::ORANGE);
+        c.rect(23, 12, 4, 1, ix::WHITE);
     } else {
-        c.block(12, 34, 9, 18, ix::STEEL, ix::OUTLINE);
-        c.rect(13, 35, 2, 16, ix::STEEL_LIGHT);
-        c.block(10, 48, 12, 9, ix::STEEL_DARK, ix::OUTLINE);
-        c.rect(11, 50, 3, 5, ix::ORANGE);
+        c.rect(21, 12, 16, 3, ix::STEEL_DARK);
+        c.rect(21, 12, 16, 1, ix::STEEL);
     }
-    c.block(44, 34, 8, 14, ix::STEEL, ix::OUTLINE);
-    c.block(43, 46, 10, 8, ix::RED, ix::OUTLINE);
-    ursa_head(&mut c, 31, 18, !stalled);
-    if stalled {
-        // Vented smoke curling off the armour.
-        for (x, y, r) in [(40, 6, 2), (44, 3, 2), (36, 2, 1)] {
-            c.ellipse(x, y, r, r, ix::STEEL);
-        }
+    // Snout: a vented steel muzzle pointing ahead.
+    steel_pod(&mut c, 17, 17, 14, 8);
+    for vx in [20, 23, 26] {
+        c.rect(vx, 19, 1, 4, ix::OUTLINE);
+        c.px(vx + 1, 19, ix::STEEL_LIGHT);
+    }
+    let (lamp, glint) = if lit { (ix::LASER, ix::LASER_LIGHT) } else { (ix::STEEL_DARK, ix::STEEL) };
+    c.rect(29, 20, 2, 2, lamp);
+    c.px(29, 20, glint);
+    // Steel strap from the neck over the far shoulder.
+    let strap = [ix::OUTLINE, ix::STEEL_LIGHT, ix::STEEL_LIGHT, ix::STEEL, ix::STEEL, ix::STEEL_DARK, ix::OUTLINE];
+    for (i, colour) in (0..).zip(strap) {
+        c.line(31, 21 + i, 44, 15 + i, colour);
+    }
+    c.line(44, 15, 47, 18, ix::OUTLINE);
+    c.line(44, 21, 47, 18, ix::OUTLINE);
+    c.line(44, 16, 46, 18, ix::STEEL);
+    c.line(44, 20, 46, 18, ix::STEEL_DARK);
+    c.rect(44, 17, 2, 3, ix::STEEL);
+    c.vram()
+}
+
+/// The far gauntlet, steel joints, barrel chest with the empty core socket, the striped
+/// far shoulder pad, the near shoulder and the near gauntlet, hanging or aimed.
+fn bera_torso(aim: bool) -> SpriteVram {
+    let (x, y) = BERA_TORSO_AT;
+    let mut c = Canvas::at(Size::S64x32, x, y);
+    gauntlet(&mut c, 47, 34, 13, 16, 55);
+    fist(&mut c, 48, 49, 11);
+    dark_pod(&mut c, 13, 30, 9, 10);
+    dark_pod(&mut c, 42, 30, 9, 10);
+    // Belly, then the chest over it.
+    red(&mut c, 32, 39, 12, 6);
+    red(&mut c, 32, 33, 16, 10);
+    c.ellipse(32, 40, 11, 4, ix::RED);
+    c.ellipse(33, 41, 11, 4, ix::RED_DARK);
+    c.ellipse(32, 40, 10, 3, ix::RED);
+    c.line(32, 24, 32, 28, ix::RED_DARK);
+    c.rect(23, 25, 7, 1, ix::ORANGE);
+    c.rect(20, 26, 4, 1, ix::ORANGE);
+    c.rect(19, 27, 1, 3, ix::ORANGE);
+    red(&mut c, 49, 28, 7, 6);
+    hazard_stripes(&mut c, 45, 28, 7, Some(ix::ORANGE));
+    // Core socket: the core sprite puts the star in it.
+    c.ellipse(28, 37, 6, 6, ix::OUTLINE);
+    c.ellipse(28, 37, 5, 5, ix::STEEL_DARK);
+    c.ellipse(27, 36, 4, 4, ix::STEEL);
+    c.ellipse(28, 37, 3, 3, ix::STEEL_DARK);
+    // Near shoulder.
+    red(&mut c, 16, 29, 7, 6);
+    c.rect(13, 25, 5, 1, ix::ORANGE);
+    c.rect(11, 26, 2, 2, ix::ORANGE);
+    if aim {
+        // Gauntlet raised level, its light the muzzle.
+        steel_pod(&mut c, -1, 30, 16, 10);
+        c.rect(0, 32, 2, 6, ix::LASER);
+        c.px(0, 33, ix::LASER_LIGHT);
+        c.px(0, 36, ix::LASER_LIGHT);
+        c.rect(1, 35, 13, 1, ix::STEEL_DARK);
+        c.ellipse(14, 40, 3, 2, ix::OUTLINE);
+        c.ellipse(14, 40, 2, 1, ix::STEEL_DARK);
+    } else {
+        gauntlet(&mut c, 3, 34, 14, 16, 4);
+        fist(&mut c, 4, 49, 12);
     }
     c.vram()
 }
 
-fn ursa_charging() -> SpriteVram {
+/// Steel hips, round red thighs and boots with gold toe caps.
+fn bera_legs() -> SpriteVram {
+    let (x, y) = BERA_LEGS_AT;
+    let mut c = Canvas::at(Size::S64x32, x, y);
+    c.block(22, 42, 20, 6, ix::STEEL_DARK, ix::OUTLINE);
+    c.rect(23, 43, 18, 1, ix::STEEL);
+    for x in [13, 38] {
+        red(&mut c, x + 7, 50, 6, 5);
+        c.rect(x + 3, 47, 4, 1, ix::ORANGE);
+        c.px(x + 2, 48, ix::ORANGE);
+        red_pod(&mut c, x, 54, 14, 10);
+        c.block(x + 1, 56, 12, 5, ix::GOLD, ix::OUTLINE);
+        c.rect(x + 2, 59, 10, 1, ix::ORANGE);
+        c.px(x + 2, 57, ix::WHITE);
+        c.rect(x + 5, 58, 4, 1, ix::OUTLINE);
+        c.rect(x + 2, 55, 9, 1, ix::ORANGE);
+        c.rect(x, 63, 14, 1, ix::OUTLINE);
+    }
+    c.vram()
+}
+
+/// The four-pointed star in the chest core; `hot` when flaring.
+fn bera_core(hot: bool) -> SpriteVram {
+    let (x, y) = BERA_CORE_AT;
+    let mut c = Canvas::at(Size::S8x8, x, y);
+    let (inner, outer) = if hot { (ix::WHITE, ix::GOLD) } else { (ix::GOLD, ix::ORANGE) };
+    let (cx, cy) = (28, 37);
+    for d in -3..=3 {
+        c.px(cx + d, cy, outer);
+        c.px(cx, cy + d, outer);
+    }
+    for d in -2..=2 {
+        c.px(cx + d, cy, inner);
+        c.px(cx, cy + d, inner);
+    }
+    c.rect(cx - 1, cy - 1, 3, 3, inner);
+    c.px(cx, cy, ix::WHITE);
+    c.vram()
+}
+
+/// Hunched low behind the head, the near gauntlet planted like a forepaw, thrusters
+/// streaking out behind.
+fn bera_charging() -> SpriteVram {
     let mut c = Canvas::new(Size::S64x32);
-    // Thruster flames streaming out behind.
-    for (y, len) in [(12, 10), (16, 13), (20, 9)] {
-        c.rect(64 - len, y, len, 3, ix::ORANGE);
-        c.rect(64 - len + 3, y + 1, len - 4, 1, ix::GOLD);
+    for (y, len) in [(6, 9), (11, 12), (16, 8)] {
+        c.rect(64 - len, y, len, 2, ix::ORANGE);
+        c.rect(64 - len + 3, y, len - 4, 1, ix::GOLD);
     }
-    c.block(46, 10, 8, 14, ix::STEEL, ix::OUTLINE);
-    // Treads.
-    c.block(14, 24, 36, 8, ix::STEEL_DARK, ix::OUTLINE);
-    for x in (16..48).step_by(5) {
-        c.rect(x, 26, 2, 4, ix::STEEL);
+    // Rear thigh and boot.
+    red_pod(&mut c, 40, 21, 12, 8);
+    red_pod(&mut c, 42, 24, 14, 8);
+    c.block(43, 25, 12, 4, ix::GOLD, ix::OUTLINE);
+    c.rect(46, 26, 6, 2, ix::OUTLINE);
+    // Hunched back and the far shoulder pad.
+    red(&mut c, 36, 14, 17, 10);
+    red(&mut c, 44, 7, 7, 5);
+    hazard_stripes(&mut c, 40, 7, 6, None);
+    // Near gauntlet.
+    steel_pod(&mut c, 8, 19, 16, 13);
+    c.rect(9, 22, 3, 7, ix::LASER);
+    c.px(10, 23, ix::LASER_LIGHT);
+    c.px(10, 27, ix::LASER_LIGHT);
+    c.rect(8, 31, 16, 1, ix::OUTLINE);
+    c.rect(9, 30, 14, 1, ix::STEEL_DARK);
+    for k in [13, 16, 19] {
+        c.px(k, 30, ix::GOLD);
     }
-    // Hunched body and lowered head.
-    c.blob(32, 16, 18, 9, ix::RED);
-    c.ellipse(34, 11, 13, 3, ix::ORANGE);
-    c.ellipse(34, 13, 14, 3, ix::RED);
-    c.rect(16, 21, 32, 2, ix::RED_DARK);
-    ursa_head(&mut c, 17, 15, true);
     c.vram()
 }

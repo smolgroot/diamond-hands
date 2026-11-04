@@ -1,4 +1,4 @@
-//! URSA-9000, the Badlands boss: a bear-shaped war mech with an arm cannon.
+//! BERA 3000, the Badlands boss: a bear-shaped war mech with an arm cannon.
 //!
 //! The fight loops Walk → Aim (two volleys of three shots, alternating low and high) →
 //! Telegraph → Charge low on its treads into the arena wall → Stalled (double damage).

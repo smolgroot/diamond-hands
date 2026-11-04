@@ -49,7 +49,7 @@ const FALL_FRAMES: u32 = 16;
 /// Frames of landing squash when it touches down.
 pub const LAND_SQUASH: u8 = 8;
 
-/// The guide's sprite is 16x32, feet on its bottom row.
+/// The guide is 16 wide, feet on the ground; its 32x32 sprite is drawn centred on it.
 pub const GUIDE_W: i32 = 16;
 /// Where the guide stands to talk, left edge.
 const GUIDE_STAND_X: i32 = 92;

@@ -31,6 +31,23 @@ pub const KICK_FRAMES: u8 = 4;
 /// Frames between falling into a pit and respawning.
 pub const PIT_FRAMES: u16 = 30;
 pub const SPIKE_DAMAGE: i32 = 2;
+/// Electric fences run on a cycle: dead, a warning blink, then live for a few seconds.
+const FENCE_CYCLE: u32 = 360;
+const FENCE_WARN: u32 = 60;
+const FENCE_LIVE: u32 = 150;
+
+/// The fences' state at a frame: 0 dead, 1 warning blink, 2 live.
+pub fn fence_state(frames: u32) -> u8 {
+    let t = frames % FENCE_CYCLE;
+    let dead = FENCE_CYCLE - FENCE_WARN - FENCE_LIVE;
+    if t < dead {
+        0
+    } else if t < dead + FENCE_WARN {
+        (t / 6 % 2) as u8
+    } else {
+        2
+    }
+}
 pub const PIT_DAMAGE: i32 = 2;
 pub const HEAL_AMOUNT: i32 = 2;
 /// The camera keeps the wassie's centre inside this band of the screen.
@@ -663,8 +680,8 @@ impl World {
 
     fn hazards(&mut self, events: &mut Events) {
         let r = self.player.body.rect();
-        let spiked = crate::physics::tiles_in(&r.inset(2))
-            .any(|(tx, ty)| self.level.tile(tx, ty) == Tile::Spike);
+        let spiked = fence_state(self.frames) == 2
+            && crate::physics::tiles_in(&r.inset(2)).any(|(tx, ty)| self.level.tile(tx, ty) == Tile::Spike);
         if spiked {
             let from_x = r.centre_x() - self.player.facing * 8;
             self.hurt_player(SPIKE_DAMAGE, from_x, events);
@@ -961,10 +978,21 @@ mod tests {
         ] {
             let mut w = World::with_level(&RANGE, 0, difficulty);
             w.player.body.x_fx = 51 * TILE * FX;
+            w.frames = FENCE_CYCLE - FENCE_LIVE;
             let events = w.step(&Input::default());
             assert!(events.contains(Events::HIT), "{difficulty:?}");
             assert_eq!(w.player.hp, expected, "{difficulty:?}");
         }
+    }
+
+    #[test]
+    fn dead_fences_are_harmless() {
+        let mut w = World::with_level(&RANGE, 0, Difficulty::Normal);
+        w.player.body.x_fx = 51 * TILE * FX;
+        w.frames = 0;
+        let events = w.step(&Input::default());
+        assert!(!events.contains(Events::HIT));
+        assert_eq!(w.player.hp, MAX_HP);
     }
 
     #[test]

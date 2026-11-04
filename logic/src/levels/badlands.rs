@@ -1,5 +1,5 @@
 //! Level 1: the Badlands. Mossy cliffs below a ruined city, from dusk to a burning
-//! night, ending in URSA-9000's arena. See `level.rs` for the map legend.
+//! night, ending in BERA 3000's arena. See `level.rs` for the map legend.
 
 use crate::{
     arrival::Arrival,
@@ -56,14 +56,14 @@ pub static ARRIVAL: Arrival = Arrival {
     gift_after: 8,
 };
 
-/// URSA-9000 and the wassie, before the fight.
+/// BERA 3000 and the wassie, before the fight.
 static TALK: [Line; 9] = [
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["SO. THE LITTLE WASSIE", "CROSSED MY BADLANDS."],
     },
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["MY BOTS TELL ME YOU", "ARE CARRYING DIAMONDS."],
     },
     Line {
@@ -71,11 +71,11 @@ static TALK: [Line; 9] = [
         rows: &["..."],
     },
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["EVERYONE SELLS TO THE", "BEARS IN THE END."],
     },
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["HAND THEM OVER AND I", "MAKE IT QUICK."],
     },
     Line {
@@ -83,11 +83,11 @@ static TALK: [Line; 9] = [
         rows: &["THESE HANDS", "DON'T SELL."],
     },
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["THEN I WILL PRY THEM", "FROM YOUR LITTLE", "HANDS."],
     },
     Line {
-        speaker: Speaker::Ursa,
+        speaker: Speaker::Bera,
         rows: &["LIQUIDATION PROTOCOL:", "ENGAGED!"],
     },
     Line {

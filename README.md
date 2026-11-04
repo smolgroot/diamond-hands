@@ -9,7 +9,7 @@ oversized laser cannon, blasts its way left to right through their cyber bots. E
 with a boss.
 
 1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
-   night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **URSA-9000**, a
+   night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a
    bear-shaped war mech.
 2. **Solana Trenches** (planned): a neon casino strip full of hustlers.
 3. **Ethereum City** (planned): a futuristic city of gas drones and MEV bots.
@@ -39,7 +39,7 @@ with a boss.
   stomping a bot refuels it, and a quick tap in the air never hovers (it stays a buffered
   jump).
 - **Arrival:** starting the Badlands fresh plays its arrival on CryptoTerra. A cargo ship drops the
-  wassie off, rekt and owning nothing but its scarf. CL207, a grey cat in a yellow hazmat suit,
+  wassie off, rekt and owning nothing but its scarf. CL207, a white cat in a yellow cat-eared hazmat suit,
   explains the rules, then hands over the blaster and the jetpack. A reads the lines and Start
   skips the scene. Continuing a saved run never replays it.
 - **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie

@@ -41,7 +41,7 @@ impl Place {
 pub static MAP: [Place; 3] = [
     Place {
         name: "THE BADLANDS",
-        blurb: "MOSSY CLIFFS. URSA-9000 WAITS.",
+        blurb: "MOSSY CLIFFS. BERA 3000 WAITS.",
         x: 44,
         y: 104,
         level: Some(0),
