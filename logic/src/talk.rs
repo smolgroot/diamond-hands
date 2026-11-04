@@ -85,10 +85,6 @@ mod tests {
                 assert!(!line.is_empty() && line.rows.len() <= MAX_ROWS, "{line:?}");
                 let glyphs = line.rows.iter().flat_map(|r| r.bytes()).filter(|&c| c != b' ').count();
                 assert!(glyphs <= MAX_GLYPHS, "{glyphs} glyphs: {line:?}");
-                // The ROM's continue arrow sits at the end of the last row.
-                if let Some(last) = line.rows.get(MAX_ROWS - 1) {
-                    assert!(last.len() <= ROW_CHARS - 2, "no room for the arrow: {last}");
-                }
                 for row in line.rows {
                     assert!(row.len() <= ROW_CHARS, "too wide: {row}");
                     assert!(row.bytes().all(|c| FONT.contains(&c)), "unprintable: {row}");

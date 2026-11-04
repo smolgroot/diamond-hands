@@ -14,7 +14,7 @@ use agb::display::{
 use diamond_hands_logic::{levels::MAP, talk};
 
 use super::{Canvas, TileCache, ix, rgb};
-use crate::font::{self, Font};
+use crate::font;
 
 /// Background palette slot for these layers.
 pub const UI_PALETTE: u8 = 2;
@@ -100,14 +100,15 @@ pub const fn portrait_pos(right: bool) -> (i32, i32) {
     (layout(right).frame_x + PORTRAIT_INSET, FRAME_TOP + PORTRAIT_INSET)
 }
 
-/// The first row of text, and the step between rows: the big font is 10 pixels tall,
-/// 11 with its shadow.
-const ROWS_Y: i32 = 16;
-const ROW_STEP: i32 = 11;
+/// The first row of text, and the step between rows: the dialogue font is 7 pixels
+/// tall, 8 with its shadow. Three rows sit centred in the panel's glass.
+const ROWS_Y: i32 = 17;
+const ROW_STEP: i32 = 10;
 /// The name's top, inside the nameplate.
 const NAME_Y: i32 = 4;
-/// Big-font glyph advance.
-const ADVANCE: i32 = 8;
+/// Dialogue font glyph size and advance.
+const GLYPH_W: i32 = 5;
+const ADVANCE: i32 = 6;
 
 /// A glowing neon tube, 3 pixels thick, from `(x, y)` running `len` pixels across or
 /// down; `(along, across)` is the pixel's position on it. Rounded ends.
@@ -313,24 +314,20 @@ impl DialogText {
         }
     }
 
-    /// Stamps `text` in the big font (3x5 doubled) at `(x, y)` in cell pixels, with a
-    /// drop shadow if given.
+    /// Stamps `text` in the 5x7 dialogue font at `(x, y)` in cell pixels, with a drop
+    /// shadow if given.
     fn stamp(&mut self, text: &str, x: i32, y: i32, colour: u8, shadow: Option<u8>) {
         let layers = [shadow.map(|s| (1, s)), Some((0, colour))];
         for (offset, colour) in layers.into_iter().flatten() {
             for (i, byte) in text.bytes().enumerate() {
-                let Some(rows) = font::glyph(byte) else {
+                let Some(rows) = font::dialog_glyph(byte) else {
                     continue;
                 };
                 let gx = x + i as i32 * ADVANCE + offset;
                 for (dy, bits) in rows.iter().enumerate() {
-                    for dx in 0..3 {
-                        if bits & (0b100 >> dx) == 0 {
-                            continue;
-                        }
-                        let (px, py) = (gx + dx * 2, y + offset + dy as i32 * 2);
-                        for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                            self.put(px + sx, py + sy, colour);
+                    for dx in 0..GLYPH_W {
+                        if bits & (0b10000 >> dx) != 0 {
+                            self.put(gx + dx, y + offset + dy as i32, colour);
                         }
                     }
                 }
@@ -341,13 +338,13 @@ impl DialogText {
     /// The speaker's name on a hazard-yellow plate across the panel's top rim, its
     /// right end slanted, trailed by three chevrons.
     fn nameplate(&mut self, name: &str, text_x: i32) {
-        let (x0, x1) = (text_x - 4, text_x + Font::width(name, true) + 2);
-        for y in 2..16 {
-            let right = x1 + (15 - y) / 2;
+        let (x0, x1) = (text_x - 4, text_x + name.len() as i32 * ADVANCE + 2);
+        for y in 2..14 {
+            let right = x1 + (13 - y) / 2;
             for x in x0..=right {
                 let colour = match () {
-                    _ if y == 2 || y == 15 || x == x0 || x == right => pal::INK,
-                    _ if y == 14 => pal::PLATE_DARK,
+                    _ if y == 2 || y == 13 || x == x0 || x == right => pal::INK,
+                    _ if y == 12 => pal::PLATE_DARK,
                     _ => pal::PLATE,
                 };
                 self.put(x, y, colour);
@@ -399,7 +396,7 @@ impl DialogText {
                 }
             }
             if old.arrow != page.arrow {
-                let (x, y) = arrow_pos(text_x);
+                let (x, y) = ARROW;
                 for py in y..y + 6 {
                     let r = py as usize * TEXT_W + x as usize..py as usize * TEXT_W + x as usize + 8;
                     self.next[r.clone()].copy_from_slice(&self.base[right as usize][r]);
@@ -416,7 +413,7 @@ impl DialogText {
                 self.stamp(row, text_x, row_y(i), pal::TEXT, Some(pal::INK));
             }
             if let Some(bob) = page.arrow {
-                let (x, y) = arrow_pos(text_x);
+                let (x, y) = ARROW;
                 self.arrow(x, y + bob);
             }
             dirty = Dirty::ALL;
@@ -452,11 +449,9 @@ const fn row_y(i: usize) -> i32 {
     ROWS_Y + i as i32 * ROW_STEP
 }
 
-/// Where the continue arrow sits, before its bob: the end of the last row.
-const fn arrow_pos(text_x: i32) -> (i32, i32) {
-    let x = text_x + (talk::ROW_CHARS as i32 - 1) * ADVANCE;
-    (x, row_y(talk::MAX_ROWS - 1) + 3)
-}
+/// Where the continue arrow sits, before its bob: the panel's far end, level with
+/// the last row. The same cell pixel on either side.
+const ARROW: (i32, i32) = (TEXT_W as i32 - 16, row_y(talk::MAX_ROWS - 1));
 
 /// A rectangle of cell pixels to flush, `x1` and `y1` exclusive.
 #[derive(Clone, Copy)]
