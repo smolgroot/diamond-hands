@@ -36,7 +36,11 @@ pub const BLASTER_SHIFT: i32 = 8;
 /// and down are the same drawing turned. The muzzles in `logic/src/player.rs` must
 /// match.
 const BLASTER_AT: (i32, i32) = (17 - BLASTER_SHIFT, 17);
-const BLASTER_UP_AT: (i32, i32) = (24 - BLASTER_SHIFT, 0);
+/// Straight up, the cannon is raised over the head on the wassie's centre line, so the
+/// shot leaves right above it: its core columns land on [`CENTRE_COL`].
+const BLASTER_UP_AT: (i32, i32) = (CENTRE_COL - 3 - BLASTER_SHIFT, 0);
+/// How far the raised cannon's sprite sits above the body's, clear of the crown.
+const BLASTER_UP_RAISE: i32 = 14;
 const BLASTER_DOWN_AT: (i32, i32) = (21 - BLASTER_SHIFT, 13);
 /// Where the barrel axis crosses the fist, for the diagonal aims.
 const GRIP_UP_FORWARD: (i32, i32) = (20 - BLASTER_SHIFT, 25);
@@ -689,20 +693,22 @@ impl Wassie {
         [(self.idle(frame), 0), (&self.blasters[Aim::Forward as usize], BLASTER_SHIFT)]
     }
 
-    /// The blaster for this frame and how far recoil pushes it back, facing right. Its
-    /// sprite sits [`BLASTER_SHIFT`] forward of the body's.
+    /// The blaster for this frame and how far its sprite is moved, facing right: pushed
+    /// back by recoil, and raised over the head when aiming up. Its sprite sits
+    /// [`BLASTER_SHIFT`] forward of the body's.
     pub fn blaster(&self, player: &Player) -> (&SpriteVram, (i32, i32)) {
         let aim = if matches!(player.state, PlayerState::Hurt | PlayerState::Dead) {
             Aim::Forward
         } else {
             player.aim
         };
-        let kick = if player.recoil > 2 {
+        let (kx, ky) = if player.recoil > 2 {
             let (x, y) = aim.dir();
             (-x * RECOIL_BLASTER, -y * RECOIL_BLASTER)
         } else {
             (0, 0)
         };
-        (&self.blasters[aim as usize], kick)
+        let raise = if aim == Aim::Up { BLASTER_UP_RAISE } else { 0 };
+        (&self.blasters[aim as usize], (kx, ky - raise))
     }
 }

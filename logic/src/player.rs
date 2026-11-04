@@ -106,7 +106,7 @@ impl Aim {
         match self {
             Aim::Forward => (21, 14),
             Aim::UpForward => (17, 8),
-            Aim::Up => (13, -6),
+            Aim::Up => (0, -20),
             Aim::DownForward => (16, 25),
             Aim::Down => (12, 25),
         }
