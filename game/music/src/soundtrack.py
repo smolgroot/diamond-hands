@@ -69,150 +69,159 @@ def coins(p, rows, notes, ch=4, vol=26):
         p.put(r, ch, f"{n} coin v{vol}")
 
 
-# --- Title: A minor, ~128 BPM. The motif stated plainly. --------------------------
+# --- Lofi cyberpunk: title and level. A minor, ~80 BPM, swung. ---------------------
+# Speed 11 with F0C/F0A on alternate rows: 4 rows a beat, ~81 BPM, and a lazy shuffle.
+# Channels: 0 kick/snare, 1 hats (carries the swing), 2 sine bass, 3 lead,
+#           4 and 5 the 3rd and 7th of each chord (a shell voicing, like a Rhodes comp).
 
-def title():
-    song = Song("title", channels=6, speed=7, bpm=150)
-    add_instruments(song, "kick", "snare", "hat", "crash", "sub", "lead", "pluck", "pad",
-                    "coin")
-    verse = [("A-", MINOR), ("F-", MAJOR), ("C-", MAJOR), ("G-", MAJOR)]
-    turn = [("A-", MINOR), ("F-", MAJOR), ("G-", MAJOR), ("E-", MAJOR)]
+# Chords as (bass root, 3rd, 7th), all low and warm: Am7, Fmaj7, Dm7, E7.
+LOFI_CHORDS = [("A-", "C-4", "G-4"), ("F-", "A-3", "E-4"), ("D-", "F-3", "C-4"),
+               ("E-", "G#3", "D-4")]
+LOFI_B = [("D-", "F-3", "C-4"), ("F-", "A-3", "E-4"), ("G-", "B-3", "F-4"),
+          ("E-", "G#3", "D-4")]
+LOFI_NOTES = {"A-": "A", "F-": "F"}
 
-    p0 = song.pattern(64)  # pad and coin sparkle
-    pad(p0, verse)
-    coins(p0, [0, 6, 10, 32, 38, 42, 60], ["E-6", "A-6", "C-7", "E-6", "G-6", "C-7", "E-7"])
-    for bar, (root, _) in enumerate(verse):
-        p0.put(bar * BAR, 2, f"{root}2 sub v36")
 
-    p1 = song.pattern(64)  # the motif, slow and plain
-    pad(p1, turn)
-    for bar, (root, _) in enumerate(turn):
-        p1.put(bar * BAR, 2, f"{root}2 sub v40")
-    melody(p1, 3, motif("A-4", rhythm=2), "lead", 40)
-    melody(p1, 3, [(0, "G#4", 8), (8, "B-4", 8)], "lead", 36, start=48)
-    p1.put(56, 0, "C-5 snare v20")
-    p1.put(60, 0, "C-5 snare v28")
+def lmelody(p, ch, notes, ins, vol, **kw):
+    """The lead, an octave below how it is written here: warm, not piercing."""
+    melody(p, ch, [(r, up(n, -12), ln) for r, n, ln in notes], ins, vol, **kw)
 
-    p2 = song.pattern(64)  # beat and arps join
-    drums(p2, kicks=(0, 10), snares=(8,), hats=4, hat_vol=16, fill=3)
-    p2.put(0, 1, "C-5 crash v30")
-    for bar, (root, _) in enumerate(verse):
-        p2.put(bar * BAR, 2, f"{root}2 sub v44")
-        p2.put(bar * BAR + 10, 2, f"{root}2 sub v32")
-    arp(p2, 4, verse, vol=18)
-    melody(p2, 3, motif("A-4", rhythm=2), "lead", 42)
-    melody(p2, 3, [(0, "D-5", 4), (4, "E-5", 4), (8, "G-5", 8)], "lead", 40, start=32,
-           end=48)
-    melody(p2, 3, [(0, "E-5", 16)], "lead", 38, start=48)
 
-    p3 = song.pattern(64)  # up an octave with an echo
-    drums(p3, kicks=(0, 10), snares=(8,), hats=2, hat_vol=14, fill=3)
-    for bar, (root, _) in enumerate(turn):
-        p3.put(bar * BAR, 2, f"{root}2 sub v44")
-        p3.put(bar * BAR + 10, 2, f"{root}2 sub v32")
-    arp(p3, 4, turn, vol=18, octave=5, figure=(0, 2, 1, 3))
-    melody(p3, 3, motif("A-5", rhythm=2), "lead", 38)
-    melody(p3, 3, [(0, "G#5", 8), (8, "B-5", 6)], "lead", 36, start=48)
-    echo(p3, 3, 5, delay=3, vol=14)
+def swing(p, ch=1):
+    for r in range(p.rows):
+        cell = p.cells[r][ch]
+        cell[3], cell[4] = 0xF, 0x0C if r % 2 == 0 else 0x0A
 
-    song.order = [p0, p1, p2, p3]
+
+def lofi_beat(p, bars=range(4), hats=True, ghost=True, fill_bar=None):
+    for bar in bars:
+        b = bar * BAR
+        p.put(b, 0, "C-5 lkick v56")
+        p.put(b + 7, 0, "C-5 lkick v34")
+        p.put(b + 10, 0, "C-5 lkick v46")
+        p.put(b + 4, 0, "C-5 lsnare v38")
+        p.put(b + 12, 0, "C-5 lsnare v40")
+        if ghost:
+            p.put(b + 15, 0, "C-5 lsnare v14")
+        if hats:
+            for r in range(0, BAR, 2):
+                p.put(b + r, 1, f"C-5 lhat v{14 if r % 4 == 0 else 8}")
+        if bar == fill_bar:
+            for i, r in enumerate((12, 13, 14, 15)):
+                p.put(b + r, 0, f"C-5 lsnare v{22 + 6 * i}")
+
+
+def lofi_bass(p, chords, vol=46):
+    for bar, (root, _, _) in enumerate(chords):
+        b = bar * BAR
+        p.put(b, 2, f"{root}2 lbass v{vol}")
+        p.put(b + 6, 2, f"{root}2 lbass v{vol - 14}")
+        p.put(b + 10, 2, f"{up(root + '2', 7)} lbass v{vol - 8}")
+        p.put(b + 14, 2, f"{root}3 lbass v{vol - 20}")
+
+
+def lofi_keys(p, chords, vol=24, offbeat=True):
+    """The 3rd and 7th on their own voices; played on the 1 and the 'and of 2'."""
+    for bar, (_, third, seventh) in enumerate(chords):
+        b = bar * BAR
+        for r in ((0, 6) if offbeat else (0,)):
+            p.put(b + r, 4, f"{third} keys v{vol}")
+            p.put(b + r, 5, f"{seventh} keys v{vol - 3}")
+
+
+def lofi_haze(p, chords, vol=14):
+    """A slow pad swelling on each chord's seventh."""
+    for bar, (_, _, seventh) in enumerate(chords):
+        p.put(bar * BAR, 5, f"{seventh} haze v{vol}")
+
+
+def lofi_title():
+    song = Song("title", channels=6, speed=11, bpm=150)
+    add_instruments(song, "lkick", "lsnare", "lhat", "lbass", "keys", "soft", "haze")
+
+    p0 = song.pattern(64)  # just the keys, a slow bass and the hats: rain on neon
+    lofi_keys(p0, LOFI_CHORDS, vol=26, offbeat=False)
+    lofi_bass(p0, LOFI_CHORDS, vol=40)
+    for bar in range(4):
+        for r in range(0, BAR, 4):
+            p0.put(bar * BAR + r, 1, f"C-5 lhat v{8 if r else 12}")
+    swing(p0)
+
+    p1 = song.pattern(64)  # the motif, slow and plain, over a soft beat
+    lofi_beat(p1, hats=False, ghost=False)
+    for bar in range(4):
+        p1.put(bar * BAR, 0, "C-5 lkick v50")
+    lofi_bass(p1, LOFI_CHORDS)
+    lofi_keys(p1, LOFI_CHORDS)
+    lmelody(p1, 3, [(0, "A-4", 6), (6, "C-5", 4), (10, "E-5", 6), (16, "D-5", 14),
+                   (32, "A-4", 6), (38, "C-5", 4), (42, "D-5", 6), (48, "C-5", 14)],
+           "soft", 34, vibrato="412")
+    swing(p1)
+
+    p2 = song.pattern(64)  # full groove, the motif answers itself a step lower
+    lofi_beat(p2, fill_bar=3)
+    lofi_bass(p2, LOFI_B)
+    lofi_keys(p2, LOFI_B)
+    lmelody(p2, 3, [(0, "F-4", 6), (6, "A-4", 4), (10, "C-5", 6), (16, "B-4", 14),
+                   (32, "E-4", 6), (38, "G#4", 4), (42, "B-4", 6), (48, "A-4", 14)],
+           "soft", 34, vibrato="412")
+    swing(p2)
+
+    song.order = [p0, p1, p2, p1]
     song.restart = 1
     save(song)
 
 
-# --- Badlands: A minor, ~149 BPM. The shooter groove. ------------------------------
+def lofi_level():
+    song = Song("badlands", channels=6, speed=11, bpm=150)
+    add_instruments(song, "lkick", "lsnare", "lhat", "lbass", "keys", "soft", "haze",
+                    "coin")
 
-A_SECTION = [("A-", MINOR), ("F-", MAJOR), ("G-", MAJOR), ("E-", MAJOR)]
-B_SECTION = [("D-", MINOR), ("F-", MAJOR), ("G-", MAJOR), ("E-", MAJOR)]
-HOOK = motif("A-4") + [(16, "E-5", 6), (22, "G-5", 2), (24, "E-5", 4), (28, "D-5", 2),
-                       (30, "C-5", 2), (32, "A-4", 3), (35, "C-5", 3), (38, "E-5", 2),
-                       (40, "A-5", 8), (48, "G#5", 8), (56, "E-5", 8)]
-ANSWER = [(0, "F-5", 4), (4, "E-5", 2), (6, "D-5", 2), (8, "A-5", 8), (16, "A-5", 2),
-          (18, "G-5", 2), (20, "F-5", 2), (22, "E-5", 2), (24, "C-5", 4), (28, "D-5", 4),
-          (32, "B-4", 4), (36, "D-5", 4), (40, "G-5", 8), (48, "G#5", 4), (52, "B-5", 4),
-          (56, "E-6", 8)]
-
-
-def roots(chords):
-    return [r for r, _ in chords]
-
-
-def badlands():
-    song = Song("badlands", channels=6, speed=6, bpm=150)
-    add_instruments(song, "kick", "snare", "hat", "ohat", "crash", "riser", "bass", "lead",
-                    "pluck", "pad", "coin")
-
-    intro = song.pattern(64)  # engine starting: bass and hats, a pickup into the drop
-    pump_bass(intro, roots(A_SECTION), vol=34)
-    for r in range(0, 64, 2):
-        intro.put(r, 1, f"C-5 hat v{12 + r // 4}")
-    for r in (0, 16, 32):
-        intro.put(r, 0, "C-5 kick v50")
-    for i, r in enumerate(range(48, 64, 2)):
-        intro.put(r, 0, f"C-5 snare v{22 + 4 * i}")
-    coins(intro, [0, 8, 16, 24], ["A-6", "E-6", "C-7", "G-6"], vol=20)
-    melody(intro, 3, [(0, "E-4", 2), (2, "G-4", 2), (4, "A-4", 2)], "lead", 36, start=58)
-
-    groove = song.pattern(64)  # the full kit, arps, no lead
-    groove.put(0, 1, "C-5 crash v34")
-    drums(groove, open_hats=True, fill=3)
-    groove.put(1, 1, "C-5 hat v22")
-    groove.put(4, 3, "===")  # end the intro's pickup note
-    pump_bass(groove, roots(A_SECTION))
-    arp(groove, 4, A_SECTION, vol=20, step=1, figure=(0, 1, 2, 3))
-    pad(groove, A_SECTION, vol=14)
-
-    hook = song.pattern(64)  # the hero motif as a riff
-    drums(hook, open_hats=True, fill=3)
-    pump_bass(hook, roots(A_SECTION))
-    arp(hook, 4, A_SECTION, vol=16, step=2)
-    melody(hook, 3, HOOK, "lead", 40)
-    echo(hook, 3, 5, vol=14)
-
-    answer = song.pattern(64)
-    drums(answer, open_hats=True, kicks=(0, 6, 10, 14), fill=3)
-    pump_bass(answer, roots(B_SECTION))
-    arp(answer, 4, B_SECTION, vol=16, step=2, figure=(0, 2, 3, 1))
-    melody(answer, 3, ANSWER, "lead", 40)
-    melody(answer, 3, [(0, "E-6", 4), (4, "D-6", 4), (8, "B-5", 4)], "lead", 38, start=56)
-    echo(answer, 3, 5, vol=14)
-
-    moon = song.pattern(64)  # breakdown: coins pile up, then the pump to the moon
-    pad(moon, A_SECTION, vol=24)
+    intro = song.pattern(64)  # keys and a heartbeat kick
+    lofi_keys(intro, LOFI_CHORDS, vol=26, offbeat=False)
+    lofi_bass(intro, LOFI_CHORDS, vol=40)
     for bar in range(4):
-        moon.put(bar * BAR, 0, "C-5 kick v56")
-        moon.put(bar * BAR, 2, f"{A_SECTION[bar][0]}2 bass v40")
-    sparkle = ["A-6", "C-7", "E-6", "G-6", "E-7", "D-7", "A-6", "C-7", "G#6", "B-6", "E-7",
-               "G#6"]
-    coins(moon, list(range(0, 48, 4)), sparkle, vol=22)
-    moon.put(0, 3, "===")
-    for i, r in enumerate(range(48, 64)):  # E major, rising sixteenths
-        moon.put(r, 4, f"{up('E-5', [0, 4, 7, 12][i % 4] + 12 * (i // 8))} pluck v{18 + i}")
-    for i, r in enumerate(range(48, 56, 2)):  # snare build: eighths, then sixteenths
-        moon.put(r, 0, f"C-5 snare v{24 + 4 * i}")
-    for r in range(56, 64):
-        moon.put(r, 0, f"C-5 snare v{40 + (r - 56) * 3}")
-    riser(moon, 32, 64)
+        intro.put(bar * BAR, 0, "C-5 lkick v46")
+        for r in range(2, BAR, 4):
+            intro.put(bar * BAR + r, 1, "C-5 lhat v10")
+    swing(intro)
 
-    peak = song.pattern(64)  # the hook an octave up, everyone in
-    peak.put(0, 1, "C-5 crash v40")
-    drums(peak, open_hats=True, kicks=(0, 6, 10, 14), fill=3)
-    peak.put(1, 1, "C-5 hat v24")
-    pump_bass(peak, roots(A_SECTION), vol=46)
-    arp(peak, 4, A_SECTION, vol=18, step=1, figure=(0, 1, 2, 3, 2, 1))
-    melody(peak, 3, [(r, up(n, 12), l) for r, n, l in HOOK], "lead", 36)
-    echo(peak, 3, 5, vol=12)
+    groove = song.pattern(64)  # the beat drops in, no lead
+    lofi_beat(groove, fill_bar=3)
+    lofi_bass(groove, LOFI_CHORDS)
+    lofi_keys(groove, LOFI_CHORDS)
+    swing(groove)
 
-    outro = song.pattern(64)  # answer again, turning back to the groove
-    drums(outro, open_hats=True, fill=3)
-    pump_bass(outro, roots(B_SECTION))
-    arp(outro, 4, B_SECTION, vol=16, step=1, figure=(0, 1, 2, 3))
-    melody(outro, 3, ANSWER[:10], "lead", 38)
-    melody(outro, 3, [(0, "B-4", 4), (4, "D-5", 4), (8, "E-5", 4), (12, "G#5", 4),
-                      (16, "B-5", 8), (24, "E-5", 6)], "lead", 38, start=32)
-    echo(outro, 3, 5, vol=12)
+    hook = song.pattern(64)  # the hero motif, low and cool
+    lofi_beat(hook, fill_bar=3)
+    lofi_bass(hook, LOFI_CHORDS)
+    lofi_keys(hook, LOFI_CHORDS)
+    lmelody(hook, 3, [(0, "A-4", 6), (6, "C-5", 4), (10, "E-5", 6), (16, "D-5", 10),
+                     (28, "C-5", 4), (32, "A-4", 6), (38, "C-5", 4), (42, "D-5", 4),
+                     (46, "C-5", 2), (48, "A-4", 14)], "soft", 36, vibrato="412")
+    swing(hook)
 
-    song.order = [intro, groove, hook, answer, moon, peak, outro]
+    answer = song.pattern(64)  # a different corner of the city: D minor turnaround
+    lofi_beat(answer, fill_bar=3)
+    lofi_bass(answer, LOFI_B)
+    lofi_keys(answer, LOFI_B)
+    lmelody(answer, 3, [(0, "D-5", 8), (8, "F-5", 4), (12, "E-5", 4), (16, "C-5", 10),
+                       (28, "A-4", 4), (32, "B-4", 6), (38, "D-5", 4), (42, "F-5", 6),
+                       (48, "E-5", 14)], "soft", 36, vibrato="412")
+    swing(answer)
+
+    drift = song.pattern(64)  # breakdown: no drums, haze and falling coin chimes
+    lofi_keys(drift, LOFI_CHORDS, vol=24, offbeat=False)
+    lofi_bass(drift, LOFI_CHORDS, vol=36)
+    lofi_haze(drift, LOFI_CHORDS)
+    for r, n in zip((2, 10, 20, 26, 34, 42, 52, 58),
+                    ("E-5", "A-5", "G-5", "E-5", "D-5", "G-5", "E-5", "C-5")):
+        drift.put(r, 3, f"{up(n, -12)} coin v14")
+    for bar in range(4):
+        drift.put(bar * BAR, 0, "C-5 lkick v34")
+    swing(drift)
+
+    song.order = [intro, groove, hook, answer, hook, drift, answer]
     song.restart = 1
     save(song)
 
@@ -395,8 +404,8 @@ def down():
 
 
 if __name__ == "__main__":
-    title()
-    badlands()
+    lofi_title()
+    lofi_level()
     boss()
     clear()
     down()

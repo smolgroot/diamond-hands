@@ -80,6 +80,39 @@ def ohat():
     return synth.hat(length=0.2, seed=5)
 
 
+def _lowpass(sample, a=0.35):
+    """One-pole low-pass: takes the fizz off a noise drum so it sits in a lofi mix."""
+    out, y = [], 0.0
+    for x in sample.frames:
+        y += a * (x - y)
+        out.append(y)
+    peak = max(abs(v) for v in out) or 1
+    sample.frames = [v / peak * 0.9 for v in out]
+    return sample
+
+
+def lofi_kick():
+    return synth.kick(length=0.22, start_hz=95, end_hz=48)
+
+
+def lofi_snare():
+    return _lowpass(synth.snare(length=0.2, seed=4), 0.3)
+
+
+def lofi_hat():
+    return _lowpass(synth.hat(length=0.06, seed=9), 0.25)
+
+
+def keys():
+    """Electric-piano tine: a sine with a soft 2nd and a quiet bell partial."""
+    return _loop(lambda t: math.sin(2 * math.pi * t) + 0.15 * math.sin(4 * math.pi * t), 1, 64)
+
+
+def mellow():
+    """Soft triangle-ish lead: warm and dull, no square-wave edge."""
+    return _loop(lambda t: math.sin(2 * math.pi * t) + 0.08 * math.sin(6 * math.pi * t), 1, 64)
+
+
 INSTRUMENTS = {
     # name: (sample factory, keyword args for Song.instrument)
     "kick": (synth.kick, dict(volume=64)),
@@ -100,6 +133,13 @@ INSTRUMENTS = {
                                  sustain=2)),
     "coin": (coin, dict(volume=48, envelope=[(0, 64), (6, 30), (30, 0)])),
     "metal": (metal, dict(volume=52, envelope=[(0, 64), (8, 28), (36, 0)])),
+    "lkick": (lofi_kick, dict(volume=60)),
+    "lsnare": (lofi_snare, dict(volume=50)),
+    "lhat": (lofi_hat, dict(volume=40)),
+    "lbass": (synth.sine, dict(volume=60, envelope=[(0, 64), (6, 50), (30, 36), (60, 0)])),
+    "keys": (keys, dict(volume=52, envelope=[(0, 64), (6, 44), (30, 26), (80, 0)])),
+    "soft": (mellow, dict(volume=48, envelope=[(0, 40), (5, 64), (16, 52)], sustain=2)),
+    "haze": (synth.sine, dict(volume=40, envelope=[(0, 0), (30, 56), (70, 44)], sustain=2)),
     "siren": (lambda: synth.square(0.5), dict(volume=36, envelope=[(0, 64), (1, 64)],
                                                           sustain=1)),
 }

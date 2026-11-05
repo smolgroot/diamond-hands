@@ -38,30 +38,30 @@ const fn tone(length: u16, duty: u16, step: u16, volume: u16) -> u16 {
 const RESTART: u16 = 1 << 15;
 const USE_LENGTH: u16 = 1 << 14;
 
-/// Bolt: a short, thin zap from about 2 kHz, falling fast.
-const BOLT_RATE: u16 = 1984;
-/// Charged beam: a fatter, lower tone with a long fall, over a burst of noise.
-const BEAM_RATE: u16 = 1840;
+/// Bolt: a short, round zap from about 1 kHz, falling fast.
+const BOLT_RATE: u16 = rate(1000);
+/// Charged beam: a fat, low tone with a long fall, over a burst of noise.
+const BEAM_RATE: u16 = rate(420);
 
 /// The register rate for a pitch in Hz, rounded.
 const fn rate(hz: u32) -> u16 {
     2048 - ((131_072 + hz / 2) / hz) as u16
 }
 
-/// Diamond chime pitches: A minor pentatonic from E6, the music's key. A chime plays a
+/// Diamond chime pitches: A minor pentatonic from E5, the music's key. A chime plays a
 /// rung and then the one two above it; each diamond picked up soon after the last
 /// starts a rung higher.
 const LADDER: [u16; 10] = [
+    rate(659), // E5
+    rate(784), // G5
+    rate(880), // A5
+    rate(1047), // C6
+    rate(1175), // D6
     rate(1319), // E6
     rate(1568), // G6
     rate(1760), // A6
     rate(2093), // C7
     rate(2349), // D7
-    rate(2637), // E7
-    rate(3136), // G7
-    rate(3520), // A7
-    rate(4186), // C8
-    rate(4699), // D8
 ];
 /// Frames after a diamond within which the next one climbs the ladder.
 const CHAIN_FRAMES: u16 = 50;
@@ -109,8 +109,8 @@ impl Sfx {
         };
         self.since_diamond = 0;
         let rung = self.chain as usize;
-        // A thin, quick "ting", then a fuller note two rungs up.
-        Self::chime(LADDER[rung], tone(0, 0, 1, 11));
+        // A soft, quick "ting", then a fuller note two rungs up.
+        Self::chime(LADDER[rung], tone(0, 2, 1, 8));
         self.pending = Some((CHIME_GAP, LADDER[rung + 2]));
     }
 
@@ -130,7 +130,7 @@ impl Sfx {
             if frames > 1 {
                 self.pending = Some((frames - 1, rate));
             } else {
-                Self::chime(rate, tone(0, 1, 3, 13));
+                Self::chime(rate, tone(0, 2, 3, 10));
                 self.pending = None;
             }
         }
@@ -138,14 +138,14 @@ impl Sfx {
         unsafe {
             if events.contains(Events::BEAM) {
                 SOUND1CNT_L.write_volatile(sweep_down(7, 2));
-                SOUND1CNT_H.write_volatile(tone(0, 2, 2, 15));
+                SOUND1CNT_H.write_volatile(tone(0, 2, 2, 12));
                 SOUND1CNT_X.write_volatile(BEAM_RATE | RESTART);
-                // Noise, fading from volume 12; divider 3 and shift 2 make a bright hiss.
-                SOUND4CNT_L.write_volatile(tone(0, 0, 2, 12));
-                SOUND4CNT_H.write_volatile(3 | 2 << 4 | RESTART);
+                // Noise, fading from volume 12; divider 3 and shift 4 make a low rumble, not a hiss.
+                SOUND4CNT_L.write_volatile(tone(0, 0, 2, 9));
+                SOUND4CNT_H.write_volatile(3 | 4 << 4 | RESTART);
             } else if events.contains(Events::SHOOT) {
                 SOUND1CNT_L.write_volatile(sweep_down(6, 1));
-                SOUND1CNT_H.write_volatile(tone(32, 1, 1, 13));
+                SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
             }
         }
