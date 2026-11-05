@@ -326,6 +326,7 @@ mod tests {
         name: "TEST",
         subtitle: "",
         theme: Theme::Badlands,
+        boss_name: "",
         boss_talk: &[],
         rows: &[
             "........................................",

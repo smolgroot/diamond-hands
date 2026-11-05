@@ -53,7 +53,7 @@ impl Cue {
     fn track(self) -> &'static Track {
         match self {
             Cue::Title => &TITLE,
-            // The only level so far; later levels pick theirs from `world.level_index`.
+            // Both levels share the Badlands theme for now; a Trenches song would go by `world.level_index`.
             Cue::Level => &BADLANDS,
             Cue::Boss => &BOSS,
             Cue::Clear => &CLEAR,

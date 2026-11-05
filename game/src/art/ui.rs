@@ -275,20 +275,32 @@ pub struct DialogText {
     last: Option<(bool, Page<'static>)>,
 }
 
-impl DialogText {
-    pub fn new(bg: &mut RegularBackground) -> Self {
-        let mut tiles = Vec::new();
-        for ty in 0..TEXT_ROWS {
-            for tx in 0..TEXT_COLS {
-                let tile = DynamicTile16::new().fill_with(pal::CLEAR);
-                for right in [false, true] {
-                    let base = if right { BOX_SCROLL_RIGHT / 8 } else { 0 };
-                    let effect = TileEffect::new(false, false, DIALOG_SLOT);
-                    bg.set_tile_dynamic16((first_col(right) + tx, base + ty), &tile, effect);
-                }
-                tiles.push(tile);
+/// Points every text cell, in both copies of the box, at `tile(index)`.
+fn set_text_cells<'t>(bg: &mut RegularBackground, tile: impl Fn(usize) -> &'t DynamicTile16) {
+    for ty in 0..TEXT_ROWS {
+        for tx in 0..TEXT_COLS {
+            let tile = tile((ty * TEXT_COLS + tx) as usize);
+            for right in [false, true] {
+                let base = if right { BOX_SCROLL_RIGHT / 8 } else { 0 };
+                let effect = TileEffect::new(false, false, DIALOG_SLOT);
+                bg.set_tile_dynamic16((first_col(right) + tx, base + ty), tile, effect);
             }
         }
+    }
+}
+
+/// A fresh, clear tile for each text cell, placed in the box.
+fn text_tiles(bg: &mut RegularBackground) -> Vec<DynamicTile16> {
+    let tiles: Vec<_> = (0..TEXT_COLS * TEXT_ROWS)
+        .map(|_| DynamicTile16::new().fill_with(pal::CLEAR))
+        .collect();
+    set_text_cells(bg, |i| &tiles[i]);
+    tiles
+}
+
+impl DialogText {
+    pub fn new(bg: &mut RegularBackground) -> Self {
+        let tiles = text_tiles(bg);
         let base = [false, true].map(|right| {
             let x0 = first_col(right) * 8;
             let mut pixels = vec![0; TEXT_W * TEXT_H];
@@ -380,6 +392,9 @@ impl DialogText {
     /// new line or speaker repaints everything. Either way, only the tiles whose pixels
     /// changed are written.
     pub fn paint(&mut self, right: bool, page: &Page<'static>) {
+        if self.tiles.is_empty() {
+            return;
+        }
         let text_x = layout(right).text_x - first_col(right) * 8;
         let follows = self.last.as_ref().is_some_and(|(was_right, old)| {
             *was_right == right
@@ -420,6 +435,27 @@ impl DialogText {
         }
         self.last = Some((right, *page));
         self.flush(dirty);
+    }
+
+    /// Gives the text's tiles back to VRAM while the box is hidden (the pause menu
+    /// needs the room), pointing its cells at `blank`. [`Self::restore`] undoes it.
+    pub fn release(&mut self, bg: &mut RegularBackground, blank: &DynamicTile16) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        set_text_cells(bg, |_| blank);
+        self.tiles.clear();
+        self.last = None;
+    }
+
+    /// Takes tiles again after [`Self::release`]; the next page paints in full.
+    pub fn restore(&mut self, bg: &mut RegularBackground) {
+        if !self.tiles.is_empty() {
+            return;
+        }
+        self.tiles = text_tiles(bg);
+        self.shown.fill(u8::MAX);
+        self.last = None;
     }
 
     /// Writes the tiles under `dirty` whose pixels changed.
@@ -672,6 +708,50 @@ pub fn soon_marker() -> SpriteVram {
             "..kgkkgk..",
             "...kggk...",
             "....kk....",
+        ],
+    );
+    c.vram()
+}
+
+/// Marker for a built place that is still locked: a steel padlock with a magenta
+/// keyhole.
+pub fn lock_marker() -> SpriteVram {
+    let mut c = Canvas::new(Size::S16x16);
+    c.art(
+        3,
+        1,
+        &[
+            "..kkkkkk..",
+            ".kSSSSSgk.",
+            ".kSk..kgk.",
+            ".kSk..kgk.",
+            "kkkkkkkkkk",
+            "kSSSSSSSgk",
+            "kSggkkggGk",
+            "kSggkcggGk",
+            "kSgggkggGk",
+            "kSgggkggGk",
+            "kgGGGGGGGk",
+            "kkkkkkkkkk",
+        ],
+    );
+    c.vram()
+}
+
+/// Badge on a cleared place's marker: a white tick on a teal disc.
+pub fn clear_badge() -> SpriteVram {
+    let mut c = Canvas::new(Size::S8x8);
+    c.art(
+        0,
+        0,
+        &[
+            ".kkkkkk.",
+            "kiiiiiwk",
+            "kiiiiwik",
+            "kwiiwiik",
+            "kiwwiiik",
+            "kiiwiiik",
+            ".kkkkkk.",
         ],
     );
     c.vram()

@@ -2,9 +2,9 @@
 //!
 //! Background layers, front to back: the dialogue box (BG P0, only while talking),
 //! terrain (BG P1, streamed column by column as the camera moves), the ruined city
-//! (BG P2, ⅓ parallax), sky (BG P3, static). The world map is a layer of its own, shown
-//! alone. Every object is P0, above all of them; objects shown first are drawn on top,
-//! so text and HUD go first.
+//! (BG P2, ⅓ parallax), sky (BG P3, static). The world map and the pause menu are
+//! layers of their own, each shown alone. Every object is P0, above all of them;
+//! objects shown first are drawn on top, so text and HUD go first.
 
 use alloc::{vec, vec::Vec};
 
@@ -14,15 +14,17 @@ use agb::{
         object::{Object, SpriteVram},
         tiled::{DynamicTile16, RegularBackground, RegularBackgroundSize, TileEffect, TileFormat},
     },
-    fixnum::{num, vec2},
+    fixnum::{Num, num, vec2},
 };
 use diamond_hands_logic::{
     Difficulty, Game, Level, Progress, Scene, TILE,
     boss::BossState,
+    controls::{self, BINDINGS},
     enemy::{ActorKind, state},
     fx::FxKind,
-    game::{FILES, file_menu, options_menu, title_menu},
-    levels::MAP,
+    game::{CLEAR_LOCK_FRAMES, FILES, MAP_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
+    level::Theme,
+    levels::{MAP, PlaceStatus},
     player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
     arrival::{GUIDE_W, Gear},
@@ -35,6 +37,7 @@ use crate::{
         Common, SPRITE_PALETTE, TileCache,
         arrival::{self, ArrivalArt},
         badlands::{self, SKY_PALETTES, Villains},
+        menu::{self, MenuScreen},
         ui,
         wassie::{self, Wassie},
     },
@@ -54,6 +57,11 @@ const COLUMNS_PER_FRAME: usize = 8;
 const SPEED_LINES_FX: i32 = 4 * diamond_hands_logic::FX;
 const KEY_UNSET: u16 = u16::MAX;
 const KEY_BLANK: u16 = u16::MAX - 1;
+/// Integer sine for 16 directions, scaled by 64.
+const SIN16: [i32; 16] = [0, 24, 45, 59, 64, 59, 45, 24, 0, -24, -45, -59, -64, -59, -45, -24];
+/// Diamonds thrown out in the level-clear burst, and those raining after it.
+const BURST: i32 = 8;
+const RAIN: i32 = 6;
 /// How far BERA 3000's head lifts through one breath, a step every few frames.
 const BERA_BREATH: [i32; 8] = [0, 1, 2, 2, 2, 1, 0, 0];
 
@@ -71,8 +79,13 @@ pub struct Renderer {
     /// The line, characters shown and prompt arrow last painted into `dialog_text`.
     dialog_painted: Option<(u8, u16, Option<i32>)>,
     map: RegularBackground,
-    /// Map marker for places still being built.
+    /// Map markers for places still being built and places still locked, and the badge
+    /// on cleared ones.
     soon: SpriteVram,
+    locked: SpriteVram,
+    clear_badge: SpriteVram,
+    /// The pause menu's layer, only while the game is paused.
+    menu: Option<MenuScreen>,
     terrain_tiles: TileCache,
     /// Tile for each [`badlands::terrain_key`], built on first use: [`KEY_UNSET`] until
     /// then, [`KEY_BLANK`] for transparent cells. On the heap, as it is a few KB.
@@ -81,6 +94,8 @@ pub struct Renderer {
     /// Level column held by each terrain map slot.
     columns: [i32; TERRAIN_COLS as usize],
     level: Option<&'static Level>,
+    /// The theme and stage whose palettes are loaded.
+    theme: Theme,
     stage: u8,
     /// Fence wire state last shown, see [`diamond_hands_logic::world::fence_state`].
     fence: u8,
@@ -98,7 +113,7 @@ impl Renderer {
     pub fn new(gfx: &mut agb::display::Graphics) -> Self {
         gfx.set_background_palettes(&[
             SKY_PALETTES[0].clone(),
-            badlands::ground_palette(0, 0),
+            badlands::ground_palette(Theme::Badlands, 0, 0),
             SPRITE_PALETTE.clone(),
             ui::DIALOG_PALETTE.clone(),
         ]);
@@ -127,11 +142,15 @@ impl Renderer {
             dialog_painted: None,
             map,
             soon: ui::soon_marker(),
+            locked: ui::lock_marker(),
+            clear_badge: ui::clear_badge(),
+            menu: None,
             terrain_tiles: TileCache::new(),
             terrain_by_key: vec![KEY_UNSET; badlands::TERRAIN_KEYS],
             blank: DynamicTile16::new().fill_with(0),
             columns: [i32::MIN; TERRAIN_COLS as usize],
             level: None,
+            theme: Theme::Badlands,
             stage: 0,
             fence: 0,
             view_x: 0,
@@ -144,6 +163,15 @@ impl Renderer {
     }
 
     pub fn draw(&mut self, game: &Game, frame: &mut GraphicsFrame) {
+        if game.scene == Scene::Paused {
+            self.draw_menu(game, frame);
+            return;
+        }
+        // Off the menu, its tiles go back to the dialogue text.
+        if let Some(mut menu) = self.menu.take() {
+            menu.clear(&mut self.dialog_box, &self.blank);
+            self.dialog_text.restore(&mut self.dialog_box);
+        }
         if game.scene == Scene::Map {
             self.draw_map(game, frame);
             return;
@@ -169,13 +197,15 @@ impl Renderer {
             ((cam + WIDTH / 2) * 3 / world.level.px_width()).clamp(0, 2) as u8
         };
         let fence = diamond_hands_logic::world::fence_state(world.frames);
-        if stage != self.stage {
-            frame.set_background_palette(0, &SKY_PALETTES[stage as usize]);
+        let theme = world.level.theme;
+        if stage != self.stage || theme != self.theme {
+            frame.set_background_palette(0, &badlands::sky_palettes(theme)[stage as usize]);
             self.stage = stage;
+            self.theme = theme;
             self.fence = u8::MAX;
         }
         if fence != self.fence {
-            frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence));
+            frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(theme, stage, fence));
             self.fence = fence;
         }
 
@@ -197,9 +227,14 @@ impl Renderer {
         let terrain_id = terrain_ready.then(|| self.terrain.show(frame));
         let city_id = self.city.show(frame);
         let sky_id = self.sky.show(frame);
-        // Dim the scene behind text screens so the words read clearly.
-        if game.talking() || matches!(game.scene, Scene::Paused | Scene::Intro | Scene::LevelClear) {
-            let mut dim = frame.blend().darken(num!(0.5));
+        // Dim the scene behind text screens so the words read clearly. The level-clear
+        // screen fades down to it.
+        if game.talking() || matches!(game.scene, Scene::Intro | Scene::LevelClear) {
+            let amount = match game.scene {
+                Scene::LevelClear => Num::from_raw(game.scene_frames().min(8) as u8),
+                _ => num!(0.5),
+            };
+            let mut dim = frame.blend().darken(amount);
             dim.enable_background(city_id).enable_background(sky_id).enable_backdrop();
             if let Some(id) = terrain_id {
                 dim.enable_background(id);
@@ -207,7 +242,7 @@ impl Renderer {
         }
 
         self.draw_overlay(game, frame);
-        if matches!(game.scene, Scene::Play | Scene::Paused | Scene::Intro) {
+        if matches!(game.scene, Scene::Play | Scene::Intro) {
             self.draw_hud(game, frame);
         }
         self.draw_fx(game, frame);
@@ -304,26 +339,75 @@ impl Renderer {
                 self.font.draw_centred(frame, level.name, 56, true);
                 self.font.draw_centred(frame, level.subtitle, 72, false);
             }
-            Scene::Play | Scene::Map | Scene::Splash => {}
+            Scene::Play | Scene::Map | Scene::Splash | Scene::Paused => {}
             Scene::Arrival if game.talking() => self.draw_dialog(game, frame),
             Scene::Arrival => {}
             Scene::Dialog => self.draw_dialog(game, frame),
-            Scene::Paused => {
-                self.font.draw_centred(frame, "PAUSED", 36, true);
-                self.draw_controls(frame, 84, 60);
+            Scene::LevelClear => self.draw_clear(game, frame, blink_on),
+        }
+    }
+
+    /// The level-clear sequence: the screen fades down, a ring of diamonds bursts off
+    /// the wassie, the banner drops in and the tally counts up row by row, then
+    /// diamonds rain until the world map opens.
+    fn draw_clear(&self, game: &Game, frame: &mut GraphicsFrame, blink_on: bool) {
+        let world = &game.world;
+        let t = game.scene_frames() as i32;
+        const BOUNCE: [i32; 6] = [0, -3, -4, -3, -1, 0];
+        let banner_y = match t {
+            0..16 => 26 - (16 - t) * 3,
+            16..22 => 26 + BOUNCE[(t - 16) as usize],
+            _ => 26,
+        };
+        self.font.draw_centred(frame, "LEVEL CLEAR!", banner_y, true);
+        // One row of the tally every few frames once the banner lands.
+        let rows = ((t - 18) / 6).max(0);
+        if rows > 0 {
+            self.label_number(frame, "DIAMONDS ", world.diamonds, 48);
+        }
+        if rows > 1 {
+            self.label_number(frame, "BOUNTIES ", world.kills, 58);
+        }
+        if rows > 2 {
+            self.label_time(frame, world.frames / 60, 68);
+        }
+        if rows > 3 {
+            self.label_number(frame, "SCORE ", game.score(), 80);
+            self.label_number(frame, "BEST ", game.best, 90);
+        }
+        if rows > 4 {
+            if game.new_best && blink_on {
+                self.font.draw_centred(frame, "NEW BEST!", 100, false);
             }
-            Scene::LevelClear => {
-                let world = &game.world;
-                self.font.draw_centred(frame, "LEVEL CLEAR!", 26, true);
-                self.label_number(frame, "DIAMONDS ", world.diamonds, 50);
-                self.label_number(frame, "BOUNTIES ", world.kills, 60);
-                self.label_time(frame, world.frames / 60, 70);
-                self.label_number(frame, "SCORE ", game.score(), 84);
-                self.label_number(frame, "BEST ", game.best, 94);
-                if game.new_best && blink_on {
-                    self.font.draw_centred(frame, "NEW BEST!", 106, false);
-                }
-                self.font.draw_centred(frame, "PRESS A", 120, false);
+            if let Some(place) = game.fresh.map(|i| &MAP[i as usize]) {
+                self.font.draw_centred(frame, "NEW PLACE UNLOCKED", 110, false);
+                self.font.draw_centred(frame, place.name, 118, false);
+            } else if game.replay {
+                self.font.draw_centred(frame, "REPLAY: NO SCORE BANKED", 112, false);
+            }
+        }
+        if t >= CLEAR_LOCK_FRAMES as i32 {
+            self.font.draw_centred(frame, "A: WORLD MAP", 132, false);
+        }
+
+        // The burst: a spinning ring off the wassie, flying out and away.
+        let r = world.player.body.rect();
+        let (cx, cy) = (r.centre_x() - self.view_x, r.centre_y());
+        if t < 48 {
+            let radius = t * 5 / 2;
+            for i in 0..BURST {
+                let a = (i * 2 + t / 4) as usize;
+                let (dx, dy) = (SIN16[(a + 4) % 16], SIN16[a % 16]);
+                let glint = ((t / 3 + i) % 4 == 0) as usize;
+                show(frame, &self.common.diamond[glint], cx - 8 + dx * radius / 64, cy - 8 + dy * radius / 64);
+            }
+        } else {
+            // Then a gentle rain of diamonds, each at its own pace.
+            for i in 0..RAIN {
+                let x = 14 + i * 38 + (i * 13) % 17;
+                let y = ((t - 48) * (2 + i % 3) / 2 + i * 47) % 200 - 24;
+                let glint = ((t / 4 + i) % 6 == 0) as usize;
+                show(frame, &self.common.diamond[glint], x, y);
             }
         }
     }
@@ -332,7 +416,7 @@ impl Renderer {
         self.font.draw_centred(frame, "DIAMOND HANDS", 12, true);
         self.font.draw_centred(frame, "A WASSIE ADVENTURE", 26, false);
 
-        let play = if game.resumable().is_some() { "CONTINUE" } else { "PLAY" };
+        let play = if game.can_continue() { "CONTINUE" } else { "PLAY" };
         let items = [
             (title_menu::PLAY, play),
             (title_menu::MAP, "MAP"),
@@ -355,20 +439,14 @@ impl Renderer {
         self.draw_controls(frame, 84, 96);
     }
 
-    /// The controls list, keys at `x` and actions beside them, from row `y`.
+    /// The controls list, keys at `x` and what they do in play beside them, from row
+    /// `y`. The rows come from the game's own bindings.
     fn draw_controls(&self, frame: &mut GraphicsFrame, x: i32, y: i32) {
         let (keys_x, action_x) = (x, x + 36);
-        let controls = [
-            ("D-PAD", "MOVE/AIM"),
-            ("A", "JUMP. HOLD: HOVER"),
-            ("B", "FIRE. HOLD: CHARGE"),
-            ("L/R", "STAND AND AIM"),
-            ("START", "PAUSE"),
-        ];
-        for (i, (keys, action)) in controls.into_iter().enumerate() {
+        for (i, binding) in BINDINGS.iter().enumerate() {
             let y = y + i as i32 * 8;
-            self.font.draw(frame, keys, keys_x, y, false);
-            self.font.draw(frame, action, action_x, y, false);
+            self.font.draw(frame, controls::label(binding.keys), keys_x, y, false);
+            self.font.draw(frame, binding.play, action_x, y, false);
         }
     }
 
@@ -489,32 +567,122 @@ impl Renderer {
         }
     }
 
-    /// The world map: every place with its marker, the wassie standing on the chosen
-    /// one, and what lies there.
+    /// The world map: every place with a marker for how far the file has got there
+    /// (cleared, open, locked or still being built), the wassie on the chosen one, and
+    /// what lies there. After a clear, the wassie walks the road to the place it
+    /// unlocked.
     fn draw_map(&mut self, game: &Game, frame: &mut GraphicsFrame) {
         self.font.draw_centred(frame, "WORLD MAP", 6, true);
-        let place = &MAP[(game.cursor as usize).min(MAP.len() - 1)];
-        self.font.draw_centred(frame, place.name, 128, true);
+        let mut buf = [0; 10];
+        let mut total = [0; 10];
+        let cleared = font::number(game.cleared.count_ones(), &mut buf);
+        let built = font::number(diamond_hands_logic::levels::ALL.len() as u32, &mut total);
+        let tally_w = Font::width("CLEARED ", false) + Font::width(cleared, false) + Font::width("/", false);
+        let x = (WIDTH - tally_w - Font::width(built, false)) / 2;
+        self.font.draw(frame, "CLEARED", x, 22, false);
+        self.font.draw(frame, cleared, x + Font::width("CLEARED ", false), 22, false);
+        self.font.draw(frame, "/", x + tally_w - Font::width("/", false), 22, false);
+        self.font.draw(frame, built, x + tally_w, 22, false);
+
+        let index = (game.cursor as usize).min(MAP.len() - 1);
+        let place = &MAP[index];
+        let status = place.status(game.cleared);
+        self.font.draw_centred(frame, place.name, 114, true);
+        match status {
+            PlaceStatus::Cleared => self.font.draw_centred(frame, "CLEARED", 132, false),
+            PlaceStatus::Open if game.fresh == Some(index as u8) => {
+                self.font.draw_centred(frame, "NEW! UNLOCKED", 132, false)
+            }
+            PlaceStatus::Open => self.font.draw_centred(frame, "UNLOCKED", 132, false),
+            PlaceStatus::Locked => {
+                let before = MAP[index.saturating_sub(1)].name;
+                let w = Font::width("LOCKED: CLEAR ", false) + Font::width(before, false);
+                let x = (WIDTH - w) / 2;
+                self.font.draw(frame, "LOCKED: CLEAR", x, 132, false);
+                self.font.draw(frame, before, x + Font::width("LOCKED: CLEAR ", false), 132, false);
+            }
+            PlaceStatus::Soon => self.font.draw_centred(frame, "COMING SOON", 132, false),
+        }
         self.font.draw_centred(frame, place.blurb, 142, false);
-        let hint = if place.open() { "A: PLAY   B: BACK" } else { "B: BACK" };
+        let hint = if place.playable(game.cleared) { "A: PLAY   B: BACK" } else { "B: BACK" };
         self.font.draw_centred(frame, hint, 152, false);
 
-        // The wassie hops in place on the chosen spot.
-        let hop = (game.frame / 12 % 2) as i32;
-        let (x, y) = (place.x - wassie::CENTRE_COL, place.y - 30 - hop);
+        // The wassie walks the road to a newly unlocked place, then hops on the spot.
+        let t = game.scene_frames() as i32;
+        let walk = game.map_walk.filter(|_| t < MAP_WALK_FRAMES as i32);
+        let ((px, py), hop) = match walk {
+            Some((from, to)) => {
+                let (a, b) = (&MAP[from as usize], &MAP[to as usize]);
+                let n = MAP_WALK_FRAMES as i32;
+                let at = (a.x + (b.x - a.x) * t / n, a.y + (b.y - a.y) * t / n);
+                (at, (t / 4 % 2) * 2)
+            }
+            None => ((place.x, place.y), (game.frame / 12 % 2) as i32),
+        };
+        let (x, y) = (px - wassie::CENTRE_COL, py - 30 - hop);
         for (sprite, dx) in self.wassie.standing(game.frame) {
             show(frame, sprite, x + dx, y);
         }
         for (i, p) in MAP.iter().enumerate() {
-            let sprite = if !p.open() {
-                &self.soon
-            } else {
-                let glint = (game.frame + i as u32 * 16) % 48 < 6;
-                &self.common.diamond[glint as usize]
-            };
-            show(frame, sprite, p.x - 8, p.y - 8);
+            let (mx, my) = (p.x - 8, p.y - 8);
+            match p.status(game.cleared) {
+                PlaceStatus::Soon => show(frame, &self.soon, mx, my),
+                PlaceStatus::Locked => show(frame, &self.locked, mx, my),
+                status => {
+                    // Open places glint often and, when new, wave a "!" overhead.
+                    let open = status == PlaceStatus::Open;
+                    let period = if open { 24 } else { 64 };
+                    let glint = (game.frame + i as u32 * 16) % period < 6;
+                    if status == PlaceStatus::Cleared {
+                        show(frame, &self.clear_badge, mx + 10, my - 2);
+                    } else if game.fresh == Some(i as u8) && walk.is_none() {
+                        let bob = (game.frame / 8 % 2) as i32;
+                        show(frame, &self.common.alert, p.x + 6, my - 14 - bob);
+                    }
+                    show(frame, &self.common.diamond[glint as usize], mx, my);
+                }
+            }
         }
         self.map.show(frame);
+    }
+
+    /// The pause menu, painted into the dialogue box's spare rows, plus the animated
+    /// parts as sprites on top: the selection arrow and the wassie in the bag, glints
+    /// on the wallet's diamond. The dialogue text's tiles are lent to the menu while
+    /// it is open.
+    fn draw_menu(&mut self, game: &Game, frame: &mut GraphicsFrame) {
+        if self.menu.is_none() {
+            self.dialog_text.release(&mut self.dialog_box, &self.blank);
+            self.menu = Some(MenuScreen::new());
+        }
+        let m = game.menu;
+        match m.tab {
+            pause_menu::BAG if !m.inspecting => {
+                let (cx, cy) = menu::item_cursor(m.item);
+                self.draw_cursor(game, frame, cx + 12, cy + 1);
+                let (fx, feet) = menu::WASSIE_FEET;
+                let (x, y) = (fx - wassie::CENTRE_COL, feet - 31);
+                let [(body, bdx), (blaster, gdx)] = self.wassie.standing(game.frame);
+                show(frame, blaster, x + gdx, y);
+                let (jx, jy) = wassie::JETPACK_AT;
+                show(frame, &self.wassie.jetpack, x + jx, y + jy);
+                show(frame, body, x + bdx, y);
+            }
+            pause_menu::WALLET => {
+                for (i, (gx, gy)) in menu::GEM_GLINTS.into_iter().enumerate() {
+                    let t = (game.frame + i as u32 * 23) % 70;
+                    if t < 8 {
+                        show(frame, &self.common.glint[(t / 4) as usize], gx - 4, gy - 4);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(menu) = &mut self.menu {
+            menu.paint(game, &mut self.dialog_box);
+        }
+        self.dialog_box.set_scroll_pos(vec2(0, menu::SCROLL_Y));
+        self.dialog_box.show(frame);
     }
 
     /// Shows a sprite of the world (not text or HUD) at screen position (x, y).
@@ -550,11 +718,13 @@ impl Renderer {
 
         if world.boss.is_active() && !world.boss.is_beaten() {
             let y = 148;
-            self.font.draw(frame, "BERA 3000", 4, y + 1, false);
+            let name = world.level.boss_name;
+            self.font.draw(frame, name, 4, y + 1, false);
+            let bar_x = (8 + Font::width(name, false) + 4).max(56);
             let full = world.boss.hp * 64 / diamond_hands_logic::boss::BOSS_HP;
             for i in 0..8 {
                 let filled = (full - i * 8).clamp(0, 8);
-                show(frame, &self.common.boss_cell[filled as usize], 56 + i * 8, y);
+                show(frame, &self.common.boss_cell[filled as usize], bar_x + i * 8, y);
             }
         }
     }

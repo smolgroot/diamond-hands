@@ -34,11 +34,15 @@ pub struct Probe {
     pub cursor: u32,
     /// Blaster shots in flight.
     pub shots: u32,
+    /// Levels the active file has cleared, one bit each.
+    pub cleared: u32,
+    /// The pause menu: tab, item << 8, and 1 << 16 while an item is inspected.
+    pub menu: u32,
 }
 
 impl Probe {
     pub const MAGIC: u32 = u32::from_le_bytes(*b"DHPR");
-    pub const VERSION: u32 = 4;
+    pub const VERSION: u32 = 5;
     pub const WORDS: usize = size_of::<Probe>() / 4;
 
     /// The value the ROM starts with, before the first frame runs.
@@ -63,6 +67,8 @@ impl Probe {
         difficulty: 0,
         cursor: 0,
         shots: 0,
+        cleared: 0,
+        menu: 0,
     };
 
     pub fn from_game(game: &Game) -> Self {
@@ -86,6 +92,8 @@ impl Probe {
             difficulty: game.difficulty as u32,
             cursor: game.cursor as u32,
             shots: world.player_shots() as u32,
+            cleared: game.cleared as u32,
+            menu: game.menu.tab as u32 | (game.menu.item as u32) << 8 | (game.menu.inspecting as u32) << 16,
             ..Self::BOOT
         }
     }
@@ -105,8 +113,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_is_twenty_words() {
-        assert_eq!(Probe::WORDS, 20);
+    fn layout_is_twenty_two_words() {
+        assert_eq!(Probe::WORDS, 22);
     }
 
     #[test]

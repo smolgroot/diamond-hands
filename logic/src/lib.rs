@@ -8,9 +8,11 @@
 pub mod arrival;
 pub mod boss;
 pub mod bot;
+pub mod controls;
 pub mod enemy;
 pub mod fx;
 pub mod game;
+pub mod inventory;
 pub mod level;
 pub mod levels;
 pub mod physics;

@@ -118,7 +118,7 @@ impl Input {
 
 /// Things that happened during a step, for sound effects and saving.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Events(pub u16);
+pub struct Events(pub u32);
 
 impl Events {
     pub const JUMP: Events = Events(1 << 0);
@@ -141,6 +141,12 @@ impl Events {
     pub const SLAM: Events = Events(1 << 14);
     /// The wassie touched down from a real fall.
     pub const LAND: Events = Events(1 << 15);
+    /// Menus: the cursor moved, something was picked, the menu backed out, or the
+    /// pick isn't allowed (a locked place on the map).
+    pub const MENU_MOVE: Events = Events(1 << 16);
+    pub const MENU_OK: Events = Events(1 << 17);
+    pub const MENU_BACK: Events = Events(1 << 18);
+    pub const MENU_DENY: Events = Events(1 << 19);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -746,6 +752,7 @@ mod tests {
         name: "TEST",
         subtitle: "",
         theme: Theme::Badlands,
+        boss_name: "",
         boss_talk: &[],
         rows: &[
             "....................................................................",

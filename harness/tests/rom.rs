@@ -8,7 +8,8 @@
 use diamond_hands_harness::{Runner, keys, read_rom};
 use diamond_hands_logic::{
     Difficulty, Game, Input, PlayerState, Probe, Scene, bot,
-    game::{INTRO_FRAMES, SPLASH_PROMPT_FRAMES, title_menu},
+    game::{CLEAR_AUTO_FRAMES, INTRO_FRAMES, MAP_WALK_FRAMES, SPLASH_PROMPT_FRAMES, pause_menu, title_menu},
+    inventory::ITEMS,
     player::JUMP_APEX,
 };
 
@@ -59,6 +60,22 @@ fn boot_to_files_from_prompt(runner: &mut Runner) -> Probe {
     let files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
     screenshot(runner, "files");
     files
+}
+
+/// Presses `keys` like a player would: held until the game has read them, then let go
+/// until it has seen them released. Menu screens can take several video frames to
+/// draw, so a one-frame tap may fall between two reads.
+fn press(runner: &mut Runner, keys: u16) -> Probe {
+    for held in [keys, 0] {
+        let read = runner.expect_probe().frame + 2;
+        runner.run_until(30, held, |p| p.frame >= read);
+    }
+    runner.expect_probe()
+}
+
+/// The pause menu's state from the probe: tab, item, and whether it is inspected.
+fn menu(probe: &Probe) -> (u8, u8, bool) {
+    (probe.menu as u8, (probe.menu >> 8) as u8, probe.menu >> 16 != 0)
 }
 
 /// From power-on to control of the wassie in level 1, skipping the arrival.
@@ -176,12 +193,61 @@ fn start_pauses_and_resumes() {
     let mut runner = Runner::new(&read_rom());
     start_level(&mut runner);
     runner.frames(10, keys::RIGHT);
-    runner.tap(keys::START);
-    let paused = runner.run_until(5, 0, |p| scene(p) == Scene::Paused);
+    let paused = press(&mut runner, keys::START);
+    assert_eq!(scene(&paused), Scene::Paused);
     runner.frames(30, keys::RIGHT);
     assert_eq!(runner.expect_probe().player_x, paused.player_x);
-    runner.tap(keys::START);
-    runner.run_until(5, 0, |p| scene(p) == Scene::Play);
+    let resumed = press(&mut runner, keys::START);
+    assert_eq!(scene(&resumed), Scene::Play);
+    // It keeps its run-up, so it coasts a little in the frames since.
+    assert!((resumed.player_x - paused.player_x).abs() <= 4, "the level carries on where it stopped");
+}
+
+/// The pause menu: tabs, the bag's items and the inspect card, and B and Start backing
+/// out, with the world frozen throughout. Screenshots each page.
+#[test]
+fn the_pause_menu_shows_the_controls_bag_and_wallet() {
+    let mut runner = Runner::new(&read_rom());
+    start_level(&mut runner);
+    runner.frames(20, keys::RIGHT);
+    let before = runner.expect_probe();
+    let paused = press(&mut runner, keys::START);
+    assert_eq!((scene(&paused), menu(&paused)), (Scene::Paused, (pause_menu::BAG, 0, false)));
+    runner.frames(20, 0);
+    screenshot(&runner, "menu-bag");
+
+    let mut probe = press(&mut runner, keys::DOWN);
+    assert_eq!(menu(&probe), (pause_menu::BAG, 1, false));
+    runner.frames(6, 0);
+    screenshot(&runner, "menu-bag-jetpack");
+    probe = press(&mut runner, keys::A);
+    assert_eq!(menu(&probe), (pause_menu::BAG, 1, true));
+    runner.frames(10, 0);
+    screenshot(&runner, "menu-inspect-jetpack");
+    probe = press(&mut runner, keys::B);
+    assert_eq!((scene(&probe), menu(&probe)), (Scene::Paused, (pause_menu::BAG, 1, false)), "B closes the card");
+    for i in 0..ITEMS.len() {
+        probe = press(&mut runner, keys::DOWN);
+        assert_eq!(probe.menu >> 8 & 0xFF, ((2 + i) % ITEMS.len()) as u32, "the list wraps");
+    }
+
+    probe = press(&mut runner, keys::RIGHT);
+    assert_eq!(menu(&probe).0, pause_menu::WALLET);
+    runner.frames(10, 0);
+    screenshot(&runner, "menu-wallet");
+    probe = press(&mut runner, keys::RIGHT);
+    assert_eq!(menu(&probe).0, pause_menu::CONTROLS, "tabs wrap");
+    runner.frames(10, 0);
+    screenshot(&runner, "menu-controls");
+
+    assert_eq!((probe.player_x, probe.diamonds), (before.player_x, before.diamonds), "frozen");
+    probe = press(&mut runner, keys::B);
+    assert_eq!(scene(&probe), Scene::Play, "B closes the menu");
+    assert_eq!(probe.shots, 0, "and doesn't fire on the way out");
+    probe = press(&mut runner, keys::START);
+    assert_eq!((scene(&probe), menu(&probe).0), (Scene::Paused, pause_menu::CONTROLS), "it reopens where it was");
+    probe = press(&mut runner, keys::START);
+    assert_eq!(scene(&probe), Scene::Play);
 }
 
 #[test]
@@ -250,7 +316,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
 }
 
 #[test]
-fn the_map_starts_the_badlands_and_shows_coming_soon_places() {
+fn the_map_starts_the_badlands_and_keeps_the_trenches_locked() {
     let mut runner = Runner::new(&read_rom());
     boot_to_title(&mut runner);
     runner.tap(keys::DOWN);
@@ -267,7 +333,7 @@ fn the_map_starts_the_badlands_and_shows_coming_soon_places() {
     screenshot(&runner, "map-solana");
     runner.tap(keys::A);
     runner.frames(2, 0);
-    assert_eq!(scene(&runner.expect_probe()), Scene::Map, "not built yet");
+    assert_eq!(scene(&runner.expect_probe()), Scene::Map, "locked on a new file");
     runner.tap(keys::LEFT);
     runner.tap(keys::A);
     runner.run_until(10, 0, |p| scene(p) == Scene::Intro);
@@ -293,7 +359,14 @@ fn screenshot(runner: &Runner, name: &str) {
 #[test]
 fn rom_matches_host_model_frame_by_frame() {
     let mut runner = Runner::new(&read_rom());
-    let ready = boot_to_splash_prompt(&mut runner);
+    clear_badlands_in_step(&mut runner);
+}
+
+/// Plays file 1 from power-on through the Badlands with the route bot, stepping the
+/// host model alongside and checking the two agree every frame, up to the level-clear
+/// screen. Returns the model.
+fn clear_badlands_in_step(runner: &mut Runner) -> Game {
+    let ready = boot_to_splash_prompt(runner);
     let mut model = Game::new(ready.best);
     while model.frame < ready.frame {
         model.step(&Input::default());
@@ -302,7 +375,7 @@ fn rom_matches_host_model_frame_by_frame() {
 
     // The ROM takes the next frame's Start and then builds its renderer, so it runs
     // slower than the emulator until the file menu is up. Catch the model up there.
-    let files = boot_to_files_from_prompt(&mut runner);
+    let files = boot_to_files_from_prompt(runner);
     model.step(&Input::from_keys(keys::START, 0));
     while model.frame < files.frame {
         model.step(&Input::default());
@@ -337,16 +410,16 @@ fn rom_matches_host_model_frame_by_frame() {
         saw_dialog |= model.scene == Scene::Dialog;
         let talk = if model.scene == Scene::Arrival { "arrival-talk" } else { "dialog" };
         if model.talking() && dialog_frames % 50 == 49 {
-            screenshot(&runner, &format!("{talk}-{}", model.talk_line));
+            screenshot(runner, &format!("{talk}-{}", model.talk_line));
         }
         if model.scene == Scene::Play && model.world.boss.is_active() && i % 10 == 0 {
-            screenshot(&runner, &format!("boss-{i:05}"));
+            screenshot(runner, &format!("boss-{i:05}"));
         }
         if model.scene == Scene::Arrival {
             beats_seen |= 1 << model.beat as u32;
             arrival_frames += 1;
             if !model.talking() && arrival_frames % 30 == 0 {
-                screenshot(&runner, &format!("arrival-{arrival_frames:04}"));
+                screenshot(runner, &format!("arrival-{arrival_frames:04}"));
             }
         }
         if model.scene == Scene::LevelClear {
@@ -359,4 +432,59 @@ fn rom_matches_host_model_frame_by_frame() {
     assert!(saw_dialog, "BERA 3000 should have her say");
     assert_eq!(beats_seen, 0b11_1111, "CL207's welcome should play every beat");
     assert_eq!(scene(&end), Scene::LevelClear, "the bot should beat the Badlands: {end:?}");
+    model
+}
+
+/// Clearing the Badlands: the clear screen hands over to the world map on its own,
+/// where the Badlands shows cleared and the wassie walks to the newly open Trenches.
+/// Level 2 plays, and its pause menu works with both levels' terrain in VRAM, the
+/// tightest it gets. After a power cycle the file still has the Trenches open.
+#[test]
+fn clearing_the_badlands_opens_the_map_and_unlocks_the_trenches_for_good() {
+    let rom = read_rom();
+    let mut runner = Runner::new(&rom);
+    clear_badlands_in_step(&mut runner);
+    for (frames, name) in [(20, "level-clear-burst"), (60, "level-clear-tally"), (60, "level-clear-rain")] {
+        runner.frames(frames, 0);
+        screenshot(&runner, name);
+    }
+    let map = runner.run_until(CLEAR_AUTO_FRAMES as usize + SECOND, 0, |p| scene(p) == Scene::Map);
+    assert_eq!((map.cleared, map.cursor), (0b1, 1), "the Badlands is cleared, the Trenches picked");
+    runner.frames(MAP_WALK_FRAMES as usize / 2, 0);
+    screenshot(&runner, "map-walk");
+    runner.frames(MAP_WALK_FRAMES as usize, 0);
+    screenshot(&runner, "map-unlocked");
+
+    let intro = press(&mut runner, keys::A);
+    assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
+    let play = runner.run_until(INTRO_FRAMES as usize + SECOND, 0, |p| scene(p) == Scene::Play);
+    assert_eq!(play.level, 1, "no arrival scene in the Trenches");
+    runner.frames(60, keys::RIGHT);
+    screenshot(&runner, "trenches");
+
+    // Every page of the menu, with the most terrain loaded.
+    let x = press(&mut runner, keys::START).player_x;
+    for keys in [keys::A, keys::B, keys::DOWN, keys::A, keys::B, keys::RIGHT, keys::RIGHT, keys::RIGHT] {
+        let probe = press(&mut runner, keys);
+        assert_eq!(scene(&probe), Scene::Paused, "{probe:?}");
+    }
+    let resumed = press(&mut runner, keys::START);
+    assert_eq!(scene(&resumed), Scene::Play);
+    assert!((resumed.player_x - x).abs() <= 4, "carries on from where it paused");
+
+    runner.frames(10, 0);
+    let save = runner.save_data();
+    let mut rebooted = Runner::with_save(&rom, Some(&save));
+    boot_to_splash_prompt(&mut rebooted);
+    boot_to_files_from_prompt(&mut rebooted);
+    rebooted.tap(keys::A);
+    rebooted.run_until(5, 0, |p| scene(p) == Scene::FileChoice);
+    rebooted.tap(keys::A);
+    let title = rebooted.run_until(5, 0, |p| scene(p) == Scene::Title);
+    assert_eq!(title.cleared, 0b1, "the file remembers the clear");
+    rebooted.tap(keys::A);
+    let map = rebooted.run_until(5, 0, |p| scene(p) == Scene::Map);
+    assert_eq!(map.cursor, 1, "PLAY opens the map on the Trenches");
+    let intro = press(&mut rebooted, keys::A);
+    assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
 }

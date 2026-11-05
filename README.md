@@ -11,7 +11,9 @@ with a boss.
 1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
    night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a
    bear-shaped war mech.
-2. **Solana Trenches** (planned): a neon casino strip full of hustlers.
+2. **Solana Trenches** (playable): a neon casino strip sunk into the rock, lit magenta and teal.
+   It reuses the Badlands' tiles, bots and music under its own palettes, and ends with
+   **BERA 3000 MK2**, the mech rebuilt after the Badlands.
 3. **Ethereum City** (planned): a futuristic city of gas drones and MEV bots.
 
 | Button      | Action                                                          |
@@ -20,7 +22,7 @@ with a boss.
 | A           | Jump (hold for higher); keep holding to hover on the jetpack    |
 | B           | Fire; hold and release for a charged beam                       |
 | L or R      | Hold to plant your feet, so the d-pad only aims                 |
-| Start       | Leaves the splash; pause (the controls are shown there too); skips dialogue |
+| Start       | Leaves the splash; opens and closes the pause menu; skips dialogue |
 
 - **Splash:** the game boots to the cover art. After 1.5 s "PRESS START TO PLAY" blinks in,
   and Start (or A) opens the save files.
@@ -28,9 +30,10 @@ with a boss.
   it asks CONTINUE or NEW GAME. A new game leaves the old run in place until the new one saves,
   so a wrong pick loses nothing. Lighting a beacon saves the run, and so does clearing a level.
   CONTINUE (on the title, B goes back to the files) starts at the last beacon with full health;
-  the diamonds and bots behind it stay collected or beaten. Levels played from the world map
-  are free play and don't save. The save format changed with this, so older cartridges start
-  fresh once, losing their best score and difficulty.
+  the diamonds and bots behind it stay collected or beaten. Between levels, CONTINUE opens the
+  world map on the next level instead. Each file also keeps which levels it has cleared. Saves
+  from before that was added are read and carried over: a run that had reached level N has
+  the levels before it cleared.
 - **Combat:** you can stomp bots by landing on them. A "!" over a bot means it is about to
   attack. The blaster fires in eight directions; diagonal shots fly at the same speed.
 - **Jetpack:** after a jump's rise, keeping A held lights a jetpack that climbs slowly for
@@ -45,9 +48,30 @@ with a boss.
 - **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie
   trade a few lines. A finishes a line and then turns the page; Start skips the rest. It
   plays once per visit, so retries go straight to the fight.
-- **World map:** from the title, MAP shows every place. Any place with a level is open from
-  the start, and a level cleared from the map returns to it. The Solana Trenches and
-  Ethereum City are marked "coming soon".
+- **Level clear:** the screen fades down, a ring of diamonds bursts off the wassie, the tally
+  counts up row by row, and the place the clear unlocked is announced. A (after a second)
+  or a 7-second wait opens the world map.
+- **World map:** the hub between levels, and MAP on the title opens it too. Levels unlock in
+  order: the Badlands is open on a new file, and clearing a level opens the next. Each place
+  shows how far the file has got there: a diamond with a teal tick (cleared), a glinting
+  diamond (open, with a "!" when newly unlocked), a padlock (locked: the line under it says
+  which level to clear), or a steel "?" beacon (Ethereum City, coming soon). After a clear
+  the wassie walks the road to the newly unlocked place. Left and Right move, A plays an
+  open or cleared place, B goes back to the title. A cleared level can be replayed; replays
+  bank no score and can't set a best. Every run saves to the file, at beacons and on clears.
+- **Pause menu:** Start in a level opens it and the level waits; Start (or B) closes it and
+  play carries on exactly where it stopped. Left/Right (or L/R) switch tabs:
+  - CONTROLS lists every button with what it does in play and in menus. The rows come from
+    the game's own input mapping (`logic/src/controls.rs`), so they can't drift from it.
+  - BAG shows the wassie's gear: the blaster, the jetpack and the red scarf, each with an
+    icon, its slot and an "E" when equipped. Up/Down pick an item and the box below
+    describes it; A opens a card with a big icon, more detail and, for the jetpack, a live
+    fuel gauge. B closes the card.
+  - WALLET shows the diamonds in hand (the same count as the HUD), how many the level
+    holds, the count saved at the last beacon, and the score.
+
+  Buttons still held when the menu closes are ignored until let go, so the B that closes it
+  doesn't fire and a charge held into the menu is dropped.
 - **Health and respawns:** you have 8 HP. Touching a beacon makes it your respawn point, and
   retries are unlimited.
 - **Diamonds:** they are scattered along the route, and the upper ledges hold the most.
@@ -69,7 +93,11 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
 - `logic/`: all game rules. Tile physics, the player, villains, the boss, scenes, levels and the
   test probe. `no_std` and integer-only, tested on the host.
   - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`. Each
-    level also carries its boss dialogue; places on the world map are in `logic/src/levels.rs`.
+    level also carries its boss dialogue; places on the world map and the unlock rules are in
+    `logic/src/levels.rs`.
+  - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
+    `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
+    A new item needs an entry there and an icon in `game/src/art/menu.rs`.
 - `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
   - All art is drawn in code at boot, in `game/src/art/`, except the splash. That is
     `cover.png` cropped and fitted to 16 palettes by `scripts/make-splash.py` (needs Pillow),
@@ -121,21 +149,31 @@ Each frame, the ROM mirrors a `Probe` struct into EWRAM. The harness finds it by
 - pausing
 - SRAM persistence
 - hovering, and diagonal and downward aim
-- the world map
+- the world map: locked and coming-soon places, and unlocking the Trenches by clearing the
+  Badlands, which survives a power cycle
+- the pause menu's tabs, items and inspect card, and that closing it neither fires nor
+  moves the level on
 - that the ROM matches the host-side model frame by frame while the route bot clears the
   Badlands, including the boss dialogue
 
 Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of the title, map,
-hovering, aiming and each line of dialogue.
+hovering, aiming, each line of dialogue, the level-clear sequence, each pause-menu page and
+the Trenches.
 
 ## Known limitations
 
 - There is no sound yet.
-- Only the Badlands is playable; the other two places on the map are placeholders.
+- Two levels are playable. The Trenches reuse the Badlands' tile shapes, bots, boss and
+  music under new palettes; Ethereum City is a placeholder.
 - Sprite VRAM is nearly full: new sprites for later levels will need the level's art loaded
   per level rather than all at boot. Splitting the blaster from the body poses and shrinking
   the big font to 8x16 bought back room for the aims, jetpack, portraits and map markers.
 - The world map is painted at boot, which adds about half a second to start-up.
+- Background VRAM is nearly full too. All eight screenblocks are taken, so the pause menu
+  borrows the dialogue box's unused rows, and while it is open the dialogue text lends it
+  its tiles. The menu is drawn on an 8x8 grid so each glyph is one shared tile, and a page
+  needs about 170-230 tiles. Switching tabs takes about a tenth of a second, and the new
+  page wipes in over a few frames.
 
 If a harness test fails, try the ROM in mGBA. If it behaves correctly there, the bug is in gba-wasm:
 1. Record it in gba-wasm as a failing test or a `TASKS.md` entry.

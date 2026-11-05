@@ -134,6 +134,7 @@ impl Sfx {
                 self.pending = None;
             }
         }
+        self.menu(events);
         // SAFETY: as in `new`.
         unsafe {
             if events.contains(Events::BEAM) {
@@ -148,6 +149,22 @@ impl Sfx {
                 SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
             }
+        }
+    }
+
+    /// Menu feedback on the chime's channel: a tick for the cursor, a rising pair to
+    /// pick, a falling pair to back out, and a low buzz for a locked place.
+    fn menu(&mut self, events: Events) {
+        if events.contains(Events::MENU_OK) {
+            Self::chime(LADDER[3], tone(0, 2, 1, 9));
+            self.pending = Some((CHIME_GAP, LADDER[5]));
+        } else if events.contains(Events::MENU_BACK) {
+            Self::chime(LADDER[3], tone(0, 2, 1, 8));
+            self.pending = Some((CHIME_GAP, LADDER[0]));
+        } else if events.contains(Events::MENU_DENY) {
+            Self::chime(rate(165), tone(0, 3, 2, 10));
+        } else if events.contains(Events::MENU_MOVE) {
+            Self::chime(LADDER[2], tone(0, 1, 1, 6));
         }
     }
 }

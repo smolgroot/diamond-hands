@@ -42,6 +42,8 @@ impl Tile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Badlands,
+    /// The Badlands' shapes relit as a neon casino strip: magenta and teal.
+    Trenches,
 }
 
 #[derive(Debug)]
@@ -49,6 +51,8 @@ pub struct Level {
     pub name: &'static str,
     pub subtitle: &'static str,
     pub theme: Theme,
+    /// Shown over the boss's health bar.
+    pub boss_name: &'static str,
     /// What the boss says when the wassie walks into the arena; empty for none.
     pub boss_talk: &'static [Line],
     pub rows: &'static [&'static str],

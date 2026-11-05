@@ -1,14 +1,16 @@
 //! Scene flow around the levels: splash → save files → title ⇄ options, title → level
-//! intro → (arrival, on a fresh start) → play ⇄ pause → level clear → next level, or back
-//! to the title after the last one. Play stops for the boss's dialogue when the arena closes. The world map (title →
-//! map) starts any open level on its own, and a clear there returns to the map.
+//! intro → (arrival, on a first visit) → play ⇄ pause menu → level clear → world map →
+//! the next level. Play stops for the boss's dialogue when the arena closes.
 //!
-//! A run started from the title saves to the chosen file at every beacon and level
-//! clear; map runs are free play and never touch the files.
+//! The world map is the hub. Levels unlock in order: clearing one opens the next, and
+//! any unlocked level can be played (or replayed) from the map. Each save file keeps
+//! which levels it has cleared, and every run saves to the chosen file at each beacon
+//! and level clear.
 
 use crate::{
     arrival::{self, Beat},
-    levels,
+    inventory::ITEMS,
+    levels::{self, Cleared},
     talk::Line,
     world::{Difficulty, Events, Input, World},
 };
@@ -28,6 +30,9 @@ pub mod keys {
 
     pub const JUMP: u16 = A;
     pub const FIRE: u16 = B;
+    /// Menus: accept, and go back.
+    pub const CONFIRM: u16 = A;
+    pub const BACK: u16 = B;
     /// Either shoulder: plant the feet and aim.
     pub const PLANT: u16 = L | R;
 }
@@ -39,6 +44,10 @@ pub const SPLASH_PROMPT_FRAMES: u32 = 90;
 pub const INTRO_FRAMES: u32 = 150;
 /// Frames the level-clear screen ignores input, so a held button doesn't skip it.
 pub const CLEAR_LOCK_FRAMES: u32 = 60;
+/// Frames the level-clear screen shows before the world map opens on its own.
+pub const CLEAR_AUTO_FRAMES: u32 = 420;
+/// Frames the wassie takes to walk the road to a newly unlocked place on the map.
+pub const MAP_WALK_FRAMES: u32 = 72;
 /// Save files on the cartridge.
 pub const FILES: usize = 3;
 
@@ -80,6 +89,8 @@ pub struct Progress {
     pub frames: u32,
     /// Every level is cleared; `banked` is the final score.
     pub complete: bool,
+    /// The levels this file has cleared, which also unlock the ones after them.
+    pub cleared: Cleared,
 }
 
 impl Progress {
@@ -104,6 +115,28 @@ pub mod file_menu {
     pub const LEN: u8 = 2;
 }
 
+/// The pause menu's tabs, in [`Menu::tab`] order.
+pub mod pause_menu {
+    pub const CONTROLS: u8 = 0;
+    pub const BAG: u8 = 1;
+    pub const WALLET: u8 = 2;
+    pub const TABS: u8 = 3;
+}
+
+/// Where the pause menu is. It stays put between pauses, as a bag's pocket does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Menu {
+    pub tab: u8,
+    /// Highlighted row of the bag, an index into [`ITEMS`].
+    pub item: u8,
+    /// A opened the highlighted item's detail card.
+    pub inspecting: bool,
+}
+
+impl Menu {
+    pub const NEW: Menu = Menu { tab: pause_menu::BAG, item: 0, inspecting: false };
+}
+
 /// Options menu rows, in [`Game::cursor`] order.
 pub mod options_menu {
     pub const DIFFICULTY: u8 = 0;
@@ -126,8 +159,18 @@ pub struct Game {
     pub difficulty: Difficulty,
     /// Highlighted row of the current menu, or place on the map.
     pub cursor: u8,
-    /// The level was picked on the map, so clearing it returns there.
-    pub from_map: bool,
+    /// The levels the active file has cleared.
+    pub cleared: Cleared,
+    /// This level was already cleared before this visit: it banks no score again.
+    pub replay: bool,
+    /// The place a clear just unlocked, marked "NEW" on the map until played.
+    pub fresh: Option<u8>,
+    /// The map places the wassie walks between after a clear, while it walks.
+    pub map_walk: Option<(u8, u8)>,
+    pub menu: Menu,
+    /// Buttons held when the pause menu closed. Play ignores each until it is let go,
+    /// so the B or A that closed the menu doesn't also fire or jump.
+    latch: u16,
     /// Dialogue line showing, and how many of its characters are typed out.
     pub talk_line: u8,
     pub talk_shown: u16,
@@ -158,7 +201,12 @@ impl Game {
             new_best: false,
             difficulty,
             cursor: title_menu::PLAY,
-            from_map: false,
+            cleared: 0,
+            replay: false,
+            fresh: None,
+            map_walk: None,
+            menu: Menu::NEW,
+            latch: 0,
             talk_line: 0,
             talk_shown: 0,
             files,
@@ -170,10 +218,25 @@ impl Game {
         }
     }
 
-    /// The run PLAY will pick up, if any: the active file's, unless it is finished or
-    /// the player chose to start over.
+    /// The run PLAY will pick up, if any: the active file's, unless the player chose to
+    /// start over.
     pub fn resumable(&self) -> Option<Progress> {
-        self.files[self.file as usize].filter(|p| self.resume && !p.complete)
+        self.files[self.file as usize].filter(|_| self.resume)
+    }
+
+    /// Whether PLAY picks up where the file left off rather than starting a new run.
+    pub fn can_continue(&self) -> bool {
+        self.resumable().is_some() || self.cleared != 0
+    }
+
+    /// Frames spent in the current scene.
+    pub fn scene_frames(&self) -> u32 {
+        self.timer
+    }
+
+    /// The map place of the first level the file hasn't cleared.
+    fn frontier_place(&self) -> u8 {
+        levels::place_of(levels::frontier(self.cleared)) as u8
     }
 
     /// Whether the splash is showing its "PRESS START" prompt, and for how many frames.
@@ -232,8 +295,7 @@ impl Game {
                         self.enter(Scene::FileChoice);
                         self.cursor = file_menu::CONTINUE;
                     } else {
-                        self.resume = false;
-                        self.return_to_title(title_menu::PLAY);
+                        self.choose_file(false);
                     }
                 }
             }
@@ -243,8 +305,7 @@ impl Game {
                     self.open_files();
                 } else if confirm {
                     // Starting over leaves the file as it is until the new run saves.
-                    self.resume = self.cursor == file_menu::CONTINUE;
-                    self.return_to_title(title_menu::PLAY);
+                    self.choose_file(self.cursor == file_menu::CONTINUE);
                 }
             }
             Scene::Title => {
@@ -253,17 +314,14 @@ impl Game {
                     self.open_files();
                 } else if confirm {
                     match self.cursor {
-                        title_menu::PLAY => {
-                            self.from_map = false;
-                            match self.resumable() {
-                                Some(progress) => self.continue_run(progress),
-                                None => {
-                                    self.banked = 0;
-                                    self.start_level(0);
-                                }
-                            }
-                        }
-                        title_menu::MAP => self.open_map(0),
+                        // Mid-level runs pick up at their beacon; between levels,
+                        // the map opens on the next one; a new run starts at the first.
+                        title_menu::PLAY => match self.resumable() {
+                            Some(progress) if progress.checkpoint.is_some() => self.continue_run(progress),
+                            _ if self.cleared != 0 => self.open_map(self.frontier_place()),
+                            _ => self.start_level(0),
+                        },
+                        title_menu::MAP => self.open_map(self.frontier_place()),
                         _ => {
                             self.enter(Scene::Options);
                             self.cursor = options_menu::DIFFICULTY;
@@ -303,8 +361,12 @@ impl Game {
             }
             Scene::Arrival => self.step_arrival(input, &mut events),
             Scene::Play => {
+                self.latch &= input.held;
+                let input = &Input { held: input.held & !self.latch, pressed: input.pressed & !self.latch };
                 if input.start_pressed() {
+                    self.menu.inspecting = false;
                     self.enter(Scene::Paused);
+                    events.insert(Events::MENU_OK);
                     return events;
                 }
                 events = self.world.step(input);
@@ -319,7 +381,8 @@ impl Game {
                             diamonds: world.diamonds,
                             kills: world.kills,
                             frames: world.frames,
-                            complete: false,
+                            complete: self.cleared == levels::ALL_CLEARED,
+                            cleared: self.cleared,
                         },
                         &mut events,
                     );
@@ -346,38 +409,18 @@ impl Game {
                     self.enter(Scene::Play);
                 }
             }
-            Scene::Map => {
-                let last = levels::MAP.len() as u8 - 1;
-                let pressed = |key| input.pressed & key != 0;
-                if pressed(crate::keys::RIGHT | crate::keys::DOWN) {
-                    self.cursor = (self.cursor + 1).min(last);
-                } else if pressed(crate::keys::LEFT | crate::keys::UP) {
-                    self.cursor = self.cursor.saturating_sub(1);
-                }
-                if back {
-                    self.return_to_title(title_menu::MAP);
-                } else if confirm && let Some(index) = levels::MAP[self.cursor as usize].level {
-                    self.banked = 0;
-                    self.from_map = true;
-                    self.start_level(index);
-                }
-            }
-            Scene::Paused => {
-                if input.start_pressed() {
-                    self.enter(Scene::Play);
-                }
-            }
+            Scene::Map => self.step_map(input, &mut events),
+            Scene::Paused => self.step_menu(input, &mut events),
             Scene::LevelClear => {
-                if confirm && self.timer >= CLEAR_LOCK_FRAMES {
-                    let next = self.world.level_index + 1;
-                    if self.from_map {
-                        self.open_map(levels::place_of(self.world.level_index) as u8);
-                    } else if (next as usize) < levels::ALL.len() {
+                let skip = confirm && self.timer >= CLEAR_LOCK_FRAMES;
+                if skip || self.timer >= CLEAR_AUTO_FRAMES {
+                    if !self.replay {
                         self.banked += self.world.score();
-                        self.start_level(next);
-                    } else {
-                        self.return_to_title(title_menu::PLAY);
                     }
+                    let from = levels::place_of(self.world.level_index) as u8;
+                    let to = self.frontier_place();
+                    self.open_map(to);
+                    self.map_walk = (from != to && self.fresh == Some(to)).then_some((from, to));
                 }
             }
         }
@@ -473,6 +516,80 @@ impl Game {
         self.enter(Scene::Play);
     }
 
+    /// The world map: Left and Right (or Up and Down) walk between places, A plays an
+    /// unlocked one, B goes back to the title.
+    fn step_map(&mut self, input: &Input, events: &mut Events) {
+        let last = levels::MAP.len() as u8 - 1;
+        let pressed = |key| input.pressed & key != 0;
+        let was = self.cursor;
+        if pressed(crate::keys::RIGHT | crate::keys::DOWN) {
+            self.cursor = (self.cursor + 1).min(last);
+        } else if pressed(crate::keys::LEFT | crate::keys::UP) {
+            self.cursor = self.cursor.saturating_sub(1);
+        }
+        if self.cursor != was {
+            self.map_walk = None;
+            events.insert(Events::MENU_MOVE);
+        }
+        let place = &levels::MAP[self.cursor as usize];
+        if pressed(crate::keys::BACK) {
+            events.insert(Events::MENU_BACK);
+            self.return_to_title(title_menu::MAP);
+        } else if input.start_pressed() || pressed(crate::keys::CONFIRM) {
+            match place.level.filter(|_| place.playable(self.cleared)) {
+                Some(index) => {
+                    events.insert(Events::MENU_OK);
+                    self.start_level(index);
+                }
+                None => events.insert(Events::MENU_DENY),
+            }
+        }
+    }
+
+    /// The pause menu. Left and Right (or L and R) switch tabs; in the bag, Up and Down
+    /// pick an item and A inspects it. B backs out of an inspected item, else closes
+    /// the menu, as Start always does.
+    fn step_menu(&mut self, input: &Input, events: &mut Events) {
+        use crate::keys::{BACK, CONFIRM, DOWN, L, LEFT, R, RIGHT, UP};
+        let pressed = |key| input.pressed & key != 0;
+        let menu = &mut self.menu;
+        if input.start_pressed() || (pressed(BACK) && !menu.inspecting) {
+            events.insert(Events::MENU_BACK);
+            self.latch = input.held;
+            // A charge held into the menu would fire on the way out.
+            self.world.player.charge = 0;
+            self.enter(Scene::Play);
+            return;
+        }
+        if menu.inspecting {
+            if pressed(BACK | CONFIRM) {
+                menu.inspecting = false;
+                events.insert(Events::MENU_BACK);
+            }
+            return;
+        }
+        let tabs = pause_menu::TABS;
+        let items = ITEMS.len() as u8;
+        if pressed(LEFT | L) {
+            menu.tab = (menu.tab + tabs - 1) % tabs;
+            events.insert(Events::MENU_MOVE);
+        } else if pressed(RIGHT | R) {
+            menu.tab = (menu.tab + 1) % tabs;
+            events.insert(Events::MENU_MOVE);
+        } else if menu.tab == pause_menu::BAG {
+            if pressed(UP) {
+                menu.item = (menu.item + items - 1) % items;
+                events.insert(Events::MENU_MOVE);
+            } else if pressed(DOWN) {
+                menu.item = (menu.item + 1) % items;
+                events.insert(Events::MENU_MOVE);
+            } else if pressed(CONFIRM) {
+                menu.inspecting = true;
+                events.insert(Events::MENU_OK);
+            }
+        }
+    }
+
     /// Up and Down move through a menu of `len` rows, wrapping at the ends.
     fn move_cursor(&mut self, input: &Input, len: u8) {
         if input.pressed & crate::keys::UP != 0 {
@@ -487,9 +604,20 @@ impl Game {
         self.cursor = self.file;
     }
 
+    /// Picks up the chosen file (or starts it over) and goes to the title.
+    fn choose_file(&mut self, resume: bool) {
+        self.resume = resume;
+        let run = self.resumable().unwrap_or_default();
+        self.cleared = run.cleared;
+        self.banked = run.banked;
+        self.fresh = None;
+        self.return_to_title(title_menu::PLAY);
+    }
+
     fn open_map(&mut self, place: u8) {
         self.enter(Scene::Map);
         self.cursor = place;
+        self.map_walk = None;
         self.world = World::new(0, self.difficulty);
     }
 
@@ -499,9 +627,14 @@ impl Game {
         self.world = World::new(0, self.difficulty);
     }
 
+    /// Starts level `index` at its beginning. Its arrival plays on a first visit only.
     fn start_level(&mut self, index: u8) {
         self.world = World::new(index, self.difficulty);
-        self.arrival_due = true;
+        self.replay = levels::is_cleared(self.cleared, index);
+        self.arrival_due = !self.replay;
+        if self.fresh == Some(levels::place_of(index) as u8) {
+            self.fresh = None;
+        }
         self.enter(Scene::Intro);
     }
 
@@ -509,33 +642,40 @@ impl Game {
     fn continue_run(&mut self, progress: Progress) {
         self.banked = progress.banked;
         self.world = World::resume(&progress, self.difficulty);
+        self.replay = levels::is_cleared(self.cleared, progress.level);
         self.arrival_due = false;
         self.enter(Scene::Intro);
     }
 
-    /// Writes the active file, unless this is free play from the map.
+    /// Writes the active file.
     fn save_run(&mut self, progress: Progress, events: &mut Events) {
-        if self.from_map {
-            return;
-        }
         self.files[self.file as usize] = Some(progress);
         self.resume = true;
         events.insert(Events::SAVE);
     }
 
+    /// Marks the level cleared, which unlocks the next, and saves. A replay of a cleared
+    /// level banks no score and can't set a best.
     fn finish_level(&mut self, events: &mut Events) {
         self.enter(Scene::LevelClear);
+        let index = self.world.level_index;
         let score = self.score();
-        self.new_best = score > self.best;
+        self.new_best = !self.replay && score > self.best;
         if self.new_best {
             self.best = score;
             events.insert(Events::SAVE);
         }
-        let next = self.world.level_index + 1;
-        let progress = if (next as usize) < levels::ALL.len() {
-            Progress { level: next, banked: score, ..Progress::default() }
-        } else {
-            Progress { banked: score, complete: true, ..Progress::default() }
+        if !self.replay {
+            self.cleared |= 1 << index;
+            let next = index + 1;
+            self.fresh = levels::is_unlocked(self.cleared, next).then(|| levels::place_of(next) as u8);
+        }
+        let progress = Progress {
+            level: levels::frontier(self.cleared),
+            banked: if self.replay { self.banked } else { score },
+            complete: self.cleared == levels::ALL_CLEARED,
+            cleared: self.cleared,
+            ..Progress::default()
         };
         self.save_run(progress, events);
     }
@@ -636,31 +776,192 @@ mod tests {
         assert_eq!(game.scene, Scene::Files);
     }
 
-    #[test]
-    fn map_runs_never_write_a_file() {
-        let mut game = at_title();
-        tap(&mut game, keys::DOWN);
-        tap(&mut game, keys::A);
-        tap(&mut game, keys::A);
-        assert!(game.from_map);
+    /// Clears the level being played, then waits out the clear screen into the map.
+    fn clear_level(game: &mut Game) -> Events {
         let mut events = Events::default();
-        game.save_run(Progress::default(), &mut events);
         game.finish_level(&mut events);
-        assert!(!events.contains(Events::SAVE));
-        assert_eq!(game.files, [None; FILES]);
+        for _ in 0..CLEAR_AUTO_FRAMES {
+            game.step(&Input::default());
+        }
+        assert_eq!(game.scene, Scene::Map, "the map opens on its own");
+        events
     }
 
     #[test]
-    fn clearing_the_last_level_marks_the_file_complete() {
+    fn clearing_level_one_opens_the_map_with_level_two_unlocked() {
         let mut game = at_title();
         tap(&mut game, keys::START);
-        let mut events = Events::default();
-        game.finish_level(&mut events);
+        play_level(&mut game);
+        game.world.diamonds = 5;
+        let level_score = game.world.score();
+        let events = clear_level(&mut game);
         assert!(events.contains(Events::SAVE));
+        assert_eq!(game.cleared, 0b1);
+        use levels::PlaceStatus::*;
+        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, Soon]);
+        assert_eq!(game.cursor, 1, "the cursor waits on the new place");
+        assert_eq!(game.fresh, Some(1));
+        assert_eq!(game.map_walk, Some((0, 1)), "the wassie walks the road there");
+        assert_eq!(game.banked, level_score);
+
+        let file = game.files[0].expect("saved on clear");
+        assert_eq!((file.cleared, file.level, file.checkpoint), (0b1, 1, None));
+        assert!(!file.complete);
+
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.world.level_index), (Scene::Intro, 1));
+        assert_eq!(game.fresh, None, "no longer new once played");
+        assert!(!game.replay);
+    }
+
+    #[test]
+    fn locked_places_refuse_and_cleared_ones_replay() {
+        let mut game = at_title();
+        tap(&mut game, keys::DOWN);
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 0));
+        tap(&mut game, keys::RIGHT);
+        assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY));
+        assert_eq!(game.scene, Scene::Map, "level 2 is locked on a new file");
+        tap(&mut game, keys::RIGHT);
+        tap(&mut game, keys::RIGHT);
+        assert_eq!(game.cursor as usize, levels::MAP.len() - 1, "stops at the east edge");
+        tap(&mut game, keys::A);
+        assert_eq!(game.scene, Scene::Map, "unbuilt places don't start");
+
+        game.cleared = 0b1;
+        game.cursor = 0;
+        tap(&mut game, keys::A);
+        assert_eq!(game.scene, Scene::Intro);
+        assert!(game.replay && !game.arrival_due, "a replay skips the arrival");
+        play_level_card(&mut game);
+        assert_eq!(game.scene, Scene::Play);
+        let banked = game.banked;
+        game.world.diamonds = 50;
+        clear_level(&mut game);
+        assert_eq!(game.banked, banked, "a replay banks nothing");
+        assert!(!game.new_best);
+        assert_eq!(game.cleared, 0b1);
+    }
+
+    #[test]
+    fn clearing_every_level_marks_the_file_complete() {
+        let mut game = at_title();
+        game.cleared = 0b1;
+        game.cursor = title_menu::PLAY;
+        tap(&mut game, keys::START);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 1), "PLAY opens the map between levels");
+        tap(&mut game, keys::A);
+        play_level(&mut game);
+        clear_level(&mut game);
         let file = game.files[0].expect("saved on clear");
         assert!(file.complete);
-        assert_eq!(file.banked, game.score());
-        assert_eq!(game.resumable(), None, "a finished run starts over");
+        assert_eq!(file.cleared, levels::ALL_CLEARED);
+        assert_eq!(game.fresh, None, "nothing left to unlock");
+        assert_eq!(game.map_walk, None);
+        tap(&mut game, keys::B);
+        assert_eq!(game.scene, Scene::Title);
+        tap(&mut game, keys::UP);
+        tap(&mut game, keys::A);
+        assert_eq!(game.scene, Scene::Map, "a finished file replays from the map");
+    }
+
+    #[test]
+    fn progression_comes_back_with_the_file() {
+        let mut game = at_title();
+        tap(&mut game, keys::START);
+        play_level(&mut game);
+        clear_level(&mut game);
+        // Power cycle: a new game from what the cartridge holds.
+        let mut game = Game::with_save(game.best, game.difficulty, game.files);
+        game.open_files();
+        tap(&mut game, keys::A);
+        assert_eq!(game.scene, Scene::FileChoice);
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.cleared), (Scene::Title, 0b1));
+        assert!(game.can_continue());
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 1));
+        assert!(levels::MAP[1].playable(game.cleared));
+
+        // NEW GAME starts from nothing, but only overwrites the file once it saves.
+        game.open_files();
+        tap(&mut game, keys::A);
+        tap(&mut game, keys::DOWN);
+        tap(&mut game, keys::A);
+        assert_eq!((game.cleared, game.banked), (0, 0));
+        assert_eq!(game.files[0].map(|f| f.cleared), Some(0b1));
+    }
+
+    #[test]
+    fn start_opens_the_menu_and_its_tabs_and_items_cycle() {
+        let mut game = at_title();
+        tap(&mut game, keys::START);
+        play_level(&mut game);
+        let x = game.world.player.body.x();
+        assert!(tap(&mut game, keys::START).contains(Events::MENU_OK));
+        assert_eq!((game.scene, game.menu.tab), (Scene::Paused, pause_menu::BAG));
+        tap(&mut game, keys::DOWN);
+        tap(&mut game, keys::DOWN);
+        tap(&mut game, keys::DOWN);
+        assert_eq!(game.menu.item, 0, "the bag wraps");
+        tap(&mut game, keys::UP);
+        assert_eq!(game.menu.item as usize, ITEMS.len() - 1);
+        tap(&mut game, keys::A);
+        assert!(game.menu.inspecting);
+        tap(&mut game, keys::RIGHT);
+        assert_eq!(game.menu.tab, pause_menu::BAG, "tabs hold still while inspecting");
+        tap(&mut game, keys::B);
+        assert_eq!(game.scene, Scene::Paused, "B closes the card first");
+        assert!(!game.menu.inspecting);
+        tap(&mut game, keys::RIGHT);
+        assert_eq!(game.menu.tab, pause_menu::WALLET);
+        tap(&mut game, keys::R);
+        assert_eq!(game.menu.tab, pause_menu::CONTROLS);
+        tap(&mut game, keys::L);
+        tap(&mut game, keys::LEFT);
+        assert_eq!(game.menu.tab, pause_menu::BAG);
+        tap(&mut game, keys::START);
+        assert_eq!(game.scene, Scene::Play);
+        assert_eq!(game.world.player.body.x(), x, "nothing moved");
+        tap(&mut game, keys::START);
+        assert_eq!(game.menu.tab, pause_menu::BAG, "the menu remembers its tab");
+    }
+
+    #[test]
+    fn closing_the_menu_with_b_neither_fires_nor_charges() {
+        let mut game = at_title();
+        tap(&mut game, keys::START);
+        play_level(&mut game);
+        tap(&mut game, keys::START);
+        assert_eq!(game.scene, Scene::Paused);
+        // B goes down and is held well past a full charge.
+        game.step(&Input::from_keys(keys::B, 0));
+        assert_eq!(game.scene, Scene::Play);
+        for _ in 0..crate::world::CHARGE_FRAMES + 10 {
+            game.step(&Input::from_keys(keys::B, keys::B));
+        }
+        assert_eq!(game.world.player.charge, 0, "the held B is ignored");
+        game.step(&Input::default());
+        assert_eq!(game.world.player_shots(), 0);
+        let events = game.step(&Input::from_keys(keys::B, 0));
+        assert!(events.contains(Events::SHOOT), "a fresh press fires again");
+    }
+
+    #[test]
+    fn a_charge_held_into_the_menu_is_dropped() {
+        let mut game = at_title();
+        tap(&mut game, keys::START);
+        play_level(&mut game);
+        for i in 0..crate::world::CHARGE_FRAMES + 5 {
+            game.step(&Input::from_keys(keys::B, if i == 0 { 0 } else { keys::B }));
+        }
+        game.step(&Input::from_keys(keys::B | keys::START, keys::B));
+        assert_eq!(game.scene, Scene::Paused);
+        game.step(&Input::from_keys(keys::START, 0));
+        game.step(&Input::default());
+        assert_eq!(game.scene, Scene::Play);
+        assert!(!game.step(&Input::default()).contains(Events::BEAM));
     }
 
     #[test]
@@ -856,24 +1157,12 @@ mod tests {
     }
 
     #[test]
-    fn the_map_starts_open_levels_and_returns_after_a_clear() {
+    fn a_skipped_clear_screen_opens_the_map_and_b_leaves_it() {
         let mut game = at_title();
         tap(&mut game, keys::DOWN);
         tap(&mut game, keys::A);
-        assert_eq!(game.scene, Scene::Map);
-        assert_eq!(game.cursor, 0);
-        tap(&mut game, keys::RIGHT);
-        tap(&mut game, keys::RIGHT);
-        tap(&mut game, keys::RIGHT);
-        assert_eq!(game.cursor as usize, levels::MAP.len() - 1, "stops at the east edge");
-        tap(&mut game, keys::A);
-        assert_eq!(game.scene, Scene::Map, "unbuilt places don't start");
-        tap(&mut game, keys::LEFT);
-        tap(&mut game, keys::LEFT);
         tap(&mut game, keys::A);
         assert_eq!(game.scene, Scene::Intro);
-        assert!(game.from_map);
-
         play_level(&mut game);
         let mut events = Events::default();
         game.finish_level(&mut events);
@@ -881,8 +1170,7 @@ mod tests {
             game.step(&Input::default());
         }
         tap(&mut game, keys::A);
-        assert_eq!(game.scene, Scene::Map);
-        assert_eq!(game.cursor, 0);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 1));
         tap(&mut game, keys::B);
         assert_eq!(game.scene, Scene::Title);
         assert_eq!(game.cursor, title_menu::MAP);
@@ -896,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_the_last_level_records_best_and_returns_to_title() {
+    fn a_clear_records_best_and_locks_input_at_first() {
         let mut game = at_title();
         tap(&mut game, keys::START);
         game.enter(Scene::Play);
@@ -912,6 +1200,6 @@ mod tests {
             game.step(&Input::default());
         }
         tap(&mut game, keys::A);
-        assert_eq!(game.scene, Scene::Title);
+        assert_eq!(game.scene, Scene::Map);
     }
 }

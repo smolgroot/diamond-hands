@@ -3,6 +3,7 @@
 
 pub mod arrival;
 pub mod badlands;
+pub mod menu;
 pub mod ui;
 pub mod wassie;
 
@@ -885,8 +886,9 @@ impl TileCache {
         let tiles = &mut self.tiles;
         Some(*self.ids.entry(pixels).or_insert_with(|| {
             let mut tile = DynamicTile16::new();
-            for (i, &p) in pixels.iter().enumerate() {
-                tile.set_pixel(i % 8, i / 8, p);
+            // A whole row of the tile per word, a nibble a pixel, leftmost lowest.
+            for (word, row) in tile.data_mut().iter_mut().zip(pixels.chunks_exact(8)) {
+                *word = row.iter().rev().fold(0, |acc, &p| acc << 4 | u32::from(p));
             }
             tiles.push(tile);
             tiles.len() - 1
