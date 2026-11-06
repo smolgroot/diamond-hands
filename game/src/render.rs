@@ -334,10 +334,10 @@ impl Renderer {
                 let mut buf = [0; 10];
                 let n = font::number(game.world.level_index as u32 + 1, &mut buf);
                 let x = (WIDTH - Font::width("LEVEL ", true) - Font::width(n, true)) / 2;
-                self.font.draw(frame, "LEVEL ", x, 40, true);
-                self.font.draw(frame, n, x + Font::width("LEVEL ", true), 40, true);
-                self.font.draw_centred(frame, level.name, 56, true);
-                self.font.draw_centred(frame, level.subtitle, 72, false);
+                self.font.draw(frame, "LEVEL ", x, 36, true);
+                self.font.draw(frame, n, x + Font::width("LEVEL ", true), 36, true);
+                self.font.draw_centred(frame, level.name, 55, true);
+                self.font.draw_centred(frame, level.subtitle, 76, false);
             }
             Scene::Play | Scene::Map | Scene::Splash | Scene::Paused => {}
             Scene::Arrival if game.talking() => self.draw_dialog(game, frame),
@@ -413,8 +413,8 @@ impl Renderer {
     }
 
     fn draw_title(&self, game: &Game, frame: &mut GraphicsFrame) {
-        self.font.draw_centred(frame, "DIAMOND HANDS", 12, true);
-        self.font.draw_centred(frame, "A WASSIE ADVENTURE", 26, false);
+        self.font.draw_centred(frame, "DIAMOND HANDS", 6, true);
+        self.font.draw_centred(frame, "A WASSIE ADVENTURE", 23, false);
 
         let play = if game.can_continue() { "CONTINUE" } else { "PLAY" };
         let items = [
@@ -424,27 +424,38 @@ impl Renderer {
         ];
         let x = (WIDTH - Font::width("CONTINUE", true)) / 2;
         for (i, (row, label)) in items.into_iter().enumerate() {
-            let y = 38 + i as i32 * 13;
+            let y = 36 + i as i32 * 17;
             self.font.draw(frame, label, x, y, true);
             if game.cursor == row {
                 self.draw_cursor(game, frame, x, y);
             }
         }
-        self.label_number(frame, "FILE ", game.file as u32 + 1, 79);
         if game.best > 0 {
-            self.label_number(frame, "BEST ", game.best, 87);
+            // "FILE n" and "BEST n" share a row, two spaces apart.
+            let mut a = [0; 10];
+            let mut b = [0; 10];
+            let file = font::number(game.file as u32 + 1, &mut a);
+            let best = font::number(game.best, &mut b);
+            let parts = ["FILE ", file, "  BEST ", best];
+            let mut x = (WIDTH - parts.iter().map(|p| Font::width(p, false)).sum::<i32>()) / 2;
+            for part in parts {
+                self.font.draw(frame, part, x, 89, false);
+                x += Font::width(part, false);
+            }
+        } else {
+            self.label_number(frame, "FILE ", game.file as u32 + 1, 89);
         }
 
         // Controls, right of where the wassie stands.
-        self.draw_controls(frame, 84, 96);
+        self.draw_controls(frame, 84, 101);
     }
 
     /// The controls list, keys at `x` and what they do in play beside them, from row
     /// `y`. The rows come from the game's own bindings.
     fn draw_controls(&self, frame: &mut GraphicsFrame, x: i32, y: i32) {
-        let (keys_x, action_x) = (x, x + 36);
+        let (keys_x, action_x) = (x, x + 42);
         for (i, binding) in BINDINGS.iter().enumerate() {
-            let y = y + i as i32 * 8;
+            let y = y + i as i32 * 9;
             self.font.draw(frame, controls::label(binding.keys), keys_x, y, false);
             self.font.draw(frame, binding.play, action_x, y, false);
         }
@@ -452,22 +463,30 @@ impl Renderer {
 
     /// The three save files, right of where the wassie stands.
     fn draw_files(&self, game: &Game, frame: &mut GraphicsFrame) {
-        self.font.draw_centred(frame, "SELECT FILE", 12, true);
+        self.font.draw_centred(frame, "SELECT FILE", 8, true);
         let x = 84;
         for i in 0..FILES {
-            let y = 34 + i as i32 * 26;
+            let y = 32 + i as i32 * 27;
             let mut buf = [0; 10];
             self.font.draw(frame, "FILE", x, y, true);
             let n = font::number(i as u32 + 1, &mut buf);
             self.font.draw(frame, n, x + Font::width("FILE ", true), y, true);
-            self.draw_run(frame, game.files[i], x, y + 13);
+            // The score sits on the file's row, against the right edge.
+            if let Some(run) = game.files[i] {
+                let score = font::number(run.score(), &mut buf);
+                self.font.draw_right(frame, score, WIDTH - 4, y + 4, false);
+                let label_right = WIDTH - 4 - Font::width(score, false);
+                self.font.draw_right(frame, "SCORE ", label_right, y + 4, false);
+            }
+            self.draw_run(frame, game.files[i], x, y + 17);
             if game.cursor as usize == i {
                 self.draw_cursor(game, frame, x, y);
             }
         }
     }
 
-    /// A file's run on one small line from (x, y): where it stands and its score.
+    /// A file's run on one small line from (x, y): where it stands. The score is left
+    /// to the caller.
     fn draw_run(&self, frame: &mut GraphicsFrame, run: Option<Progress>, x: i32, y: i32) {
         let Some(run) = run else {
             self.font.draw(frame, "NEW", x, y, false);
@@ -481,16 +500,14 @@ impl Renderer {
         };
         let mut buf = [0; 10];
         if run.complete {
-            text(frame, "ALL CLEAR", "  ");
+            text(frame, "ALL CLEAR", "");
         } else {
             text(frame, diamond_hands_logic::levels::get(run.level).name, "  ");
             if run.beacons > 0 {
                 text(frame, "BEACON", " ");
-                text(frame, font::number(run.beacons as u32, &mut buf), "  ");
+                text(frame, font::number(run.beacons as u32, &mut buf), "");
             }
         }
-        text(frame, "SCORE", " ");
-        text(frame, font::number(run.score(), &mut buf), "");
     }
 
     /// Continue the chosen file's run, or start a new one in it.
@@ -498,49 +515,54 @@ impl Renderer {
         let mut buf = [0; 10];
         let n = font::number(game.file as u32 + 1, &mut buf);
         let x = (WIDTH - Font::width("FILE ", true) - Font::width(n, true)) / 2;
-        self.font.draw(frame, "FILE", x, 12, true);
-        self.font.draw(frame, n, x + Font::width("FILE ", true), 12, true);
+        self.font.draw(frame, "FILE", x, 8, true);
+        self.font.draw(frame, n, x + Font::width("FILE ", true), 8, true);
         let x = 84;
-        self.draw_run(frame, game.files[game.file as usize], x, 30);
+        let run = game.files[game.file as usize];
+        self.draw_run(frame, run, x, 28);
+        if let Some(run) = run {
+            self.label_number_at(frame, "SCORE ", run.score(), x, 37);
+        }
         let rows = [(file_menu::CONTINUE, "CONTINUE"), (file_menu::NEW_GAME, "NEW GAME")];
         for (i, (row, label)) in rows.into_iter().enumerate() {
-            let y = 46 + i as i32 * 13;
+            let y = 51 + i as i32 * 17;
             self.font.draw(frame, label, x, y, true);
             if game.cursor == row {
                 self.draw_cursor(game, frame, x, y);
             }
         }
-        self.font.draw(frame, "THE FILE KEEPS THIS RUN", x, 80, false);
-        self.font.draw(frame, "UNTIL A NEW ONE SAVES.", x, 88, false);
-        self.font.draw(frame, "B: BACK", x, 100, false);
+        self.font.draw(frame, "THE FILE KEEPS THIS RUN", x, 88, false);
+        self.font.draw(frame, "UNTIL A NEW ONE SAVES.", x, 97, false);
+        self.font.draw(frame, "B: BACK", x, 110, false);
     }
 
     fn draw_options(&self, game: &Game, frame: &mut GraphicsFrame) {
-        self.font.draw_centred(frame, "OPTIONS", 14, true);
+        self.font.draw_centred(frame, "OPTIONS", 10, true);
 
-        let x = 40;
-        let row_y = 42;
+        let x = 48;
+        let row_y = 36;
         self.font.draw(frame, "DIFFICULTY", x, row_y, true);
         let (name, about) = match game.difficulty {
             Difficulty::Chill => ("CHILL", "HALF DAMAGE. VILLAINS SHOOT LESS."),
             Difficulty::Normal => ("NORMAL", "THE WILD WEST AS INTENDED."),
             Difficulty::Degen => ("DEGEN", "DOUBLE DAMAGE. FULL SEND."),
         };
-        let value_x = x + Font::width("DIFFICULTY ", true);
-        self.font.draw(frame, "<", value_x, row_y, true);
-        self.font.draw(frame, name, value_x + 10, row_y, true);
+        // The value on its own row under the label: "< NORMAL >".
+        let (value_x, value_y) = (x + 12, row_y + 18);
+        self.font.draw(frame, "<", value_x, value_y, true);
+        self.font.draw(frame, name, value_x + 16, value_y, true);
         self.font
-            .draw(frame, ">", value_x + 12 + Font::width(name, true), row_y, true);
-        self.font.draw_centred(frame, about, row_y + 14, false);
+            .draw(frame, ">", value_x + 18 + Font::width(name, true), value_y, true);
+        self.font.draw_centred(frame, about, value_y + 21, false);
 
-        let back_y = 72;
+        let back_y = 92;
         self.font.draw(frame, "BACK", x, back_y, true);
         let cursor_y = if game.cursor == options_menu::DIFFICULTY { row_y } else { back_y };
         self.draw_cursor(game, frame, x, cursor_y);
 
         self.font
-            .draw_centred(frame, "UP/DOWN: SELECT   LEFT/RIGHT: CHANGE", 94, false);
-        self.font.draw_centred(frame, "B: BACK", 104, false);
+            .draw_centred(frame, "UP/DOWN: SELECT   LEFT/RIGHT: CHANGE", 120, false);
+        self.font.draw_centred(frame, "B: BACK", 130, false);
     }
 
     /// The speaker's portrait beside the line of dialogue (painted into the box by
@@ -579,31 +601,31 @@ impl Renderer {
         let built = font::number(diamond_hands_logic::levels::ALL.len() as u32, &mut total);
         let tally_w = Font::width("CLEARED ", false) + Font::width(cleared, false) + Font::width("/", false);
         let x = (WIDTH - tally_w - Font::width(built, false)) / 2;
-        self.font.draw(frame, "CLEARED", x, 22, false);
-        self.font.draw(frame, cleared, x + Font::width("CLEARED ", false), 22, false);
-        self.font.draw(frame, "/", x + tally_w - Font::width("/", false), 22, false);
-        self.font.draw(frame, built, x + tally_w, 22, false);
+        self.font.draw(frame, "CLEARED", x, 24, false);
+        self.font.draw(frame, cleared, x + Font::width("CLEARED ", false), 24, false);
+        self.font.draw(frame, "/", x + tally_w - Font::width("/", false), 24, false);
+        self.font.draw(frame, built, x + tally_w, 24, false);
 
         let index = (game.cursor as usize).min(MAP.len() - 1);
         let place = &MAP[index];
         let status = place.status(game.cleared);
-        self.font.draw_centred(frame, place.name, 114, true);
+        self.font.draw_centred(frame, place.name, 113, true);
         match status {
-            PlaceStatus::Cleared => self.font.draw_centred(frame, "CLEARED", 132, false),
+            PlaceStatus::Cleared => self.font.draw_centred(frame, "CLEARED", 130, false),
             PlaceStatus::Open if game.fresh == Some(index as u8) => {
-                self.font.draw_centred(frame, "NEW! UNLOCKED", 132, false)
+                self.font.draw_centred(frame, "NEW! UNLOCKED", 130, false)
             }
-            PlaceStatus::Open => self.font.draw_centred(frame, "UNLOCKED", 132, false),
+            PlaceStatus::Open => self.font.draw_centred(frame, "UNLOCKED", 130, false),
             PlaceStatus::Locked => {
                 let before = MAP[index.saturating_sub(1)].name;
                 let w = Font::width("LOCKED: CLEAR ", false) + Font::width(before, false);
                 let x = (WIDTH - w) / 2;
-                self.font.draw(frame, "LOCKED: CLEAR", x, 132, false);
-                self.font.draw(frame, before, x + Font::width("LOCKED: CLEAR ", false), 132, false);
+                self.font.draw(frame, "LOCKED: CLEAR", x, 130, false);
+                self.font.draw(frame, before, x + Font::width("LOCKED: CLEAR ", false), 130, false);
             }
-            PlaceStatus::Soon => self.font.draw_centred(frame, "COMING SOON", 132, false),
+            PlaceStatus::Soon => self.font.draw_centred(frame, "COMING SOON", 130, false),
         }
-        self.font.draw_centred(frame, place.blurb, 142, false);
+        self.font.draw_centred(frame, place.blurb, 141, false);
         let hint = if place.playable(game.cleared) { "A: PLAY   B: BACK" } else { "B: BACK" };
         self.font.draw_centred(frame, hint, 152, false);
 
@@ -659,7 +681,7 @@ impl Renderer {
         match m.tab {
             pause_menu::BAG if !m.inspecting => {
                 let (cx, cy) = menu::item_cursor(m.item);
-                self.draw_cursor(game, frame, cx + 12, cy + 1);
+                self.draw_cursor(game, frame, cx + 12, cy - 1);
                 let (fx, feet) = menu::WASSIE_FEET;
                 let (x, y) = (fx - wassie::CENTRE_COL, feet - 31);
                 let [(body, bdx), (blaster, gdx)] = self.wassie.standing(game.frame);
@@ -696,7 +718,7 @@ impl Renderer {
     /// Arrow left of a menu item at (x, y), nudging forward and back.
     fn draw_cursor(&self, game: &Game, frame: &mut GraphicsFrame, x: i32, y: i32) {
         let nudge = (game.frame / 16 % 2) as i32;
-        show(frame, &self.common.cursor, x - 12 + nudge, y - 1);
+        show(frame, &self.common.cursor, x - 12 + nudge, y + 1);
     }
 
     fn draw_hud(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -711,15 +733,15 @@ impl Renderer {
         let mut buf = [0; 10];
         show(frame, &self.common.diamond[0], 70, 0);
         self.font
-            .draw(frame, font::number(world.diamonds, &mut buf), 86, 6, false);
+            .draw(frame, font::number(world.diamonds, &mut buf), 86, 5, false);
         let score = font::number(game.score(), &mut buf);
         self.font
-            .draw(frame, score, WIDTH - 4 - Font::width(score, false), 6, false);
+            .draw(frame, score, WIDTH - 4 - Font::width(score, false), 5, false);
 
         if world.boss.is_active() && !world.boss.is_beaten() {
             let y = 148;
             let name = world.level.boss_name;
-            self.font.draw(frame, name, 4, y + 1, false);
+            self.font.draw(frame, name, 4, y, false);
             let bar_x = (8 + Font::width(name, false) + 4).max(56);
             let full = world.boss.hp * 64 / diamond_hands_logic::boss::BOSS_HP;
             for i in 0..8 {
@@ -737,6 +759,13 @@ impl Renderer {
         self.font.draw(frame, label, x, y, false);
         self.font
             .draw(frame, digits, x + Font::width(label, false), y, false);
+    }
+
+    /// `label` then `n`, from (x, y).
+    fn label_number_at(&self, frame: &mut GraphicsFrame, label: &str, n: u32, x: i32, y: i32) {
+        let mut buf = [0; 10];
+        self.font.draw(frame, label, x, y, false);
+        self.font.draw(frame, font::number(n, &mut buf), x + Font::width(label, false), y, false);
     }
 
     fn label_time(&self, frame: &mut GraphicsFrame, seconds: u32, y: i32) {

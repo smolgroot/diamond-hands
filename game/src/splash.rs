@@ -33,10 +33,10 @@ static PALETTES: &[u8; 512] = include_bytes!("../gfx/splash.pal");
 /// The prompt blinks on and off every this many frames.
 const PROMPT_BLINK: u32 = 32;
 /// Prompt row: over the blaster, clear of the title and the wassie's face.
-const PROMPT_Y: i32 = 140;
+const PROMPT_Y: i32 = 136;
 /// The band darkened behind the prompt, so it reads over the busy art.
 const BAND_TOP: i32 = PROMPT_Y - 3;
-const BAND_HEIGHT: i32 = 16;
+const BAND_HEIGHT: i32 = 21;
 
 pub struct Splash {
     cover: RegularBackground,
