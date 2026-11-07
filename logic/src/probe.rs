@@ -38,11 +38,21 @@ pub struct Probe {
     pub cleared: u32,
     /// The pause menu: tab, item << 8, and 1 << 16 while an item is inspected.
     pub menu: u32,
+    /// Gold coins picked up in this level.
+    pub coins: u32,
+    /// The file's banked diamonds, kept coins and shield parts.
+    pub wallet: u32,
+    pub purse: u32,
+    pub parts: u32,
+    /// The elevator's [`crate::world::LiftState`], or `u32::MAX` for none.
+    pub lift: u32,
+    /// The penguin's [`crate::game::Deal`] while the exchange is open, else `u32::MAX`.
+    pub deal: u32,
 }
 
 impl Probe {
     pub const MAGIC: u32 = u32::from_le_bytes(*b"DHPR");
-    pub const VERSION: u32 = 5;
+    pub const VERSION: u32 = 6;
     pub const WORDS: usize = size_of::<Probe>() / 4;
 
     /// The value the ROM starts with, before the first frame runs.
@@ -69,6 +79,12 @@ impl Probe {
         shots: 0,
         cleared: 0,
         menu: 0,
+        coins: 0,
+        wallet: 0,
+        purse: 0,
+        parts: 0,
+        lift: 0,
+        deal: 0,
     };
 
     pub fn from_game(game: &Game) -> Self {
@@ -94,6 +110,12 @@ impl Probe {
             shots: world.player_shots() as u32,
             cleared: game.cleared as u32,
             menu: game.menu.tab as u32 | (game.menu.item as u32) << 8 | (game.menu.inspecting as u32) << 16,
+            coins: world.coins,
+            wallet: game.wallet,
+            purse: game.purse,
+            parts: (game.parts | world.parts) as u32,
+            lift: world.lift.map_or(u32::MAX, |l| l.state as u32),
+            deal: if game.scene == crate::Scene::Exchange { game.exchange.deal as u32 } else { u32::MAX },
             ..Self::BOOT
         }
     }
@@ -113,8 +135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_is_twenty_two_words() {
-        assert_eq!(Probe::WORDS, 22);
+    fn layout_is_twenty_eight_words() {
+        assert_eq!(Probe::WORDS, 28);
     }
 
     #[test]

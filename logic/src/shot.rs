@@ -4,6 +4,8 @@
 use crate::{FX, level::Level, level::Tile, physics::Rect};
 
 pub const MAX_SHOTS: usize = 24;
+/// Gravity on a thrown cucumber, per frame.
+pub const GRAVITY_FX_SHOT: i32 = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -20,6 +22,16 @@ pub enum ShotKind {
     Shockwave,
     /// Missiles raining down in the mech's last phase.
     Missile,
+    /// Playing cards a Dealer deals.
+    Card,
+    /// SAM's thrown cucumber: it arcs under gravity.
+    Cucumber,
+    /// CUCUMBER HIT: SAM's giant cucumber, fast and flat, knocking the wassie flying.
+    MegaCucumber,
+    /// MARKET CRASH: red candles dropping out of the chart.
+    Candle,
+    /// MARKET CRASH: magenta energy off SAM's exchange implants.
+    Orb,
 }
 
 impl ShotKind {
@@ -36,14 +48,19 @@ impl ShotKind {
             ShotKind::Bomb => (8, 8),
             ShotKind::Shockwave => (10, 12),
             ShotKind::Missile => (6, 12),
+            ShotKind::Card => (6, 6),
+            ShotKind::Cucumber => (10, 6),
+            ShotKind::MegaCucumber => (24, 10),
+            ShotKind::Candle => (6, 14),
+            ShotKind::Orb => (6, 6),
         }
     }
 
     pub fn damage(self) -> i32 {
         match self {
-            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Bomb => 1,
-            ShotKind::Shockwave | ShotKind::Missile => 2,
-            ShotKind::Beam => 3,
+            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Bomb | ShotKind::Card | ShotKind::Orb => 1,
+            ShotKind::Shockwave | ShotKind::Missile | ShotKind::Cucumber | ShotKind::Candle => 2,
+            ShotKind::Beam | ShotKind::MegaCucumber => 3,
         }
     }
 
@@ -53,6 +70,21 @@ impl ShotKind {
             ShotKind::Bolt => 45,
             ShotKind::Beam => 50,
             _ => 240,
+        }
+    }
+
+    /// Knocks the wassie back much harder than an ordinary hit.
+    pub fn heavy(self) -> bool {
+        self == ShotKind::MegaCucumber
+    }
+
+    /// Falls under gravity: per-frame increase in downward speed, and its limit.
+    fn gravity(self) -> Option<(i32, i32)> {
+        match self {
+            ShotKind::Missile | ShotKind::Bomb => Some((24, 3 * FX)),
+            ShotKind::Cucumber => Some((GRAVITY_FX_SHOT, 4 * FX)),
+            ShotKind::Candle => Some((10, 2 * FX)),
+            _ => None,
         }
     }
 
@@ -109,8 +141,8 @@ impl Shot {
 
     /// Moves one frame; fizzles on running out of life or into rock.
     pub fn update(&mut self, level: &Level) {
-        if self.kind == ShotKind::Missile || self.kind == ShotKind::Bomb {
-            self.vy_fx = (self.vy_fx + 24).min(3 * FX);
+        if let Some((g, max)) = self.kind.gravity() {
+            self.vy_fx = (self.vy_fx + g).min(max);
         }
         self.x_fx += self.vx_fx;
         self.y_fx += self.vy_fx;

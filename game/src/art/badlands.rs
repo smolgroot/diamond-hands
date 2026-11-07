@@ -1,6 +1,6 @@
 //! Level 1, the Badlands: a dystopian dusk over a ruined city, mossy cliffs with
 //! crystal veins, steel girders and energy spikes; the cyber bots that guard it, and
-//! BERA 3000. The Solana Trenches reuse these shapes under their own palettes.
+//! BERA 3000. The bots go on to guard the Solana Trenches too.
 
 use agb::display::{
     Palette16, Rgb15,
@@ -69,34 +69,11 @@ pub static SKY_PALETTES: [Palette16; 3] = [
     ),
 ];
 
-/// The Solana Trenches: the same skyline relit as a neon casino strip. Magenta dusk
-/// over teal and pink signs, a deep violet night, then a gold jackpot glow.
-pub static TRENCHES_SKY_PALETTES: [Palette16; 3] = [
-    sky_palette(
-        [(3, 1, 10), (14, 2, 20), (28, 6, 22)],
-        [(22, 31, 29), (14, 24, 24), (6, 14, 16)],
-        (24, 31, 30),
-        [(9, 3, 16), (4, 1, 9), (18, 6, 24), (8, 31, 26), (31, 10, 26)],
-    ),
-    sky_palette(
-        [(1, 1, 6), (6, 2, 16), (16, 4, 22)],
-        [(18, 28, 27), (11, 20, 21), (5, 11, 13)],
-        (22, 30, 30),
-        [(5, 2, 12), (2, 1, 6), (12, 4, 20), (8, 31, 26), (31, 8, 24)],
-    ),
-    sky_palette(
-        [(4, 1, 8), (18, 2, 14), (31, 20, 6)],
-        [(31, 28, 14), (28, 18, 8), (18, 8, 6)],
-        (31, 30, 20),
-        [(8, 2, 8), (4, 1, 4), (22, 6, 14), (31, 28, 8), (31, 8, 20)],
-    ),
-];
-
 /// The backdrop palettes for a level's theme, one per stage.
 pub fn sky_palettes(theme: Theme) -> &'static [Palette16; 3] {
     match theme {
         Theme::Badlands => &SKY_PALETTES,
-        Theme::Trenches => &TRENCHES_SKY_PALETTES,
+        Theme::Trenches => &super::trenches::SKY_PALETTES,
     }
 }
 
@@ -169,34 +146,11 @@ const GROUND_COLOURS: [(u16, u16, u16); 16] = [
     (31, 6, 22),
 ];
 
-/// The Trenches' ground: teal neon where the moss was, violet rock, gold trim.
-const TRENCHES_GROUND_COLOURS: [(u16, u16, u16); 16] = [
-    (0, 0, 0),
-    (3, 1, 7),
-    (10, 31, 26),
-    (4, 21, 20),
-    (2, 11, 13),
-    (15, 9, 25),
-    (9, 5, 17),
-    (4, 2, 10),
-    (31, 26, 10),
-    (22, 15, 4),
-    (10, 6, 3),
-    (31, 20, 29),
-    (27, 6, 22),
-    (14, 2, 14),
-    (26, 24, 28),
-    (31, 6, 22),
-];
-
 /// Terrain palette for a theme and stage: as drawn at dusk, dimmer at night, and
 /// red-lit in the last stretch.
-pub fn ground_palette(theme: Theme, stage: u8, fence: u8) -> Palette16 {
+pub fn ground_palette(stage: u8, fence: u8) -> Palette16 {
     let (num, den, red) = [(1, 1, 0), (4, 5, 0), (3, 4, 4)][stage.min(2) as usize];
-    let base = match theme {
-        Theme::Badlands => &GROUND_COLOURS,
-        Theme::Trenches => &TRENCHES_GROUND_COLOURS,
-    };
+    let base = &GROUND_COLOURS;
     let mut colours = [rgb(0, 0, 0); 16];
     for (i, (out, &(r, g, b))) in colours.iter_mut().zip(base.iter()).enumerate() {
         // Energy spikes and crystals keep their glow.
@@ -558,7 +512,8 @@ pub struct Villains {
     pub bomb: SpriteVram,
     pub shockwave: SpriteVram,
     pub missile: SpriteVram,
-    pub bera: Bera,
+    /// Sparks circling something dazed: a stalled boss, a knocked-back wassie.
+    pub star: SpriteVram,
 }
 
 /// Sentry bot, facing left: red armour, red visor, a steel arm cannon. The body is
@@ -732,7 +687,7 @@ impl Villains {
             bomb: drawing(Size::S8x8, 0, 0, &BOMB),
             shockwave: drawing(Size::S16x16, 3, 4, &SHOCKWAVE),
             missile: drawing(Size::S8x16, 1, 2, &MISSILE),
-            bera: Bera::new(),
+            star: drawing(Size::S8x8, 1, 1, &["..y..", ".yoy.", "yowoy", ".yoy.", "..y.."]),
         }
     }
 }
@@ -774,8 +729,6 @@ pub struct Bera {
     /// Hunched and charging, 64x32 with the feet on row 31; [`Bera::head`] goes on top
     /// at [`BERA_CHARGE_HEAD_AT`].
     pub charge: SpriteVram,
-    /// Sparks circling a stalled mech.
-    pub star: SpriteVram,
     /// Her head, facing left, for the dialogue box: the same sprite as [`Bera::head`].
     pub portrait: SpriteVram,
 }
@@ -841,7 +794,7 @@ fn fist(c: &mut Canvas, x: i32, y: i32, w: i32) {
 }
 
 impl Bera {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let head = bera_head(true);
         Self {
             portrait: head.clone(),
@@ -853,7 +806,6 @@ impl Bera {
             core: [bera_core(false), bera_core(true)],
             smoke: drawing(Size::S8x8, 1, 1, &["..gg..", ".gSSg.", "gSSSgg", "gSggGg", ".gGGg.", "..gg.."]),
             charge: bera_charging(),
-            star: drawing(Size::S8x8, 1, 1, &["..y..", ".yoy.", "yowoy", ".yoy.", "..y.."]),
         }
     }
 }

@@ -21,6 +21,10 @@ pub enum FxKind {
     Dust,
     /// Dust kicked out both ways when the wassie jumps or lands hard.
     Kick,
+    /// A gold coin flipping up out of a beaten bot, a pickup or the boss's stash.
+    CoinPop,
+    /// A cucumber bursting on impact.
+    Splat,
 }
 
 impl FxKind {
@@ -34,6 +38,8 @@ impl FxKind {
             FxKind::Puff => 14,
             FxKind::Dust => 15,
             FxKind::Kick => 12,
+            FxKind::CoinPop => 24,
+            FxKind::Splat => 12,
         }
     }
 }

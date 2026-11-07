@@ -3,7 +3,9 @@
 
 pub mod arrival;
 pub mod badlands;
+pub mod casino;
 pub mod menu;
+pub mod trenches;
 pub mod ui;
 pub mod wassie;
 

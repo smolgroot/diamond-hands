@@ -104,7 +104,7 @@ impl Aim {
     /// match the blaster drawings in game/src/art/wassie.rs.
     fn muzzle(self) -> (i32, i32) {
         match self {
-            Aim::Forward => (21, 14),
+            Aim::Forward => (23, 14),
             Aim::UpForward => (17, 8),
             Aim::Up => (0, -20),
             Aim::DownForward => (16, 25),
@@ -288,6 +288,12 @@ impl Player {
     /// Takes `damage` from something at `from_x`, knocking the player away from it.
     /// Returns false when invulnerable.
     pub fn hurt_by(&mut self, damage: i32, from_x: i32) -> bool {
+        self.knocked(damage, from_x, false)
+    }
+
+    /// Like [`Player::hurt_by`]; a `heavy` hit throws the wassie much further and keeps
+    /// it reeling a little longer.
+    pub fn knocked(&mut self, damage: i32, from_x: i32, heavy: bool) -> bool {
         if self.invuln > 0 || self.is_dead() {
             return false;
         }
@@ -298,14 +304,20 @@ impl Player {
         self.land = 0;
         self.hovering = false;
         let away = if self.body.rect().centre_x() < from_x { -1 } else { 1 };
-        self.body.vx_fx = away * 3 * FX / 2;
-        self.body.vy_fx = -2 * FX;
+        if heavy {
+            self.hurt = HURT_FRAMES + 10;
+            self.body.vx_fx = away * 4 * FX;
+            self.body.vy_fx = -3 * FX;
+        } else {
+            self.body.vx_fx = away * 3 * FX / 2;
+            self.body.vy_fx = -2 * FX;
+        }
         self.grounded = false;
         true
     }
 }
 
-fn approach(value: i32, target: i32, step: i32) -> i32 {
+pub(crate) fn approach(value: i32, target: i32, step: i32) -> i32 {
     if value > target {
         (value - step).max(target)
     } else {
@@ -318,16 +330,10 @@ mod tests {
     use super::*;
     use crate::{
         game::keys,
-        level::Theme,
         physics::Body,
     };
 
     const FLAT: Level = Level {
-        name: "TEST",
-        subtitle: "",
-        theme: Theme::Badlands,
-        boss_name: "",
-        boss_talk: &[],
         rows: &[
             "........................................",
             "........................................",
@@ -341,6 +347,7 @@ mod tests {
             "........................................",
             "########################################",
         ],
+        ..Level::BASE
     };
 
     fn player() -> Player {

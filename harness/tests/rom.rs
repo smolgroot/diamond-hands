@@ -29,6 +29,7 @@ fn scene(probe: &Probe) -> Scene {
         9 => Scene::Files,
         10 => Scene::FileChoice,
         11 => Scene::Arrival,
+        12 => Scene::Exchange,
         other => panic!("unknown scene {other}"),
     }
 }
@@ -64,11 +65,12 @@ fn boot_to_files_from_prompt(runner: &mut Runner) -> Probe {
 
 /// Presses `keys` like a player would: held until the game has read them, then let go
 /// until it has seen them released. Menu screens can take several video frames to
-/// draw, so a one-frame tap may fall between two reads.
+/// draw (the map paints itself when it opens, a level repaints its backdrop), so a
+/// one-frame tap may fall between two reads.
 fn press(runner: &mut Runner, keys: u16) -> Probe {
     for held in [keys, 0] {
         let read = runner.expect_probe().frame + 2;
-        runner.run_until(30, held, |p| p.frame >= read);
+        runner.run_until(5 * SECOND, held, |p| p.frame >= read);
     }
     runner.expect_probe()
 }
@@ -323,19 +325,21 @@ fn the_map_starts_the_badlands_and_keeps_the_trenches_locked() {
     assert_eq!(runner.expect_probe().cursor, title_menu::MAP as u32);
     runner.tap(keys::A);
     runner.run_until(5, 0, |p| scene(p) == Scene::Map);
-    runner.frames(2, 0);
+    // The map paints itself as it opens.
+    let open = runner.expect_probe().frame + 2;
+    runner.run_until(5 * SECOND, 0, |p| p.frame >= open);
     screenshot(&runner, "map-badlands");
     let first = runner.frame_hash();
-    runner.tap(keys::RIGHT);
+    let moved = press(&mut runner, keys::RIGHT);
     runner.frames(2, 0);
-    assert_eq!(runner.expect_probe().cursor, 1);
+    assert_eq!(moved.cursor, 1);
     assert_ne!(runner.frame_hash(), first, "the map shows the other place");
     screenshot(&runner, "map-solana");
-    runner.tap(keys::A);
+    press(&mut runner, keys::A);
     runner.frames(2, 0);
     assert_eq!(scene(&runner.expect_probe()), Scene::Map, "locked on a new file");
-    runner.tap(keys::LEFT);
-    runner.tap(keys::A);
+    press(&mut runner, keys::LEFT);
+    press(&mut runner, keys::A);
     runner.run_until(10, 0, |p| scene(p) == Scene::Intro);
 }
 
@@ -366,6 +370,11 @@ fn rom_matches_host_model_frame_by_frame() {
 /// host model alongside and checking the two agree every frame, up to the level-clear
 /// screen. Returns the model.
 fn clear_badlands_in_step(runner: &mut Runner) -> Game {
+    clear_badlands_with_keys(runner).0
+}
+
+/// [`clear_badlands_in_step`], also returning the keys held on the last frame.
+fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
     let ready = boot_to_splash_prompt(runner);
     let mut model = Game::new(ready.best);
     while model.frame < ready.frame {
@@ -432,7 +441,159 @@ fn clear_badlands_in_step(runner: &mut Runner) -> Game {
     assert!(saw_dialog, "BERA 3000 should have her say");
     assert_eq!(beats_seen, 0b11_1111, "CL207's welcome should play every beat");
     assert_eq!(scene(&end), Scene::LevelClear, "the bot should beat the Badlands: {end:?}");
-    model
+    (model, previous)
+}
+
+/// Steps the ROM and the model one game frame with `keys`. The ROM may take several
+/// video frames over one (entering a level repaints its backdrop), so the keys are held
+/// until it has read them. Panics if the two disagree.
+fn step_in_sync(runner: &mut Runner, model: &mut Game, keys: u16, previous: u16, what: &str) {
+    let next = model.frame + 1;
+    runner.run_until(10 * SECOND, keys, |p| p.frame >= next);
+    model.step(&Input::from_keys(keys, previous));
+    let probe = runner.expect_probe();
+    assert_eq!(probe, Probe::from_game(model), "ROM diverged from the model: {what}");
+}
+
+/// Level 2 end to end on the ROM, in step with the model: CL207's call, the street,
+/// the casino floor, the elevator, the upper floors, SAM's fight, the penguin's
+/// exchange (accepted) and the clear, which unlocks level 3 on the map. Screenshots
+/// each area with `DIAMOND_HANDS_SHOTS` set.
+#[test]
+fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
+    use diamond_hands_logic::{boss::BossState, game::Deal, world::LiftState};
+    let mut runner = Runner::new(&read_rom());
+    let (mut model, mut previous) = clear_badlands_with_keys(&mut runner);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut shot = |runner: &Runner, name: &str| {
+        if seen.insert(name.to_string()) {
+            screenshot(runner, name);
+        }
+    };
+    let mut wallet_before = None;
+    let mut diamonds_here = 0;
+    let mut coins_offered = 0;
+    let (mut rode, mut swung, mut crashed, mut overloaded) = (false, false, false, false);
+    let mut talk_frames = 0u32;
+    for i in 0..(400 * SECOND) {
+        let level2 = model.world.level_index == 1;
+        let keys = match model.scene {
+            Scene::LevelClear if model.scene_frames() > diamond_hands_logic::game::CLEAR_LOCK_FRAMES + 4 => {
+                if i % 2 == 0 { keys::A } else { 0 }
+            }
+            Scene::Map if model.scene_frames() > MAP_WALK_FRAMES + 8 && model.cleared == 0b1 => {
+                if i % 2 == 0 { keys::A } else { 0 }
+            }
+            Scene::Play => bot::keys_for(&model.world, previous),
+            Scene::Dialog | Scene::Exchange if model.talking() => {
+                talk_frames += 1;
+                if talk_frames % 40 == 0 { keys::A } else { 0 }
+            }
+            _ => 0,
+        };
+        let what = format!("step {i}, {:?}", model.scene);
+        step_in_sync(&mut runner, &mut model, keys, previous, &what);
+        previous = keys;
+        if model.scene == Scene::Map && model.cleared == 0b11 {
+            if model.scene_frames() == MAP_WALK_FRAMES / 2 {
+                shot(&runner, "t2-map-walk");
+            }
+            if model.scene_frames() == MAP_WALK_FRAMES + 20 {
+                shot(&runner, "t2-map-ethereum-unlocked");
+                break;
+            }
+            continue;
+        }
+        if !level2 && model.world.level_index != 1 {
+            continue;
+        }
+        let w = &model.world;
+        match model.scene {
+            Scene::Intro if model.scene_frames() == 60 => shot(&runner, "t2-intro"),
+            Scene::Dialog if model.ringing() && model.scene_frames() == 30 => shot(&runner, "t2-call-ringing"),
+            Scene::Dialog if model.talking() && model.talk_line < 2 && talk_frames % 40 == 30 => {
+                shot(&runner, &format!("t2-call-{}", model.talk_line))
+            }
+            Scene::Dialog if model.talking() && talk_frames % 40 == 30 && w.arena => {
+                shot(&runner, &format!("t2-sam-talk-{}", model.talk_line))
+            }
+            Scene::Play => {
+                let cam = w.camera_x;
+                for (x, name) in [(150, "t2-street"), (420, "t2-street-awning"), (640, "t2-casino-entrance"), (760, "t2-casino-tables"), (1000, "t2-casino-balcony"), (1120, "t2-secret-stage"), (1580, "t2-upper-servers"), (1700, "t2-upper-vault"), (1950, "t2-upper-guards")] {
+                    if cam >= x && cam < x + 4 {
+                        shot(&runner, name);
+                    }
+                }
+                if let Some(lift) = w.lift {
+                    match lift.state {
+                        LiftState::Powering if lift.timer == 40 => shot(&runner, "t2-lift-powering"),
+                        LiftState::Open if lift.timer == 4 => shot(&runner, "t2-lift-open"),
+                        LiftState::Riding if lift.timer == 12 => shot(&runner, "t2-lift-riding"),
+                        LiftState::Arriving if lift.timer == 10 => shot(&runner, "t2-lift-arriving"),
+                        LiftState::Done => rode = true,
+                        _ => {}
+                    }
+                }
+                let b = &w.boss;
+                match b.state {
+                    BossState::Throw if b.timer == 10 => shot(&runner, "t2-sam-throw"),
+                    BossState::Windup if b.timer == 20 => {
+                        shot(&runner, if b.phase() == 1 { "t2-sam-windup" } else { "t2-sam-windup-overloaded" })
+                    }
+                    BossState::Swing => {
+                        swung = true;
+                        if b.timer == 12 {
+                            shot(&runner, "t2-sam-cucumber-hit");
+                        }
+                    }
+                    BossState::Barrage => {
+                        crashed = true;
+                        if b.timer == 50 {
+                            shot(&runner, "t2-sam-market-crash");
+                        }
+                    }
+                    BossState::Overload => {
+                        overloaded = true;
+                        if b.timer == 30 {
+                            shot(&runner, "t2-sam-overload");
+                        }
+                    }
+                    BossState::Dying if b.timer == 90 => shot(&runner, "t2-sam-defeat"),
+                    BossState::Dying if b.timer == 20 => shot(&runner, "t2-sam-down"),
+                    _ => {}
+                }
+            }
+            Scene::Exchange => {
+                wallet_before.get_or_insert(model.wallet);
+                diamonds_here = model.world.diamonds;
+                let t = model.scene_frames();
+                match model.exchange.deal {
+                    Deal::Walk if t == 40 => shot(&runner, "t2-penguin-arrives"),
+                    Deal::Pitch if talk_frames % 40 == 30 => shot(&runner, &format!("t2-penguin-pitch-{}", model.talk_line)),
+                    Deal::Offer => {
+                        coins_offered = model.exchange.coins;
+                        if t == 20 {
+                            shot(&runner, "t2-exchange-offer");
+                        }
+                    }
+                    Deal::Payout if t == 45 => shot(&runner, "t2-exchange-payout"),
+                    Deal::Bye if t == 30 => shot(&runner, "t2-exchange-bye"),
+                    _ => {}
+                }
+            }
+            Scene::LevelClear if model.scene_frames() == 60 => shot(&runner, "t2-level-clear"),
+            _ => {}
+        }
+    }
+    let end = runner.expect_probe();
+    assert!(rode, "the bot rode the elevator");
+    assert!(swung && crashed && overloaded, "SAM used his attacks: hit {swung}, crash {crashed}, overload {overloaded}");
+    assert!(coins_offered > 0, "the penguin had coins to change");
+    assert_eq!(end.cleared, 0b11, "the Trenches are cleared: {end:?}");
+    assert_eq!((scene(&end), end.cursor), (Scene::Map, 2), "the map moves on to level 3");
+    let expected = wallet_before.unwrap() + coins_offered * diamond_hands_logic::game::EXCHANGE_RATE + diamonds_here;
+    assert_eq!(end.wallet, expected, "8 diamonds a coin, plus the level's own, banked once");
+    assert_eq!(end.purse, 0);
 }
 
 /// Clearing the Badlands: the clear screen hands over to the world map on its own,
@@ -457,8 +618,11 @@ fn clearing_the_badlands_opens_the_map_and_unlocks_the_trenches_for_good() {
 
     let intro = press(&mut runner, keys::A);
     assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
-    let play = runner.run_until(INTRO_FRAMES as usize + SECOND, 0, |p| scene(p) == Scene::Play);
-    assert_eq!(play.level, 1, "no arrival scene in the Trenches");
+    // CL207 calls on the first visit; Start ignores the call.
+    let call = runner.run_until(INTRO_FRAMES as usize + SECOND, 0, |p| scene(p) != Scene::Intro);
+    assert_eq!((scene(&call), call.level), (Scene::Dialog, 1), "CL207 calls in the Trenches");
+    let play = press(&mut runner, keys::START);
+    assert_eq!((scene(&play), play.level), (Scene::Play, 1));
     runner.frames(60, keys::RIGHT);
     screenshot(&runner, "trenches");
 
@@ -485,6 +649,8 @@ fn clearing_the_badlands_opens_the_map_and_unlocks_the_trenches_for_good() {
     rebooted.tap(keys::A);
     let map = rebooted.run_until(5, 0, |p| scene(p) == Scene::Map);
     assert_eq!(map.cursor, 1, "PLAY opens the map on the Trenches");
+    // The map paints itself as it opens; the A from the title must be seen let go.
+    rebooted.run_until(5 * SECOND, 0, |p| p.frame >= map.frame + 2);
     let intro = press(&mut rebooted, keys::A);
     assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
 }

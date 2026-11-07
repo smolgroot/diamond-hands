@@ -197,14 +197,8 @@ pub fn tiles_in(r: &Rect) -> impl Iterator<Item = (i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level::Theme;
 
     const ROOM: Level = Level {
-        name: "TEST",
-        subtitle: "",
-        theme: Theme::Badlands,
-        boss_name: "",
-        boss_talk: &[],
         rows: &[
             "..........",
             "..........",
@@ -215,6 +209,7 @@ mod tests {
             "......^...",
             "##########",
         ],
+        ..Level::BASE
     };
 
     fn body(x: i32, y: i32) -> Body {

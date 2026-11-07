@@ -19,10 +19,16 @@ pub const fn is_cleared(cleared: Cleared, index: u8) -> bool {
     cleared & (1 << index) != 0
 }
 
+/// Whether the level before `index` is cleared (or `index` is the first), built yet or
+/// not.
+pub const fn is_reached(cleared: Cleared, index: u8) -> bool {
+    index == 0 || is_cleared(cleared, index - 1)
+}
+
 /// Levels unlock in order: the first is always open, each later one once the level
 /// before it is cleared.
 pub const fn is_unlocked(cleared: Cleared, index: u8) -> bool {
-    (index as usize) < ALL.len() && (index == 0 || is_cleared(cleared, index - 1))
+    (index as usize) < ALL.len() && is_reached(cleared, index)
 }
 
 /// The first level not yet cleared, or the last level when all are.
@@ -53,6 +59,8 @@ pub struct Place {
     /// Where its marker sits on the 240x160 map screen.
     pub x: i32,
     pub y: i32,
+    /// Its place in the play order: level number minus one.
+    pub order: u8,
     /// Index into [`ALL`], or `None` while the level is still being built.
     pub level: Option<u8>,
 }
@@ -68,11 +76,14 @@ pub enum PlaceStatus {
     Locked,
     /// No level here yet.
     Soon,
+    /// Unlocked by clearing the level before it, but not built yet.
+    Upcoming,
 }
 
 impl Place {
     pub fn status(&self, cleared: Cleared) -> PlaceStatus {
         match self.level {
+            None if is_reached(cleared, self.order) => PlaceStatus::Upcoming,
             None => PlaceStatus::Soon,
             Some(i) if is_cleared(cleared, i) => PlaceStatus::Cleared,
             Some(i) if is_unlocked(cleared, i) => PlaceStatus::Open,
@@ -93,20 +104,23 @@ pub static MAP: [Place; 3] = [
         blurb: "MOSSY CLIFFS. BERA 3000 WAITS.",
         x: 44,
         y: 104,
+        order: 0,
         level: Some(0),
     },
     Place {
         name: "SOLANA TRENCHES",
-        blurb: "NEON CASINO STRIP. THE HOUSE WINS.",
+        blurb: "MEMECOIN CASINO. SAM RUNS IT.",
         x: 120,
         y: 64,
+        order: 1,
         level: Some(1),
     },
     Place {
         name: "ETHEREUM CITY",
-        blurb: "GAS DRONES AND MEV BOTS. COMING SOON.",
+        blurb: "CL207'S PLASMA SHIELD AWAITS.",
         x: 196,
         y: 92,
+        order: 2,
         level: None,
     },
 ];
@@ -137,7 +151,7 @@ mod tests {
         let status = |cleared| MAP.each_ref().map(|p| p.status(cleared));
         assert_eq!(status(0), [Open, Locked, Soon]);
         assert_eq!(status(0b1), [Cleared, Open, Soon]);
-        assert_eq!(status(0b11), [Cleared, Cleared, Soon]);
+        assert_eq!(status(0b11), [Cleared, Cleared, Upcoming], "clearing level 2 unlocks level 3");
         assert!(!MAP[1].playable(0) && MAP[1].playable(0b1));
     }
 }

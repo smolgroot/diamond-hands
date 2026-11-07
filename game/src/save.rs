@@ -1,8 +1,12 @@
 //! Best score, options and the save files in battery-backed SRAM.
 //!
-//! The data is postcard-encoded. Version 5 added the levels each file has cleared. It
-//! starts with [`TAG`], which no version 4 save can begin with, so a cartridge from
-//! before is read as version 4 and moved over rather than wiped.
+//! The data is postcard-encoded. Version 5 added the levels each file has cleared;
+//! version 6 the wallet of banked diamonds, the purse of kept gold coins, the coins
+//! picked up in the level so far, and CL207's shield parts. Each starts with a tag, and
+//! an older cartridge is read in its own layout and moved over rather than wiped.
+//!
+//! Version 5 kept no diamond balance (diamonds only ever went into the score), so a
+//! moved-over file starts with an empty wallet.
 
 use agb::save::{SaveManager, SaveSlotManager};
 use diamond_hands_logic::{
@@ -15,8 +19,9 @@ use serde::{Deserialize, Serialize};
 /// Changing this wipes existing saves, so bump the suffix only for incompatible formats.
 /// Formats that can be read and moved over keep it and change [`TAG`] instead.
 const MAGIC: [u8; 32] = *b"diamond-hands-save-v4___________";
-/// Leads every version 5 save.
-const TAG: [u8; 4] = *b"DHv5";
+/// Leads every version 6 save.
+const TAG: [u8; 4] = *b"DHv6";
+const TAG_V5: [u8; 4] = *b"DHv5";
 
 #[derive(Clone, Serialize, Deserialize)]
 struct SaveData {
@@ -39,6 +44,67 @@ struct FileData {
     frames: u32,
     complete: bool,
     cleared: Cleared,
+    coins: u32,
+    wallet: u32,
+    purse: u32,
+    parts: u16,
+}
+
+/// The version 5 layout, from before the casino's coins.
+#[derive(Clone, Serialize, Deserialize)]
+struct SaveDataV5 {
+    tag: [u8; 4],
+    best: u32,
+    difficulty: u8,
+    files: [Option<FileDataV5>; FILES],
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct FileDataV5 {
+    level: u8,
+    checkpoint: Option<(i32, i32)>,
+    beacons: u8,
+    banked: u32,
+    diamonds: u32,
+    kills: u32,
+    frames: u32,
+    complete: bool,
+    cleared: Cleared,
+}
+
+impl From<FileDataV5> for FileData {
+    /// A version 5 run keeps where it was. The Trenches were rebuilt since, so a run
+    /// part-way through them starts the level again rather than at a beacon that may
+    /// now be somewhere else.
+    fn from(f: FileDataV5) -> Self {
+        let rebuilt = f.level == 1;
+        Self {
+            level: f.level,
+            checkpoint: if rebuilt { None } else { f.checkpoint },
+            beacons: if rebuilt { 0 } else { f.beacons },
+            banked: f.banked,
+            diamonds: if rebuilt { 0 } else { f.diamonds },
+            kills: if rebuilt { 0 } else { f.kills },
+            frames: if rebuilt { 0 } else { f.frames },
+            complete: f.complete,
+            cleared: f.cleared,
+            coins: 0,
+            wallet: 0,
+            purse: 0,
+            parts: 0,
+        }
+    }
+}
+
+impl From<SaveDataV5> for SaveData {
+    fn from(v5: SaveDataV5) -> Self {
+        Self {
+            tag: TAG,
+            best: v5.best,
+            difficulty: v5.difficulty,
+            files: v5.files.map(|f| f.map(FileData::from)),
+        }
+    }
 }
 
 /// The version 4 layout, from before levels unlocked one by one.
@@ -79,6 +145,10 @@ impl From<FileDataV4> for FileData {
             frames: f.frames,
             complete: cleared == levels::ALL_CLEARED,
             cleared,
+            coins: 0,
+            wallet: 0,
+            purse: 0,
+            parts: 0,
         }
     }
 }
@@ -106,6 +176,10 @@ impl From<Progress> for FileData {
             frames: p.frames,
             complete: p.complete,
             cleared: p.cleared,
+            coins: p.coins,
+            wallet: p.wallet,
+            purse: p.purse,
+            parts: p.parts,
         }
     }
 }
@@ -122,6 +196,10 @@ impl From<FileData> for Progress {
             frames: f.frames,
             complete: f.complete,
             cleared: f.cleared,
+            coins: f.coins,
+            wallet: f.wallet,
+            purse: f.purse,
+            parts: f.parts,
         }
     }
 }
@@ -150,6 +228,13 @@ impl Store {
                     .read::<SaveData>(0)
                     .ok()
                     .filter(|data| data.tag == TAG)
+                    .or_else(|| {
+                        slots
+                            .read::<SaveDataV5>(0)
+                            .ok()
+                            .filter(|data| data.tag == TAG_V5)
+                            .map(SaveData::from)
+                    })
                     .or_else(|| slots.read::<SaveDataV4>(0).ok().map(SaveData::from))
             })
             .map_or((0, Difficulty::default(), [None; FILES]), |data| {

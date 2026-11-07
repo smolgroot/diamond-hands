@@ -62,6 +62,11 @@ fn steps_are_jumpable() {
         };
         let mut last = floor(0);
         for tx in 1..level.width() {
+            // Sealed walls are crossed by elevator, not on foot.
+            if level.sealed(tx) {
+                last = None;
+                continue;
+            }
             let here = floor(tx);
             if let (Some(a), Some(b)) = (last, here) {
                 let rise = (a - b) * 8;

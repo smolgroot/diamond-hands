@@ -5,6 +5,10 @@
 //! pixels unless a name ends in `_fx`, which means 24.8 fixed point.
 #![no_std]
 
+// `Game` keeps its `World` on the heap: on the GBA that is EWRAM, and the 32 KB of IWRAM
+// the stack lives in can't hold the several copies building one in place would take.
+extern crate alloc;
+
 pub mod arrival;
 pub mod boss;
 pub mod bot;

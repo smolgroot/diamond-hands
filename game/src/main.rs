@@ -28,6 +28,10 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut store = save::Store::new(&mut gba.save);
     let (best, difficulty, files) = store.load();
     let mut game = boxed(|| Game::with_save(best, difficulty, files));
+    if cfg!(feature = "dev") {
+        // Every level but the last counts as beaten on the map, so all of them are open.
+        game.dev_cleared = diamond_hands_logic::levels::ALL_CLEARED >> 1;
+    }
     let mut gfx = gba.graphics.get();
     let mut splash = Some(boxed(|| splash::Splash::new(&mut gfx)));
     let mut renderer = None;

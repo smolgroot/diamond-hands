@@ -1,8 +1,13 @@
 //! Levels are hand-drawn ASCII maps, one character per 8x8 tile, read in place.
 //!
 //! Terrain: `#` solid rock, `r` crystal boulder (solid), `=` one-way steel girder
-//! (solid from above only), `^` energy spikes. Scenery, which is air for collision:
-//! `,` moss, `*` scrap, `&` a dead bot's head. Anything else is air. Markers, which are air too:
+//! (solid from above only), `T` one-way casino table top, `^` energy spikes. Scenery,
+//! which is air for collision: `,` moss, `*` scrap, `&` a dead bot's head, `|` a table's
+//! pedestal, `%` a false wall that looks like rock (a secret passage). Big pictures are
+//! scenery too, drawn across a block of their letter: see [`DECOR`]. Anything else is
+//! air. A column of rock from the top of the map to the bottom is a sealed wall: the
+//! camera stays on one side of it, and only an elevator crosses it. Markers, which are
+//! air too:
 //!
 //! | char | meaning |
 //! | ---- | ------- |
@@ -13,7 +18,14 @@
 //! | `b`  | Sentry bot |
 //! | `s`  | Crawler bot |
 //! | `v`  | Drone |
-//! | `t`  | rolling Mine |
+//! | `t`  | rolling Mine (a casino chip in the Trenches) |
+//! | `d`  | Dealer bot: throws a fan of cards |
+//! | `g`  | Guard bot: armoured, fires bursts |
+//! | `$`  | gold coin |
+//! | `p`  | plasma cell, a part for CL207's shield |
+//! | `E`  | the elevator's access terminal |
+//! | `L`  | the elevator car's left edge, where it leaves from (feet row) |
+//! | `l`  | where the elevator arrives (feet row) |
 //! | `X`  | left edge of the boss arena (any row) |
 //! | `B`  | the boss |
 
@@ -31,7 +43,7 @@ impl Tile {
     pub fn from_char(c: u8) -> Tile {
         match c {
             b'#' | b'r' => Tile::Solid,
-            b'=' => Tile::OneWay,
+            b'=' | b'T' => Tile::OneWay,
             b'^' => Tile::Spike,
             _ => Tile::Empty,
         }
@@ -42,8 +54,45 @@ impl Tile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Badlands,
-    /// The Badlands' shapes relit as a neon casino strip: magenta and teal.
+    /// A neon casino strip, its gaming floor and the exchange suites above it.
     Trenches,
+}
+
+/// Who waits in the arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BossKind {
+    /// BERA 3000, the bear war mech.
+    Bera,
+    /// SAM, the cyborg exchange founder with a cucumber.
+    Sam,
+}
+
+/// Scenery pictures bigger than a tile: the letter fills the picture's whole block in
+/// the map, `(letter, width, height)` in tiles. A wider or taller block repeats it.
+pub const DECOR: [(u8, i32, i32); 13] = [
+    (b'S', 2, 3),  // slot machine
+    (b'M', 4, 3),  // trading screen
+    (b'N', 6, 2),  // CASINO sign
+    (b'F', 4, 2),  // the exchange's sign
+    (b'U', 4, 2),  // pump pill sign
+    (b'Q', 3, 2),  // SOL sign
+    (b'K', 2, 1),  // pile of gold coins
+    (b'D', 4, 5),  // casino doors
+    (b'Z', 2, 4),  // server rack
+    (b'V', 4, 4),  // vault door
+    (b'R', 3, 1),  // roulette wheel on a table
+    (b'W', 3, 2),  // VIP sign
+    (b'A', 2, 3),  // neon playing card
+];
+
+/// The size of the picture `c` draws, if it is a picture.
+pub fn decor_size(c: u8) -> Option<(i32, i32)> {
+    DECOR.iter().find(|d| d.0 == c).map(|&(_, w, h)| (w, h))
+}
+
+/// Characters that are terrain or scenery, never markers.
+fn is_scenery(c: u8) -> bool {
+    matches!(c, b'.' | b'#' | b'r' | b'=' | b'T' | b'^' | b',' | b'*' | b'&' | b'|' | b'%') || decor_size(c).is_some()
 }
 
 #[derive(Debug)]
@@ -55,6 +104,17 @@ pub struct Level {
     pub boss_name: &'static str,
     /// What the boss says when the wassie walks into the arena; empty for none.
     pub boss_talk: &'static [Line],
+    pub boss: BossKind,
+    /// A call from CL207 when a run starts the level fresh; empty for none.
+    pub call: &'static [Line],
+    /// A casino level: bots pay gold coins for bounties, and the penguin's exchange
+    /// waits after the boss.
+    pub coins: bool,
+    /// Columns where the second and third stage of the backdrop start; empty to split
+    /// the level in thirds.
+    pub stages: &'static [i32],
+    /// The first bit of the save's shield-part mask this level's parts use.
+    pub parts_base: u8,
     pub rows: &'static [&'static str],
 }
 
@@ -62,6 +122,21 @@ pub struct Level {
 pub const ARENA_TILES: i32 = crate::SCREEN_W / TILE;
 
 impl Level {
+    /// A level with no map or extras, to build test levels from.
+    pub const BASE: Level = Level {
+        name: "TEST",
+        subtitle: "",
+        theme: Theme::Badlands,
+        boss_name: "",
+        boss_talk: &[],
+        boss: BossKind::Bera,
+        call: &[],
+        coins: false,
+        stages: &[],
+        parts_base: 0,
+        rows: &[],
+    };
+
     pub fn width(&self) -> i32 {
         self.rows[0].len() as i32
     }
@@ -110,7 +185,7 @@ impl Level {
         self.rows.iter().enumerate().flat_map(|(ty, row)| {
             row.bytes()
                 .enumerate()
-                .filter(|&(_, c)| !matches!(c, b'.' | b'#' | b'r' | b'=' | b'^' | b',' | b'*' | b'&'))
+                .filter(|&(_, c)| !is_scenery(c))
                 .map(move |(tx, c)| (c, tx as i32, ty as i32))
         })
     }
@@ -123,6 +198,19 @@ impl Level {
                 .position(|c| c == marker)
                 .map(|tx| (tx as i32, ty as i32))
         })
+    }
+
+    /// The backdrop stage (0, 1 or 2) at level pixel `x`.
+    pub fn stage_at(&self, x: i32) -> u8 {
+        if self.stages.is_empty() {
+            return (x * 3 / self.px_width().max(1)).clamp(0, 2) as u8;
+        }
+        self.stages.iter().filter(|&&col| x >= col * TILE).count().min(2) as u8
+    }
+
+    /// Whether column `tx` is rock from the top of the map to the bottom: a sealed wall.
+    pub fn sealed(&self, tx: i32) -> bool {
+        (0..self.height()).all(|ty| self.char_at(tx, ty) == b'#')
     }
 
     /// Left edge of the boss arena, in pixels.

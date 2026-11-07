@@ -11,10 +11,17 @@ with a boss.
 1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
    night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a
    bear-shaped war mech.
-2. **Solana Trenches** (playable): a neon casino strip sunk into the rock, lit magenta and teal.
-   It reuses the Badlands' tiles, bots and music under its own palettes, and ends with
-   **BERA 3000 MK2**, the mech rebuilt after the Badlands.
-3. **Ethereum City** (planned): a futuristic city of gas drones and MEV bots.
+2. **Solana Trenches** (playable): not a battlefield but Crypto Twitter's memecoin casino,
+   where a coin launches every minute and most of them rug. CL207 calls as it starts: he is
+   building a **Plasma Shield** and needs the three plasma cells hidden in the level. A neon
+   Vegas strip under a giant gold coin leads into the casino floor (felt tables to hop, slot
+   banks, roulette, trading screens, croupier bots dealing cards, rolling chips, a false wall
+   hiding a secret tunnel), then an elevator up to the red-lit exchange suites (server racks,
+   the vault, armoured guard bots). The boss is **SAM**, a cyborg exchange founder with a
+   cucumber. The casino pays in **gold coins**, which the penguin cashier changes into
+   diamonds after the fight.
+3. **Ethereum City** (unlocked by clearing the Trenches, not built yet): where CL207's
+   Plasma Shield arrives.
 
 | Button      | Action                                                          |
 | ----------- | --------------------------------------------------------------- |
@@ -67,11 +74,30 @@ with a boss.
     icon, its slot and an "E" when equipped. Up/Down pick an item and the box below
     describes it; A opens a card with a big icon, more detail and, for the jetpack, a live
     fuel gauge. B closes the card.
-  - WALLET shows the diamonds in hand (the same count as the HUD), how many the level
-    holds, the count saved at the last beacon, and the score.
+  - WALLET shows the diamond balance (banked plus this level's), the banked count, the
+    level's diamonds found out of its total, gold coins (this level's and the purse), and
+    the score.
 
   Buttons still held when the menu closes are ignored until let go, so the B that closes it
   doesn't fire and a charge held into the menu is dropped.
+- **Two currencies:** diamonds are banked into the file's wallet when a level is cleared;
+  the HUD shows the level's count. The Trenches pay **gold coins** instead: pickups, a
+  bounty for each bot (1-3 coins) and SAM's stash (10). After SAM, the penguin cashier
+  offers **1 coin = 8 diamonds**: the counter shows the coins, the rate and the diamonds
+  they buy. EXCHANGE pays the wallet; KEEP MY COINS puts them in the file's purse, offered
+  again at the next visit. The deal is struck once and saved with the level's clear.
+  Replays bank no diamonds or coins, as they bank no score, but the purse can still be
+  changed.
+- **Plasma cells:** three in the Trenches, each found once per file (the bag shows how
+  many); they stay found on replays.
+- **Elevator:** the casino floor ends at a sealed wall. Press Up at the terminal to power
+  the elevator, wait for its doors, step in and press Up again. A "^" bubble shows where Up
+  does something.
+- **SAM:** opens with his **Cucumber Hit** (crackling aura, then a lunge and a giant
+  cucumber along the floor that knocks you flying: jump it; afterwards he's winded and takes
+  double damage), lobs arcing cucumbers, and calls a **Market Crash** (the screens go red,
+  candles rain, magenta energy flies). At half health his implants overload: faster, three
+  cucumbers a volley, and the Cucumber Hit ends in shockwaves.
 - **Health and respawns:** you have 8 HP. Touching a beacon makes it your respawn point, and
   retries are unlimited.
 - **Diamonds:** they are scattered along the route, and the upper ledges hold the most.
@@ -82,7 +108,14 @@ Art direction follows `cover.png` and the project skill in `.claude/skills/diamo
 The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
 - the wassie has a gold rim light, a broad bill and a red neck scarf
 - it squashes on a hard landing and leans back when it skids
-- it sees stars when hit, and when knocked out it slumps, then falls flat
+- it runs in a six-step cycle, pitched forward and bobbing, one foot reaching ahead while
+  the other kicks up behind, with the cannon carried along
+- it sees stars when hit. Knocked out in the air, it tumbles down to the floor first; the
+  knockout count only starts once it lands, where it slumps, falls flat and lets go of the
+  cannon
+- the cannon is a chunky gunmetal piece on its own palette: a glowing power cell, a carry
+  handle with a cyan sight, the diamond insignia, magenta vents, a finned barrel and a big
+  muzzle ring with a white-hot core
 - dust puffs behind its heels when it runs, sprays ahead when it skids, and kicks up both
   ways on take-off and landing
 - wind streaks show over a hard fall
@@ -92,14 +125,18 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
 
 - `logic/`: all game rules. Tile physics, the player, villains, the boss, scenes, levels and the
   test probe. `no_std` and integer-only, tested on the host.
-  - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`. Each
+  - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`,
+    including the scenery pictures (`DECOR`: slots, screens, signs) drawn over a block
+    of their letter. Each
     level also carries its boss dialogue; places on the world map and the unlock rules are in
     `logic/src/levels.rs`.
   - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
     `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
     A new item needs an entry there and an icon in `game/src/art/menu.rs`.
 - `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
-  - All art is drawn in code at boot, in `game/src/art/`, except the splash. That is
+  - All art is drawn in code, in `game/src/art/` (`casino.rs` and `trenches.rs` for the
+    Trenches, after `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png` and
+    `level2-casino-mockup.png`), except the splash. That is
     `cover.png` cropped and fitted to 16 palettes by `scripts/make-splash.py` (needs Pillow),
     which writes the tiles, palettes and a preview to `game/gfx/`. Rerun it when the cover
     changes; the ROM includes those files as they are.
@@ -108,7 +145,7 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
     channels (`game/src/sound.rs`). The songs are written in code by
     `game/music/src/soundtrack.py` with synthesized instruments: run
     `python3 game/music/src/soundtrack.py` after changing it. Cues: title, Badlands, boss,
-    level clear, knocked out.
+    level clear, knocked out. The Trenches still play the Badlands' theme.
   - It builds with its own nightly toolchain and target (`game/rust-toolchain.toml`,
     `game/.cargo/config.toml`), so it is excluded from the workspace.
 - `harness/`: headless ROM tests on the [gba-wasm](https://github.com/smolgroot/gba-wasm) core,
@@ -126,8 +163,14 @@ Then:
 
 ```sh
 ./scripts/build-rom.sh            # → dist/diamond-hands.gba
+./scripts/build-rom.sh --dev      # → dist/diamond-hands-dev.gba: every level open on the map
 (cd game && cargo run --release)  # play in mgba-qt
 ```
+
+The dev ROM (`DEV` in the title screen's corner) opens every level on the world map from
+a new file, so the Trenches can be played without beating the Badlands. It changes only
+what the map lets you start: nothing extra is saved, and a level beaten there counts as a
+first clear.
 
 To play in gba-wasm, load `dist/diamond-hands.gba` in its browser UI (`pnpm dev` in `../gba-wasm`).
 
@@ -158,17 +201,24 @@ Each frame, the ROM mirrors a `Probe` struct into EWRAM. The harness finds it by
 
 Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of the title, map,
 hovering, aiming, each line of dialogue, the level-clear sequence, each pause-menu page and
-the Trenches.
+every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
 
 ## Known limitations
 
-- There is no sound yet.
-- Two levels are playable. The Trenches reuse the Badlands' tile shapes, bots, boss and
-  music under new palettes; Ethereum City is a placeholder.
-- Sprite VRAM is nearly full: new sprites for later levels will need the level's art loaded
-  per level rather than all at boot. Splitting the blaster from the body poses and shrinking
-  the big font to 8x16 bought back room for the aims, jetpack, portraits and map markers.
-- The world map is painted at boot, which adds about half a second to start-up.
+- Two levels are playable; Ethereum City shows on the map once unlocked but can't be
+  played yet. The Trenches have no music of their own yet.
+- Sprite VRAM is full. Each level's own sprites load while it is on screen (`LevelArt` in
+  `game/src/render.rs`): BERA 3000 and the arrival ship in the Badlands, the casino's in the
+  Trenches. Even alone the casino's don't fit, so they come in two halves swapped as the
+  camera goes: the floors' (bots, elevator, terminal) and the arena's (SAM, the penguin).
+- The world map is painted each time it opens (about half a second) and dropped when it
+  closes: its tiles don't fit in background VRAM beside a level's. Moving between the
+  Badlands and the Trenches repaints the backdrop over three frames for the same reason.
+- `World` keeps its actor table on the heap, and `Game` its `World`: built on the IWRAM
+  stack they overflowed it at boot.
+- Saves from before the casino (version 5) are moved over with an empty wallet: version 5
+  kept no diamond balance. A run saved part-way through the old Trenches starts the
+  rebuilt level from the top.
 - Background VRAM is nearly full too. All eight screenblocks are taken, so the pause menu
   borrows the dialogue box's unused rows, and while it is open the dialogue text lends it
   its tiles. The menu is drawn on an 8x8 grid so each glyph is one shared tile, and a page

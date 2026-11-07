@@ -22,26 +22,80 @@ use diamond_hands_logic::{
     controls::{self, BINDINGS},
     enemy::{ActorKind, state},
     fx::FxKind,
-    game::{CLEAR_LOCK_FRAMES, FILES, MAP_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
+    game::{CLEAR_LOCK_FRAMES, Deal, FILES, MAP_WALK_FRAMES, PAYOUT_FRAMES, PENGUIN_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
+    inventory::SHIELD_CELLS,
     level::Theme,
     levels::{MAP, PlaceStatus},
     player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
     arrival::{GUIDE_W, Gear},
     talk::{self, Speaker},
-    world::CHARGE_FRAMES,
+    world::{CHARGE_FRAMES, LIFT_RIDE_FRAMES, LiftState},
 };
 
 use crate::{
     art::{
         Common, SPRITE_PALETTE, TileCache,
         arrival::{self, ArrivalArt},
-        badlands::{self, SKY_PALETTES, Villains},
+        badlands::{self, Bera, SKY_PALETTES, Villains},
+        casino::{self, ArenaArt, CasinoArt, FloorArt},
         menu::{self, MenuScreen},
-        ui,
+        trenches, ui,
         wassie::{self, Wassie},
     },
     font::{self, Font},
+};
+
+/// Art only one level uses, loaded while that level is on screen: sprite VRAM holds
+/// one boss and its extras at a time.
+enum LevelArt {
+    Badlands(Bera, ArrivalArt),
+    Trenches(CasinoArt),
+}
+
+impl LevelArt {
+    fn new(theme: Theme) -> Self {
+        match theme {
+            Theme::Badlands => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
+            Theme::Trenches => LevelArt::Trenches(CasinoArt::new()),
+        }
+    }
+
+    fn theme(&self) -> Theme {
+        match self {
+            LevelArt::Badlands(..) => Theme::Badlands,
+            LevelArt::Trenches(_) => Theme::Trenches,
+        }
+    }
+
+    fn casino(&self) -> Option<&CasinoArt> {
+        match self {
+            LevelArt::Trenches(c) => Some(c),
+            LevelArt::Badlands(..) => None,
+        }
+    }
+
+    fn floor(&self) -> Option<&FloorArt> {
+        self.casino()?.floor.as_ref()
+    }
+
+    fn arena(&self) -> Option<&ArenaArt> {
+        self.casino()?.arena.as_ref()
+    }
+
+    fn casino_mut(&mut self) -> Option<&mut CasinoArt> {
+        match self {
+            LevelArt::Trenches(c) => Some(c),
+            LevelArt::Badlands(..) => None,
+        }
+    }
+}
+
+/// Most terrain keys either theme has.
+const MAX_TERRAIN_KEYS: usize = if badlands::TERRAIN_KEYS > trenches::TERRAIN_KEYS {
+    badlands::TERRAIN_KEYS
+} else {
+    trenches::TERRAIN_KEYS
 };
 
 /// Terrain map width in tiles. Columns are written into slot `column % 64`.
@@ -69,7 +123,9 @@ pub struct Renderer {
     common: Common,
     wassie: Wassie,
     villains: Villains,
-    arrival: ArrivalArt,
+    /// The loaded level's own art; `None` only between dropping one and loading the next.
+    level_art: Option<LevelArt>,
+    cl207: SpriteVram,
     font: Font,
     sky: RegularBackground,
     city: RegularBackground,
@@ -78,7 +134,9 @@ pub struct Renderer {
     dialog_text: ui::DialogText,
     /// The line, characters shown and prompt arrow last painted into `dialog_text`.
     dialog_painted: Option<(u8, u16, Option<i32>)>,
-    map: RegularBackground,
+    /// The world map's layer, painted when the map opens and dropped when it closes:
+    /// its tiles don't fit in background VRAM beside a level's.
+    map: Option<RegularBackground>,
     /// Map markers for places still being built and places still locked, and the badge
     /// on cleared ones.
     soon: SpriteVram,
@@ -97,8 +155,15 @@ pub struct Renderer {
     /// The theme and stage whose palettes are loaded.
     theme: Theme,
     stage: u8,
-    /// Fence wire state last shown, see [`diamond_hands_logic::world::fence_state`].
-    fence: u8,
+    /// What the terrain palette last showed: fence wire state (see
+    /// [`diamond_hands_logic::world::fence_state`]), the marquee's chase step, and
+    /// whether the market was crashing.
+    fence: (u8, bool, bool),
+    /// A theme switch under way, and its next step.
+    switching: Option<(Theme, u8)>,
+    /// The plasma cells the file owned last frame, to announce a new one, and when.
+    cells_seen: u16,
+    notice_until: u32,
     /// This frame's camera, including screen shake.
     view_x: i32,
     /// Priority for the world's objects: below the dialogue box while it is up.
@@ -113,7 +178,7 @@ impl Renderer {
     pub fn new(gfx: &mut agb::display::Graphics) -> Self {
         gfx.set_background_palettes(&[
             SKY_PALETTES[0].clone(),
-            badlands::ground_palette(Theme::Badlands, 0, 0),
+            badlands::ground_palette(0, 0),
             SPRITE_PALETTE.clone(),
             ui::DIALOG_PALETTE.clone(),
         ]);
@@ -125,14 +190,13 @@ impl Renderer {
         let mut dialog_box = layer(Priority::P0, RegularBackgroundSize::Background32x64);
         ui::paint_dialog_box(&mut dialog_box);
         let dialog_text = ui::DialogText::new(&mut dialog_box);
-        let mut map = layer(Priority::P0, RegularBackgroundSize::Background32x32);
-        ui::paint_map(&mut map);
 
         let mut renderer = Self {
             common: Common::new(),
             wassie: Wassie::new(),
             villains: Villains::new(),
-            arrival: ArrivalArt::new(),
+            level_art: Some(LevelArt::new(Theme::Badlands)),
+            cl207: arrival::portrait(),
             font: Font::new(),
             sky,
             city,
@@ -140,19 +204,22 @@ impl Renderer {
             dialog_box,
             dialog_text,
             dialog_painted: None,
-            map,
+            map: None,
             soon: ui::soon_marker(),
             locked: ui::lock_marker(),
             clear_badge: ui::clear_badge(),
             menu: None,
             terrain_tiles: TileCache::new(),
-            terrain_by_key: vec![KEY_UNSET; badlands::TERRAIN_KEYS],
+            terrain_by_key: vec![KEY_UNSET; MAX_TERRAIN_KEYS],
             blank: DynamicTile16::new().fill_with(0),
             columns: [i32::MIN; TERRAIN_COLS as usize],
             level: None,
             theme: Theme::Badlands,
             stage: 0,
-            fence: 0,
+            fence: (0, false, false),
+            switching: None,
+            cells_seen: 0,
+            notice_until: 0,
             view_x: 0,
             world_layer: Priority::P0,
         };
@@ -173,9 +240,15 @@ impl Renderer {
             self.dialog_text.restore(&mut self.dialog_box);
         }
         if game.scene == Scene::Map {
+            if self.map.is_none() {
+                let mut map = layer(Priority::P0, RegularBackgroundSize::Background32x32);
+                ui::paint_map(&mut map);
+                self.map = Some(map);
+            }
             self.draw_map(game, frame);
             return;
         }
+        self.map = None;
         let world = &game.world;
         // Big hits jolt the view a pixel or two; each ordinary shot, a pixel each way.
         let shake = match () {
@@ -190,22 +263,38 @@ impl Renderer {
         let in_menu =
             matches!(game.scene, Scene::Title | Scene::Options | Scene::Files | Scene::FileChoice);
 
-        // Dusk, then night, then the city burning as the wassie crosses the level.
-        let stage = if in_menu {
-            MENU_STAGE
-        } else {
-            ((cam + WIDTH / 2) * 3 / world.level.px_width()).clamp(0, 2) as u8
-        };
-        let fence = diamond_hands_logic::world::fence_state(world.frames);
+        // Each level's stretches have their own light: the Badlands go from dusk to a
+        // burning night; the Trenches from the strip to the casino to the suites.
+        let stage = if in_menu { MENU_STAGE } else { world.level.stage_at(cam + WIDTH / 2) };
         let theme = world.level.theme;
-        if stage != self.stage || theme != self.theme {
+        if theme != self.theme && !self.switch_theme(theme) {
+            // Mid-switch: show nothing of either level this frame.
+            return;
+        }
+        if self.level_art.as_ref().is_none_or(|a| a.theme() != theme) {
+            // Drop the old level's sprites before making the new ones.
+            self.level_art = None;
+            self.level_art = Some(LevelArt::new(theme));
+        }
+        self.swap_casino_art(world);
+        let crashing = theme == Theme::Trenches
+            && matches!(world.boss.state, BossState::Crash | BossState::Barrage | BossState::Dying);
+        let fence = (
+            diamond_hands_logic::world::fence_state(world.frames),
+            (game.frame / 10).is_multiple_of(2),
+            crashing && (game.frame / 6).is_multiple_of(2),
+        );
+        if stage != self.stage || self.fence.0 == u8::MAX {
             frame.set_background_palette(0, &badlands::sky_palettes(theme)[stage as usize]);
             self.stage = stage;
-            self.theme = theme;
-            self.fence = u8::MAX;
+            self.fence.0 = u8::MAX;
         }
         if fence != self.fence {
-            frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(theme, stage, fence));
+            let palette = match theme {
+                Theme::Badlands => badlands::ground_palette(stage, fence.0),
+                Theme::Trenches => trenches::ground_palette(stage, fence.0, fence.1, fence.2),
+            };
+            frame.set_background_palette(TERRAIN_PALETTE, &palette);
             self.fence = fence;
         }
 
@@ -229,8 +318,14 @@ impl Renderer {
         let sky_id = self.sky.show(frame);
         // Dim the scene behind text screens so the words read clearly. The level-clear
         // screen fades down to it.
-        if game.talking() || matches!(game.scene, Scene::Intro | Scene::LevelClear) {
+        // The elevator ride fades the screen out and back in.
+        let ride = world.lift.filter(|l| l.state == LiftState::Riding).map(|l| {
+            let half = LIFT_RIDE_FRAMES as i32 / 2;
+            (16 - (l.timer as i32 - half).abs() * 16 / half).clamp(0, 16) as u8
+        });
+        if game.talking() || game.ringing() || ride.is_some() || matches!(game.scene, Scene::Intro | Scene::LevelClear | Scene::Exchange) {
             let amount = match game.scene {
+                _ if ride.is_some() => Num::from_raw(ride.unwrap_or(0).min(15)),
                 Scene::LevelClear => Num::from_raw(game.scene_frames().min(8) as u8),
                 _ => num!(0.5),
             };
@@ -241,17 +336,25 @@ impl Renderer {
             }
         }
 
+        let cells = game.parts | world.parts;
+        if game.scene == Scene::Play && cells.count_ones() > self.cells_seen.count_ones() {
+            self.notice_until = game.frame + 150;
+        }
+        if game.scene != Scene::Paused {
+            self.cells_seen = cells;
+        }
         self.draw_overlay(game, frame);
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             self.draw_hud(game, frame);
         }
         self.draw_fx(game, frame);
         self.draw_player(game, frame);
+        self.draw_lift(game, frame);
         self.draw_arrival(game, frame);
         self.draw_shots(game, frame);
         self.draw_boss(game, frame);
         // The menus need every object for their text, and the bots are frozen anyway.
-        if !in_menu {
+        if !in_menu && game.scene != Scene::Exchange {
             self.draw_actors(game, frame);
         }
     }
@@ -283,6 +386,62 @@ impl Renderer {
         lines.get(game.talk_line as usize).map(|line| line.speaker)
     }
 
+    /// In the Trenches, swaps the floors' sprites for the arena's as the camera nears
+    /// SAM, and back if a respawn takes it away. One half is dropped a frame before the
+    /// other is made: sprites the last frame showed are only freed once it is on screen.
+    fn swap_casino_art(&mut self, world: &diamond_hands_logic::World) {
+        let near_sam = world.boss.present && world.camera_x + WIDTH >= world.boss.rect().x - 8;
+        let far = !world.boss.present || world.camera_x + WIDTH < world.boss.rect().x - 40;
+        let Some(casino) = self.level_art.as_mut().and_then(LevelArt::casino_mut) else {
+            return;
+        };
+        if near_sam || world.arena {
+            if casino.floor.take().is_none() && casino.arena.is_none() {
+                casino.arena = Some(ArenaArt::new());
+            }
+        } else if far {
+            if casino.arena.take().is_none() && casino.floor.is_none() {
+                casino.floor = Some(FloorArt::new());
+            }
+        }
+    }
+
+    /// Moves to another theme over three frames: the old terrain's tiles are let go,
+    /// then the sky is repainted, then the city. Background VRAM can't hold two levels'
+    /// art at once, and tiles a shown frame still uses are only freed once it is on
+    /// screen, so each step waits for the frame before. Returns true once done.
+    fn switch_theme(&mut self, theme: Theme) -> bool {
+        let step = match self.switching {
+            Some((to, step)) if to == theme => step,
+            _ => 0,
+        };
+        match step {
+            0 => {
+                for slot in 0..TERRAIN_COLS {
+                    for ty in 0..20 {
+                        let effect = TileEffect::new(false, false, TERRAIN_PALETTE);
+                        self.terrain.set_tile_dynamic16((slot, ty), &self.blank, effect);
+                    }
+                }
+                self.terrain_tiles = TileCache::new();
+                self.terrain_by_key.fill(KEY_UNSET);
+                self.columns = [i32::MIN; TERRAIN_COLS as usize];
+            }
+            1 if theme == Theme::Trenches => trenches::paint_sky(&mut self.sky),
+            1 => badlands::paint_sky(&mut self.sky),
+            _ if theme == Theme::Trenches => trenches::paint_city(&mut self.city),
+            _ => badlands::paint_city(&mut self.city),
+        }
+        if step < 2 {
+            self.switching = Some((theme, step + 1));
+            return false;
+        }
+        self.switching = None;
+        self.theme = theme;
+        self.fence.0 = u8::MAX;
+        true
+    }
+
     /// Writes up to [`COLUMNS_PER_FRAME`] newly visible terrain columns into the map.
     /// Returns whether the whole screen is now loaded.
     fn stream_terrain(&mut self, level: &'static Level, cam: i32) -> bool {
@@ -302,10 +461,12 @@ impl Renderer {
             }
             written += 1;
             self.columns[slot as usize] = col;
+            let trenches = level.theme == Theme::Trenches;
             for ty in 0..level.height() {
-                let key = badlands::terrain_key(level, col, ty);
+                let key = if trenches { trenches::terrain_key(level, col, ty) } else { badlands::terrain_key(level, col, ty) };
                 if self.terrain_by_key[key] == KEY_UNSET {
-                    let id = self.terrain_tiles.intern(badlands::terrain_pixels(key));
+                    let pixels = if trenches { trenches::terrain_pixels(key) } else { badlands::terrain_pixels(key) };
+                    let id = self.terrain_tiles.intern(pixels);
                     self.terrain_by_key[key] = id.map_or(KEY_BLANK, |id| id as u16);
                 }
                 let tile = match self.terrain_by_key[key] {
@@ -342,8 +503,99 @@ impl Renderer {
             Scene::Play | Scene::Map | Scene::Splash | Scene::Paused => {}
             Scene::Arrival if game.talking() => self.draw_dialog(game, frame),
             Scene::Arrival => {}
+            Scene::Dialog if game.ringing() => self.draw_ringing(game, frame),
             Scene::Dialog => self.draw_dialog(game, frame),
             Scene::LevelClear => self.draw_clear(game, frame, blink_on),
+            Scene::Exchange => self.draw_exchange(game, frame),
+        }
+        if game.scene == Scene::Play && game.frame < self.notice_until {
+            let n = (game.parts | game.world.parts).count_ones().min(SHIELD_CELLS);
+            let mut text = *b"PLASMA CELL 0/3";
+            text[12] = b'0' + n as u8;
+            text[14] = b'0' + SHIELD_CELLS as u8;
+            self.font.draw_centred(frame, core::str::from_utf8(&text).unwrap_or(""), 26, false);
+            if n == SHIELD_CELLS {
+                self.font.draw_centred(frame, "CL207 CAN BUILD THE SHIELD!", 36, false);
+            }
+        }
+    }
+
+    /// CL207's call coming in: a phone buzzing and who's calling.
+    fn draw_ringing(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let t = game.scene_frames();
+        let buzz = ((t / 3) % 2) as i32 * 2 - 1;
+        if let Some(floor) = self.level_art.as_ref().and_then(LevelArt::floor) {
+            show(frame, &floor.phone, 112 + buzz, 30);
+        }
+        if (t / 20).is_multiple_of(2) || t > 40 {
+            self.font.draw_centred(frame, "INCOMING CALL", 52, true);
+        }
+        self.font.draw_centred(frame, "CL207", 70, false);
+        show(frame, &self.cl207, 104, 82);
+        self.font.draw_centred(frame, "A: ANSWER", 122, false);
+    }
+
+    /// The penguin's exchange: he waddles in, makes his pitch, then the counter shows the
+    /// coins, the rate and the diamonds they buy; on a deal the numbers count across.
+    fn draw_exchange(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let (Some(casino), Some(arena)) =
+            (self.level_art.as_ref().and_then(LevelArt::casino), self.level_art.as_ref().and_then(LevelArt::arena))
+        else {
+            return;
+        };
+        let ex = game.exchange;
+        let t = game.scene_frames();
+        // The penguin, walking in from the right.
+        let stand = 172;
+        let x = match ex.deal {
+            Deal::Walk => WIDTH + 8 - (WIDTH + 8 - stand) * t.min(PENGUIN_WALK_FRAMES) as i32 / PENGUIN_WALK_FRAMES as i32,
+            _ => stand,
+        };
+        let waddle = ex.deal == Deal::Walk && (t / 8).is_multiple_of(2);
+        let hop = if ex.deal == Deal::Payout { ((t / 6) % 2) as i32 * 2 } else { waddle as i32 };
+        Object::new(arena.penguin.clone())
+            .set_pos(vec2(x, 128 - 32 - hop))
+            .set_hflip(waddle)
+            .set_priority(self.world_layer)
+            .show(frame);
+        if game.talking() {
+            self.draw_dialog(game, frame);
+        }
+        if ex.deal == Deal::Offer {
+            let row = 17 + (1 + game.cursor as i32) * 10;
+            self.draw_cursor(game, frame, 24, row - 2);
+        }
+        if ex.deal < Deal::Offer || ex.coins == 0 {
+            return;
+        }
+        // The counter: what's on it, the rate, and what it pays.
+        let paying = ex.deal == Deal::Payout;
+        let done = ex.deal == Deal::Bye || paying && t >= PAYOUT_FRAMES;
+        let progress = if done { PAYOUT_FRAMES } else if paying { t } else { 0 };
+        let accepted = ex.accepted == Some(true);
+        let coins_shown = if accepted { ex.coins - ex.coins * progress / PAYOUT_FRAMES } else { ex.coins };
+        let paid = if accepted { ex.diamonds() * progress / PAYOUT_FRAMES } else { 0 };
+        let y = 64;
+        show(frame, &casino.coin[0], 46, y + 1);
+        self.label_number_at(frame, "GOLD COINS: ", coins_shown, 58, y);
+        self.font.draw(frame, "EXCHANGE RATE: 1:8", 58, y + 11, false);
+        show(frame, &self.common.diamond[((t / 6) % 8 == 0) as usize], 40, y + 18);
+        let diamonds = if ex.deal == Deal::Offer { ex.diamonds() } else { paid };
+        let label = if ex.deal == Deal::Offer { "DIAMONDS RECEIVED: " } else { "DIAMONDS PAID: " };
+        self.label_number_at(frame, label, diamonds, 58, y + 22);
+        if ex.deal == Deal::Bye || paying {
+            // The wallet was paid when the deal was struck; count it up on screen.
+            let before = if accepted { game.wallet - ex.diamonds().min(game.wallet) } else { game.wallet };
+            self.label_number_at(frame, "WALLET: ", before + paid, 58, y + 33);
+        }
+        if paying && !done {
+            // Coins hop off towards the penguin, diamonds back the other way.
+            for i in 0..3 {
+                let k = ((t as i32 + i * 10) % 30) as i32;
+                let wx = 60 + k * 4;
+                show(frame, &casino.coin[(k / 3 % 3) as usize], wx, 120 - (k * (30 - k)) / 8);
+                show(frame, &self.common.diamond[0], 176 - k * 4, 116 - (k * (30 - k)) / 8);
+            }
         }
     }
 
@@ -362,18 +614,37 @@ impl Renderer {
         self.font.draw_centred(frame, "LEVEL CLEAR!", banner_y, true);
         // One row of the tally every few frames once the banner lands.
         let rows = ((t - 18) / 6).max(0);
-        if rows > 0 {
-            self.label_number(frame, "DIAMONDS ", world.diamonds, 48);
-        }
-        if rows > 1 {
-            self.label_number(frame, "BOUNTIES ", world.kills, 58);
-        }
-        if rows > 2 {
-            self.label_time(frame, world.frames / 60, 68);
-        }
-        if rows > 3 {
-            self.label_number(frame, "SCORE ", game.score(), 80);
-            self.label_number(frame, "BEST ", game.best, 90);
+        if world.level.coins {
+            // A casino's tally: coins too, and the wallet after the exchange.
+            let lines = [
+                ("DIAMONDS ", world.diamonds),
+                ("GOLD COINS ", world.coins),
+                ("BOUNTIES ", world.kills),
+                ("SCORE ", game.score()),
+                ("WALLET ", game.wallet),
+            ];
+            for (i, (label, n)) in lines.into_iter().enumerate() {
+                if rows > i as i32 {
+                    self.label_number(frame, label, n, 44 + 8 * i as i32);
+                }
+            }
+            if rows > 5 {
+                self.label_time(frame, world.frames / 60, 84);
+            }
+        } else {
+            if rows > 0 {
+                self.label_number(frame, "DIAMONDS ", world.diamonds, 48);
+            }
+            if rows > 1 {
+                self.label_number(frame, "BOUNTIES ", world.kills, 58);
+            }
+            if rows > 2 {
+                self.label_time(frame, world.frames / 60, 68);
+            }
+            if rows > 3 {
+                self.label_number(frame, "SCORE ", game.score(), 80);
+                self.label_number(frame, "BEST ", game.best, 90);
+            }
         }
         if rows > 4 {
             if game.new_best && blink_on {
@@ -415,6 +686,9 @@ impl Renderer {
     fn draw_title(&self, game: &Game, frame: &mut GraphicsFrame) {
         self.font.draw_centred(frame, "DIAMOND HANDS", 6, true);
         self.font.draw_centred(frame, "A WASSIE ADVENTURE", 23, false);
+        if game.dev_cleared != 0 {
+            self.font.draw(frame, "DEV", 4, 4, false);
+        }
 
         let play = if game.can_continue() { "CONTINUE" } else { "PLAY" };
         let items = [
@@ -576,17 +850,22 @@ impl Renderer {
         let (px, py) = ui::portrait_pos(line.speaker != Speaker::Wassie);
         // The speaker bobs while the words come out.
         let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
-        show(frame, self.portrait(line.speaker), px, py - bob);
+        if let Some(portrait) = self.portrait(line.speaker) {
+            show(frame, portrait, px, py - bob);
+        }
     }
 
     /// Each speaker's face for the dialogue box. A new speaker needs a 32x32 portrait
     /// here and a name in `talk::Speaker`.
-    fn portrait(&self, speaker: Speaker) -> &SpriteVram {
-        match speaker {
-            Speaker::Wassie => &self.wassie.portrait,
-            Speaker::Bera => &self.villains.bera.portrait,
-            Speaker::Cl207 => &self.arrival.portrait,
-        }
+    fn portrait(&self, speaker: Speaker) -> Option<&SpriteVram> {
+        Some(match (speaker, self.level_art.as_ref()?) {
+            (Speaker::Wassie, _) => &self.wassie.portrait,
+            (Speaker::Cl207, _) => &self.cl207,
+            (Speaker::Bera, LevelArt::Badlands(bera, _)) => &bera.portrait,
+            (Speaker::Sam, LevelArt::Trenches(c)) => &c.arena.as_ref()?.sam.head,
+            (Speaker::Penguin, LevelArt::Trenches(c)) => &c.arena.as_ref()?.penguin,
+            _ => return None,
+        })
     }
 
     /// The world map: every place with a marker for how far the file has got there
@@ -597,7 +876,7 @@ impl Renderer {
         self.font.draw_centred(frame, "WORLD MAP", 6, true);
         let mut buf = [0; 10];
         let mut total = [0; 10];
-        let cleared = font::number(game.cleared.count_ones(), &mut buf);
+        let cleared = font::number(game.map_cleared().count_ones(), &mut buf);
         let built = font::number(diamond_hands_logic::levels::ALL.len() as u32, &mut total);
         let tally_w = Font::width("CLEARED ", false) + Font::width(cleared, false) + Font::width("/", false);
         let x = (WIDTH - tally_w - Font::width(built, false)) / 2;
@@ -608,7 +887,7 @@ impl Renderer {
 
         let index = (game.cursor as usize).min(MAP.len() - 1);
         let place = &MAP[index];
-        let status = place.status(game.cleared);
+        let status = place.status(game.map_cleared());
         self.font.draw_centred(frame, place.name, 113, true);
         match status {
             PlaceStatus::Cleared => self.font.draw_centred(frame, "CLEARED", 130, false),
@@ -624,9 +903,13 @@ impl Renderer {
                 self.font.draw(frame, before, x + Font::width("LOCKED: CLEAR ", false), 130, false);
             }
             PlaceStatus::Soon => self.font.draw_centred(frame, "COMING SOON", 130, false),
+            PlaceStatus::Upcoming if game.fresh == Some(index as u8) => {
+                self.font.draw_centred(frame, "NEW! UNLOCKED: COMING SOON", 130, false)
+            }
+            PlaceStatus::Upcoming => self.font.draw_centred(frame, "UNLOCKED: COMING SOON", 130, false),
         }
         self.font.draw_centred(frame, place.blurb, 141, false);
-        let hint = if place.playable(game.cleared) { "A: PLAY   B: BACK" } else { "B: BACK" };
+        let hint = if place.playable(game.map_cleared()) { "A: PLAY   B: BACK" } else { "B: BACK" };
         self.font.draw_centred(frame, hint, 152, false);
 
         // The wassie walks the road to a newly unlocked place, then hops on the spot.
@@ -647,8 +930,19 @@ impl Renderer {
         }
         for (i, p) in MAP.iter().enumerate() {
             let (mx, my) = (p.x - 8, p.y - 8);
-            match p.status(game.cleared) {
+            match p.status(game.map_cleared()) {
                 PlaceStatus::Soon => show(frame, &self.soon, mx, my),
+                PlaceStatus::Upcoming => {
+                    // Unlocked but not built: the beacon, glinting, flagged while new.
+                    if game.fresh == Some(i as u8) && walk.is_none() {
+                        let bob = (game.frame / 8 % 2) as i32;
+                        show(frame, &self.common.alert, p.x + 6, my - 14 - bob);
+                    }
+                    if (game.frame + i as u32 * 16) % 24 < 6 {
+                        show(frame, &self.common.glint[0], mx + 4, my - 4);
+                    }
+                    show(frame, &self.soon, mx, my);
+                }
                 PlaceStatus::Locked => show(frame, &self.locked, mx, my),
                 status => {
                     // Open places glint often and, when new, wave a "!" overhead.
@@ -665,7 +959,9 @@ impl Renderer {
                 }
             }
         }
-        self.map.show(frame);
+        if let Some(map) = &self.map {
+            map.show(frame);
+        }
     }
 
     /// The pause menu, painted into the dialogue box's spare rows, plus the animated
@@ -734,6 +1030,10 @@ impl Renderer {
         show(frame, &self.common.diamond[0], 70, 0);
         self.font
             .draw(frame, font::number(world.diamonds, &mut buf), 86, 5, false);
+        if let Some(casino) = self.level_art.as_ref().and_then(LevelArt::casino) {
+            show(frame, &casino.coin[0], 114, 4);
+            self.font.draw(frame, font::number(world.coins, &mut buf), 125, 5, false);
+        }
         let score = font::number(game.score(), &mut buf);
         self.font
             .draw(frame, score, WIDTH - 4 - Font::width(score, false), 5, false);
@@ -743,7 +1043,7 @@ impl Renderer {
             let name = world.level.boss_name;
             self.font.draw(frame, name, 4, y, false);
             let bar_x = (8 + Font::width(name, false) + 4).max(56);
-            let full = world.boss.hp * 64 / diamond_hands_logic::boss::BOSS_HP;
+            let full = world.boss.hp * 64 / world.boss.max_hp();
             for i in 0..8 {
                 let filled = (full - i * 8).clamp(0, 8);
                 show(frame, &self.common.boss_cell[filled as usize], bar_x + i * 8, y);
@@ -787,7 +1087,8 @@ impl Renderer {
         // On arrival the wassie starts inside the ship, and owns nothing but its scarf
         // until CL207 hands over the blaster and the jetpack.
         let arrival = game.arrival_view();
-        if blinking || r.y > 160 || arrival.is_some_and(|v| !v.wassie_out) {
+        let in_lift = world.lift.is_some_and(|l| l.riding());
+        if blinking || in_lift || r.y > 160 || arrival.is_some_and(|v| !v.wassie_out) {
             return;
         }
         let (armed, strapped) = arrival.map_or((true, false), |v| (v.blaster, v.jetpack));
@@ -826,8 +1127,7 @@ impl Renderer {
         // Objects shown first sit on top. Pointing straight up, the cannon would hide
         // the bill, so it goes behind the body instead.
         let alive = !matches!(p.state, PlayerState::Dead | PlayerState::Hurt);
-        let (blaster, (kx, ky)) = self.wassie.blaster(p);
-        let blaster_behind = alive && p.aim == Aim::Up;
+        let (blaster, (kx, ky), blaster_behind) = self.wassie.blaster(p, anim);
         let (bx, by) = part((wassie::BLASTER_SHIFT, 0), 32);
         let blaster_at = (bx + kx * p.facing, by + ky);
         if armed && !blaster_behind {
@@ -856,13 +1156,14 @@ impl Renderer {
                 let a = (game.frame as i32 / 3 + i * 6) % 18;
                 let sx = r.centre_x() - 4 - cam + (a - 9).abs() * 2 - 9;
                 let sy = r.y - 12 + (a % 9) / 3;
-                self.put(frame, &self.villains.bera.star, sx, sy);
+                self.put(frame, &self.villains.star, sx, sy);
             }
         } else if p.state == PlayerState::Fall && p.body.vy_fx >= SPEED_LINES_FX {
             self.put(frame, &self.common.speed_lines, r.centre_x() - 4 - cam, r.y - 14);
         }
 
-        flipped(self.wassie.sprite(p, anim, game.frame), (x, y), frame);
+        let (body, recoil) = self.wassie.sprite(p, anim, game.frame);
+        flipped(body, (x + recoil * p.facing, y), frame);
         if armed && blaster_behind {
             flipped(blaster, blaster_at, frame);
         }
@@ -870,7 +1171,7 @@ impl Renderer {
 
     /// The cargo ship, CL207, and the gear in flight while the arrival plays.
     fn draw_arrival(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let Some(v) = game.arrival_view() else {
+        let (Some(v), Some(LevelArt::Badlands(_, ship))) = (game.arrival_view(), self.level_art.as_ref()) else {
             return;
         };
         let cam = self.view_x;
@@ -899,16 +1200,16 @@ impl Renderer {
         let (gx, feet) = v.guide;
         let left = gx + GUIDE_W / 2 - 16;
         let flip = v.guide_facing < 0;
-        show_at(frame, &self.arrival.guide_top, (left, feet - 32), flip);
-        show_at(frame, &self.arrival.guide_legs[pose as usize], (left, feet - 16), flip);
+        show_at(frame, &ship.guide_top, (left, feet - 32), flip);
+        show_at(frame, &ship.guide_legs[pose as usize], (left, feet - 16), flip);
         let (sx, sy) = v.ship;
         if v.hatch >= 2 {
             let (hx, hy) = arrival::HATCH_AT;
-            show_at(frame, &self.arrival.hatch_open, (sx + hx, sy + hy), false);
+            show_at(frame, &ship.hatch_open, (sx + hx, sy + hy), false);
         }
-        show_at(frame, &self.arrival.ship_half, (sx, sy), false);
-        show_at(frame, &self.arrival.ship_half, (sx + 32, sy), true);
-        let flame = &self.arrival.flames[(game.frame / 3 % 2) as usize];
+        show_at(frame, &ship.ship_half, (sx, sy), false);
+        show_at(frame, &ship.ship_half, (sx + 32, sy), true);
+        let flame = &ship.flames[(game.frame / 3 % 2) as usize];
         for (fx, fy) in arrival::FLAMES_AT {
             show_at(frame, flame, (sx + fx, sy + fy), false);
         }
@@ -942,6 +1243,10 @@ impl Renderer {
                 ShotKind::Bomb => (&v.bomb, r.x, r.y),
                 ShotKind::Shockwave => (&v.shockwave, r.x - 3, r.y - 4),
                 ShotKind::Missile => (&v.missile, r.x - 1, r.y - 2),
+                ShotKind::Card | ShotKind::Cucumber | ShotKind::MegaCucumber | ShotKind::Candle | ShotKind::Orb => {
+                    self.draw_casino_shot(frame, s, game.frame);
+                    continue;
+                }
             };
             let flip_v = down && s.kind.from_player();
             Object::new(sprite.clone())
@@ -951,6 +1256,40 @@ impl Renderer {
                 .set_priority(self.world_layer)
                 .show(frame);
         }
+    }
+
+    /// The casino's and SAM's projectiles. Cucumbers tumble end over end.
+    fn draw_casino_shot(&self, frame: &mut GraphicsFrame, s: &diamond_hands_logic::shot::Shot, t: u32) {
+        let art = self.level_art.as_ref();
+        let r = s.rect();
+        let (cx, cy) = (r.centre_x() - self.view_x, r.centre_y());
+        let left = s.vx_fx < 0;
+        let (sprite, x, y, hflip, vflip) = if s.kind == ShotKind::Card {
+            let Some(floor) = art.and_then(LevelArt::floor) else {
+                return;
+            };
+            (&floor.card[(t / 4 % 2) as usize], cx - 4, cy - 4, false, false)
+        } else {
+            let Some(fx) = art.and_then(LevelArt::arena).map(|a| &a.sam_fx) else {
+                return;
+            };
+            match s.kind {
+                ShotKind::Cucumber => {
+                    // Eight steps of spin from two drawings and the flips.
+                    let step = (t / 3 % 4) as usize;
+                    (&fx.cucumber[step % 2], cx - 8, cy - 8, step >= 2, step >= 2)
+                }
+                ShotKind::MegaCucumber => (&fx.mega, cx - 16, cy - 8, !left, false),
+                ShotKind::Candle => (&fx.candle, cx - 4, cy - 8, false, false),
+                _ => (&fx.orb, cx - 4, cy - 4, false, false),
+            }
+        };
+        Object::new(sprite.clone())
+            .set_pos(vec2(x, y))
+            .set_hflip(hflip)
+            .set_vflip(vflip)
+            .set_priority(self.world_layer)
+            .show(frame);
     }
 
     fn draw_fx(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -967,6 +1306,23 @@ impl Renderer {
                     // Sits on the ground and drifts up a little as it thins.
                     let y = f.y + 3 - 8 - f.age as i32 / 5;
                     self.put(frame, &c.dust[f.frame(3)], f.x - 4 - cam, y);
+                    continue;
+                }
+                FxKind::CoinPop | FxKind::Splat => {
+                    let Some(casino) = self.level_art.as_ref().and_then(LevelArt::casino) else {
+                        continue;
+                    };
+                    if f.kind == FxKind::Splat {
+                        if let Some(arena) = &casino.arena {
+                            self.put(frame, &arena.sam_fx.splat[f.frame(2)], f.x - 8 - cam, f.y - 8);
+                        }
+                    } else {
+                        // Flips up and falls back, spinning.
+                        let t = f.age as i32;
+                        let y = f.y - 4 - (t * (22 - t)) / 6;
+                        let spin = &casino.coin[(t / 3 % 3) as usize];
+                        self.put(frame, spin, f.x - 4 - cam, y);
+                    }
                     continue;
                 }
                 FxKind::Kick => {
@@ -1004,11 +1360,20 @@ impl Renderer {
         if r.right() < cam - 32 || r.x > cam + WIDTH + 32 {
             return;
         }
+        let bera = match self.level_art.as_ref() {
+            Some(LevelArt::Badlands(bera, _)) => bera,
+            Some(LevelArt::Trenches(casino)) => {
+                if let Some(arena) = &casino.arena {
+                    self.draw_sam(game, frame, arena);
+                }
+                return;
+            }
+            None => return,
+        };
         let blink = (boss.flash > 0 || boss.state == BossState::Dying) && (game.frame / 2).is_multiple_of(2);
         if blink {
             return;
         }
-        let bera = &self.villains.bera;
         let flip = boss.facing > 0;
         let stalled = matches!(boss.state, BossState::Stunned | BossState::Dying);
         // Telegraphing the charge: a crouch-and-shake.
@@ -1051,7 +1416,7 @@ impl Renderer {
                 let a = (game.frame as i32 / 4 + i * 8) % 24;
                 let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
                 let sy = top + head.1 - 6 + (a % 12) / 3;
-                self.put(frame, &bera.star, sx, sy);
+                self.put(frame, &self.villains.star, sx, sy);
             }
         }
         if stalled {
@@ -1072,10 +1437,144 @@ impl Renderer {
         part(&bera.legs, badlands::BERA_LEGS_AT, 64, top, frame);
     }
 
+    /// SAM, built from parts in a 64x64 frame: his pose follows his attack, he breathes
+    /// and bobs as he walks, blinks white when hit, glows once overloaded, and comes apart
+    /// in the end, falling flat on his face.
+    fn draw_sam(&self, game: &Game, frame: &mut GraphicsFrame, casino: &ArenaArt) {
+        let boss = &game.world.boss;
+        let (sam, t) = (&casino.sam, game.frame);
+        let r = boss.rect();
+        let cam = self.view_x;
+        let state = boss.state;
+        let dying = state == BossState::Dying;
+        if dying && boss.timer < 40 {
+            // Down for good.
+            // Down for good: flipped, the halves swap sides.
+            let flip = boss.facing > 0;
+            for (i, half) in sam.down.iter().enumerate() {
+                let x = r.centre_x() - 32 - cam + badlands::flip_x(i as i32 * 32, 32, flip);
+                Object::new(half.clone())
+                    .set_pos(vec2(x, r.bottom() - 16))
+                    .set_hflip(flip)
+                    .set_priority(self.world_layer)
+                    .show(frame);
+            }
+            return;
+        }
+        if boss.flash > 0 && (t / 2).is_multiple_of(2) {
+            return;
+        }
+        let flip = boss.facing > 0;
+        let shaking = matches!(state, BossState::Windup | BossState::Overload) || dying;
+        let shake = if shaking { (t % 2) as i32 * 2 - 1 } else { 0 };
+        let x = r.centre_x() - 32 - cam + shake;
+        let top = r.bottom() - 64;
+        let part = |sprite: &SpriteVram, (px, py): (i32, i32), w: i32, dy: i32, frame: &mut GraphicsFrame| {
+            Object::new(sprite.clone())
+                .set_pos(vec2(x + badlands::flip_x(px, w, flip), top + py + dy))
+                .set_hflip(flip)
+                .set_priority(self.world_layer)
+                .show(frame);
+        };
+        let walking = state == BossState::Walk && boss.body.vx_fx != 0;
+        let stride = (r.x.unsigned_abs() / 6 % 2) as usize;
+        let pace = if boss.dazed() { 3 } else { 10 };
+        let breath = BERA_BREATH[(t / pace) as usize % BERA_BREATH.len()] / 2;
+        let bob = if walking { stride as i32 } else { 0 };
+        let crouch = match state {
+            BossState::Windup => 3,
+            BossState::Swing => 1,
+            BossState::Winded => 2,
+            _ => 0,
+        };
+        let upper = bob + crouch - breath;
+        let glow = boss.phase() == 2 || matches!(state, BossState::Crash | BossState::Barrage | BossState::Overload);
+        let head = if dying { &sam.head_dead } else if glow && !(t / 8).is_multiple_of(3) { &sam.head_glow } else { &sam.head };
+
+        // The Cucumber Hit's tell: lightning crackling round him.
+        if matches!(state, BossState::Windup | BossState::Overload) {
+            for i in 0..4 {
+                let a = (t as i32 / 2 + i * 4) % 16;
+                let (ax, ay) = (SIN16[(a as usize + 4) % 16] * 26 / 64, SIN16[a as usize] * 28 / 64);
+                let spark = &casino.sam_fx.aura[((t / 2 + i as u32) % 2) as usize];
+                self.put(frame, spark, r.centre_x() - 4 - cam + ax, r.centre_y() - 8 + ay);
+            }
+        }
+        if boss.dazed() {
+            for i in 0..3 {
+                let a = (t as i32 / 4 + i * 8) % 24;
+                let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
+                self.put(frame, &self.villains.star, sx, top - 2 + (a % 12) / 3);
+            }
+        }
+        // The near arm in front, unless it is cocked back behind him.
+        let arm_up = match state {
+            BossState::Throw => boss.timer > 4,
+            BossState::Crash | BossState::Barrage => true,
+            _ => false,
+        };
+        match state {
+            BossState::Throw if !arm_up => part(&sam.arm_out, casino::SAM_ARM_OUT_AT, 32, upper, frame),
+            BossState::Windup | BossState::Swing => part(&sam.arm_swing, casino::SAM_ARM_SWING_AT, 32, upper, frame),
+            _ if !arm_up => part(&sam.arm_hold, casino::SAM_ARM_HOLD_AT, 16, upper, frame),
+            _ => {}
+        }
+        part(head, casino::SAM_HEAD_AT, 32, upper - breath, frame);
+        part(&sam.torso, casino::SAM_TORSO_AT, 32, upper, frame);
+        let legs = if walking { 1 + stride } else { 0 };
+        part(&sam.legs[legs], casino::SAM_LEGS_AT, 32, 0, frame);
+        if arm_up {
+            part(&sam.arm_up, casino::SAM_ARM_UP_AT, 32, upper, frame);
+        }
+    }
+
+    /// The elevator cars, their doors sliding as the lift runs, and a light running up
+    /// the dial while it powers up.
+    fn draw_lift(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let (Some(lift), Some(casino)) = (game.world.lift, self.level_art.as_ref().and_then(LevelArt::floor)) else {
+            return;
+        };
+        let cam = self.view_x;
+        for (upstairs, (x, feet)) in [(false, lift.car), (true, lift.dest)] {
+            if x + 32 < cam || x > cam + WIDTH {
+                continue;
+            }
+            let (sx, sy) = (x - cam - 4, feet - 32);
+            // Each door's outer panel slides away first, then the inner one.
+            let open = lift.doors(upstairs) as usize;
+            let panels: &[(usize, i32)] = match open * 3 / 16 {
+                0 => &[(0, 8), (1, 4)],
+                1 => &[(0, 8)],
+                2 => &[(1, 12)],
+                _ => &[],
+            };
+            for &(panel, right_edge) in panels {
+                let door = &casino.lift_door[panel];
+                self.put(frame, door, sx + 4 + right_edge - 8, sy + 7);
+                Object::new(door.clone())
+                    .set_pos(vec2(sx + 28 - right_edge, sy + 7))
+                    .set_hflip(true)
+                    .set_priority(self.world_layer)
+                    .show(frame);
+            }
+            let powering = lift.state == LiftState::Powering && !upstairs;
+            if powering && (game.frame / 4).is_multiple_of(2) {
+                self.put(frame, &self.common.glint[0], sx + 12, sy - 2);
+            }
+            self.put(frame, &casino.lift, sx, sy);
+        }
+        if let Some((px, py)) = game.world.up_prompt() {
+            let bob = (game.frame / 10 % 2) as i32;
+            self.put(frame, &casino.up_prompt, px - 8 - cam, py - 16 - bob);
+        }
+    }
+
     fn draw_actors(&self, game: &Game, frame: &mut GraphicsFrame) {
         let world = &game.world;
         let cam = self.view_x;
         let (c, v) = (&self.common, &self.villains);
+        let casino = self.level_art.as_ref().and_then(LevelArt::casino);
+        let floor = self.level_art.as_ref().and_then(LevelArt::floor);
         for a in world.actors.iter().filter(|a| a.alive) {
             let r = a.rect();
             if r.right() < cam - 16 || r.x > cam + WIDTH + 16 {
@@ -1109,17 +1608,69 @@ impl Renderer {
                     let spin = (game.frame / 3 % 2) as usize;
                     (&v.drone[spin], x, r.y - 3, a.facing > 0)
                 }
-                ActorKind::Mine => (&v.mine, x - 2, r.y - 2, step == 1),
+                ActorKind::Mine => match (casino, floor) {
+                    (None, _) => (&v.mine, x - 2, r.y - 2, step == 1),
+                    (Some(_), Some(floor)) => (&floor.chip, x - 2, r.y - 2, step == 1),
+                    (Some(_), None) => continue,
+                },
+                ActorKind::Coin => {
+                    let Some(casino) = casino else {
+                        continue;
+                    };
+                    let spin = [0, 1, 2, 1][((game.frame + r.x as u32) / 6 % 4) as usize];
+                    (&casino.coin[spin], x, r.y, spin == 1 && (game.frame / 24).is_multiple_of(2))
+                }
+                ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer | ActorKind::Guard => {
+                    let Some(floor) = floor else {
+                        continue;
+                    };
+                    let (left, top) = (r.centre_x() - 8 - cam, r.bottom() - 32);
+                    let flip = a.facing > 0;
+                    // Overlays go on top of the body: the lit screen, the cards, the cannon.
+                    let overlay = match a.kind {
+                        ActorKind::Terminal if a.state == state::LIT => Some((&floor.terminal_on, 0, 0)),
+                        ActorKind::Dealer if a.state == state::AIM => Some((&floor.cards_in_hand, casino::CARDS_AT.0, casino::CARDS_AT.1)),
+                        ActorKind::Guard if matches!(a.state, state::AIM | state::LUNGE) => {
+                            Some((&floor.guard_aim, casino::GUARD_AIM_AT.0, casino::GUARD_AIM_AT.1))
+                        }
+                        _ => None,
+                    };
+                    if let Some((sprite, ox, oy)) = overlay {
+                        let w = if a.kind == ActorKind::Terminal { 16 } else { 8 };
+                        let ox = if flip { 16 - ox - w } else { ox };
+                        Object::new(sprite.clone())
+                            .set_pos(vec2(left + ox, top + oy))
+                            .set_hflip(flip && a.kind != ActorKind::Terminal)
+                            .set_priority(self.world_layer)
+                            .show(frame);
+                    }
+                    match a.kind {
+                        ActorKind::Part => {
+                            let bob = (game.frame / 16 % 2) as i32;
+                            if (game.frame + r.x as u32) % 40 < 6 {
+                                self.put(frame, &c.glint[0], x - 1, r.y - 4);
+                            }
+                            (&floor.cell, x - 3, r.y - 2 - bob, false)
+                        }
+                        ActorKind::Terminal => (&floor.terminal, left, top, false),
+                        ActorKind::Dealer => (&floor.dealer[step], left, top, flip),
+                        _ => (&floor.guard[step], left, top, flip),
+                    }
+                }
             };
             // The attack tell: a "!" over a bot winding up.
-            let winding_up = matches!(a.kind, ActorKind::Sentry | ActorKind::Crawler) && a.state == state::AIM;
+            let winding_up =
+                matches!(a.kind, ActorKind::Sentry | ActorKind::Crawler | ActorKind::Dealer | ActorKind::Guard)
+                    && a.state == state::AIM;
             if winding_up {
                 self.put(frame, &c.alert, r.centre_x() - 4 - cam, r.y - 14);
             }
+            // Pickups in a secret passage sit behind its false wall until walked into.
+            let hidden = trenches::behind_false_wall(world.level, r.centre_x().div_euclid(TILE), (r.bottom() - 1).div_euclid(TILE));
             let mut obj = Object::new(sprite.clone());
             obj.set_pos(vec2(sx, sy))
                 .set_hflip(flip)
-                .set_priority(self.world_layer);
+                .set_priority(if hidden { Priority::P2 } else { self.world_layer });
             if a.kind == ActorKind::Mine {
                 obj.set_vflip(step == 1);
             }

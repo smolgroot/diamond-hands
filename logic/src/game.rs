@@ -1,19 +1,35 @@
 //! Scene flow around the levels: splash → save files → title ⇄ options, title → level
-//! intro → (arrival, on a first visit) → play ⇄ pause menu → level clear → world map →
-//! the next level. Play stops for the boss's dialogue when the arena closes.
+//! intro → (arrival or a call from CL207, on a first visit) → play ⇄ pause menu →
+//! (the penguin's exchange, in a casino level) → level clear → world map → the next
+//! level. Play stops for the boss's dialogue when the arena closes.
+//!
+//! Two currencies: diamonds, banked into the file's wallet when a level is cleared,
+//! and gold coins from the casino. At the end of a casino level the penguin cashier
+//! offers to change the coins into diamonds at [`EXCHANGE_RATE`]; coins kept instead
+//! stay in the file's purse for next time.
 //!
 //! The world map is the hub. Levels unlock in order: clearing one opens the next, and
 //! any unlocked level can be played (or replayed) from the map. Each save file keeps
 //! which levels it has cleared, and every run saves to the chosen file at each beacon
 //! and level clear.
 
+use alloc::boxed::Box;
+
 use crate::{
     arrival::{self, Beat},
     inventory::ITEMS,
     levels::{self, Cleared},
-    talk::Line,
+    talk::{Line, Speaker},
     world::{Difficulty, Events, Input, World},
 };
+
+/// Diamonds the penguin pays for each gold coin.
+pub const EXCHANGE_RATE: u32 = 8;
+/// Frames CL207's call rings before the wassie picks up on its own.
+pub const CALL_RING_FRAMES: u32 = 80;
+/// Frames the penguin takes to waddle in, and the payout counts up for.
+pub const PENGUIN_WALK_FRAMES: u32 = 70;
+pub const PAYOUT_FRAMES: u32 = 90;
 
 /// KEYINPUT bit positions, active high (pressed = 1).
 pub mod keys {
@@ -72,6 +88,57 @@ pub enum Scene {
     FileChoice,
     /// The level's arrival scene: dropped off, welcomed, and handed the gear.
     Arrival,
+    /// After a casino boss: the penguin cashier changes coins into diamonds.
+    Exchange,
+}
+
+/// What the dialogue box is talking through in [`Scene::Dialog`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Talk {
+    /// The boss, when the arena closes.
+    Boss,
+    /// CL207 calls when the level starts.
+    Call,
+}
+
+/// Where the penguin's exchange is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Deal {
+    /// Waddling in from the right.
+    Walk,
+    /// The pitch.
+    Pitch,
+    /// The offer is on the table: exchange, or keep the coins.
+    Offer,
+    /// Accepted: the coins count down as the diamonds count up.
+    Payout,
+    /// A parting line.
+    Bye,
+}
+
+/// Rows of the penguin's offer, in [`Game::cursor`] order.
+pub mod offer_menu {
+    pub const EXCHANGE: u8 = 0;
+    pub const KEEP: u8 = 1;
+    pub const LEN: u8 = 2;
+}
+
+/// The exchange in progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exchange {
+    pub deal: Deal,
+    /// Coins on the counter: this run's (unless it's a replay) and the purse's.
+    pub coins: u32,
+    /// What the wassie chose, once it has: `Some(true)` exchanged.
+    pub accepted: Option<bool>,
+}
+
+impl Exchange {
+    /// Diamonds the coins on the counter are worth.
+    pub fn diamonds(&self) -> u32 {
+        self.coins.saturating_mul(EXCHANGE_RATE)
+    }
 }
 
 /// A run saved to a file: where to pick it up.
@@ -91,12 +158,20 @@ pub struct Progress {
     pub complete: bool,
     /// The levels this file has cleared, which also unlock the ones after them.
     pub cleared: Cleared,
+    /// Gold coins picked up in this level so far.
+    pub coins: u32,
+    /// Diamonds banked from cleared levels and the penguin's exchange.
+    pub wallet: u32,
+    /// Gold coins kept from earlier exchanges.
+    pub purse: u32,
+    /// CL207's shield parts found, one bit each.
+    pub parts: u16,
 }
 
 impl Progress {
     /// Score so far.
     pub fn score(&self) -> u32 {
-        self.banked + World::score_for(self.diamonds, self.kills, false)
+        self.banked + World::score_for(self.diamonds, self.coins, self.kills, false)
     }
 }
 
@@ -147,7 +222,8 @@ pub mod options_menu {
 #[derive(Clone, Debug)]
 pub struct Game {
     pub scene: Scene,
-    pub world: World,
+    /// On the heap: see the crate root.
+    pub world: Box<World>,
     /// Frames since power-on.
     pub frame: u32,
     /// Best total score across a full playthrough.
@@ -161,6 +237,9 @@ pub struct Game {
     pub cursor: u8,
     /// The levels the active file has cleared.
     pub cleared: Cleared,
+    /// Dev builds: levels the map treats as cleared, so the ones after them can be
+    /// played without beating them. Never saved; the file's own clears are untouched.
+    pub dev_cleared: Cleared,
     /// This level was already cleared before this visit: it banks no score again.
     pub replay: bool,
     /// The place a clear just unlocked, marked "NEW" on the map until played.
@@ -179,9 +258,18 @@ pub struct Game {
     pub file: u8,
     /// PLAY picks up the file's run rather than starting over.
     pub resume: bool,
-    /// Where the arrival scene is, and whether this level start plays it.
+    /// Where the arrival scene is, and whether this level start plays it (or CL207's
+    /// call, in a level with no arrival).
     pub beat: Beat,
     arrival_due: bool,
+    /// What [`Scene::Dialog`] is talking through.
+    pub talk: Talk,
+    /// The penguin's exchange, while it runs, and how it went after.
+    pub exchange: Exchange,
+    /// The active file's banked diamonds, kept gold coins and shield parts.
+    pub wallet: u32,
+    pub purse: u32,
+    pub parts: u16,
     /// Frames spent in the current scene, for timed screens.
     timer: u32,
 }
@@ -194,7 +282,7 @@ impl Game {
     pub fn with_save(best: u32, difficulty: Difficulty, files: [Option<Progress>; FILES]) -> Self {
         Self {
             scene: Scene::Splash,
-            world: World::new(0, difficulty),
+            world: new_world(0, difficulty),
             frame: 0,
             best,
             banked: 0,
@@ -202,6 +290,7 @@ impl Game {
             difficulty,
             cursor: title_menu::PLAY,
             cleared: 0,
+            dev_cleared: 0,
             replay: false,
             fresh: None,
             map_walk: None,
@@ -214,6 +303,11 @@ impl Game {
             resume: false,
             beat: Beat::Landing,
             arrival_due: false,
+            talk: Talk::Boss,
+            exchange: Exchange { deal: Deal::Walk, coins: 0, accepted: None },
+            wallet: 0,
+            purse: 0,
+            parts: 0,
             timer: 0,
         }
     }
@@ -234,9 +328,15 @@ impl Game {
         self.timer
     }
 
+    /// The levels the world map treats as cleared: the file's, and in a dev build the
+    /// ones it opens up.
+    pub fn map_cleared(&self) -> Cleared {
+        self.cleared | self.dev_cleared
+    }
+
     /// The map place of the first level the file hasn't cleared.
     fn frontier_place(&self) -> u8 {
-        levels::place_of(levels::frontier(self.cleared)) as u8
+        levels::place_of(levels::frontier(self.map_cleared())) as u8
     }
 
     /// Whether the splash is showing its "PRESS START" prompt, and for how many frames.
@@ -245,18 +345,37 @@ impl Game {
             .then(|| self.timer - SPLASH_PROMPT_FRAMES)
     }
 
-    /// The lines being talked through: the boss's, or the arrival's.
+    /// The lines being talked through: the boss's, the arrival's, CL207's call, or the
+    /// penguin's.
     pub fn talk_lines(&self) -> &'static [Line] {
-        match self.arrival() {
-            Some(arrival) if self.scene == Scene::Arrival => arrival.lines,
+        match self.scene {
+            Scene::Arrival => self.arrival().map_or(&[], |a| a.lines),
+            Scene::Exchange => match self.exchange.deal {
+                Deal::Pitch => &PITCH,
+                Deal::Offer => &OFFER,
+                Deal::Bye if self.exchange.coins == 0 => &BROKE,
+                Deal::Bye if self.exchange.accepted == Some(true) => &THANKS,
+                Deal::Bye => &KEPT,
+                _ => &[],
+            },
+            _ if self.talk == Talk::Call => self.world.level.call,
             _ => self.world.level.boss_talk,
         }
     }
 
     /// Whether a line of dialogue is up.
     pub fn talking(&self) -> bool {
-        self.scene == Scene::Dialog
-            || (self.scene == Scene::Arrival && matches!(self.beat, Beat::Talk | Beat::Reply))
+        match self.scene {
+            Scene::Dialog => self.talk != Talk::Call || self.timer >= CALL_RING_FRAMES,
+            Scene::Arrival => matches!(self.beat, Beat::Talk | Beat::Reply),
+            Scene::Exchange => matches!(self.exchange.deal, Deal::Pitch | Deal::Offer | Deal::Bye),
+            _ => false,
+        }
+    }
+
+    /// CL207's phone is ringing, before the wassie picks up.
+    pub fn ringing(&self) -> bool {
+        self.scene == Scene::Dialog && self.talk == Talk::Call && self.timer < CALL_RING_FRAMES
     }
 
     /// What the arrival scene shows now, while it plays.
@@ -272,6 +391,11 @@ impl Game {
     /// Score so far in this playthrough.
     pub fn score(&self) -> u32 {
         self.banked + self.world.score()
+    }
+
+    /// The file's diamonds: banked, plus those picked up in this level so far.
+    pub fn diamond_balance(&self) -> u32 {
+        self.wallet + if self.replay { 0 } else { self.world.diamonds }
     }
 
     pub fn step(&mut self, input: &Input) -> Events {
@@ -318,7 +442,7 @@ impl Game {
                         // the map opens on the next one; a new run starts at the first.
                         title_menu::PLAY => match self.resumable() {
                             Some(progress) if progress.checkpoint.is_some() => self.continue_run(progress),
-                            _ if self.cleared != 0 => self.open_map(self.frontier_place()),
+                            _ if self.map_cleared() != 0 => self.open_map(self.frontier_place()),
                             _ => self.start_level(0),
                         },
                         title_menu::MAP => self.open_map(self.frontier_place()),
@@ -350,10 +474,15 @@ impl Game {
             }
             Scene::Intro => {
                 if self.timer >= INTRO_FRAMES || (confirm && self.timer > 20) {
-                    if self.arrival_due && self.arrival().is_some() {
-                        self.arrival_due = false;
+                    let due = core::mem::take(&mut self.arrival_due);
+                    if due && self.arrival().is_some() {
                         self.enter(Scene::Arrival);
                         self.beat = Beat::Landing;
+                    } else if due && !self.world.level.call.is_empty() {
+                        self.talk = Talk::Call;
+                        self.talk_line = 0;
+                        self.talk_shown = 0;
+                        self.enter(Scene::Dialog);
                     } else {
                         self.enter(Scene::Play);
                     }
@@ -383,32 +512,50 @@ impl Game {
                             frames: world.frames,
                             complete: self.cleared == levels::ALL_CLEARED,
                             cleared: self.cleared,
+                            coins: world.coins,
+                            wallet: self.wallet,
+                            purse: self.purse,
+                            parts: world.parts,
                         },
                         &mut events,
                     );
                 }
                 if events.contains(Events::LEVEL_CLEAR) {
-                    self.finish_level(&mut events);
+                    if self.world.level.coins {
+                        self.open_exchange();
+                    } else {
+                        self.finish_level(&mut events);
+                    }
+                    return events;
                 }
                 // The boss speaks once the camera has settled on the arena.
                 let world = &mut self.world;
                 if world.talk_due && world.camera_x == world.boss.arena.0 {
                     world.talk_due = false;
                     world.talked = true;
+                    self.talk = Talk::Boss;
                     self.talk_line = 0;
                     self.talk_shown = 0;
                     self.enter(Scene::Dialog);
                 }
             }
             Scene::Dialog => {
-                let lines = self.world.level.boss_talk;
-                if input.start_pressed()
+                let lines = self.talk_lines();
+                if self.ringing() {
+                    // A picks up; Start ignores the call altogether.
+                    if input.start_pressed() {
+                        self.enter(Scene::Play);
+                    } else if input.pressed & crate::keys::A != 0 && self.timer > 10 {
+                        self.timer = CALL_RING_FRAMES;
+                    }
+                } else if input.start_pressed()
                     || self.talk_line as usize >= lines.len()
                     || self.talk(input, lines, lines.len())
                 {
                     self.enter(Scene::Play);
                 }
             }
+            Scene::Exchange => self.step_exchange(input, &mut events),
             Scene::Map => self.step_map(input, &mut events),
             Scene::Paused => self.step_menu(input, &mut events),
             Scene::LevelClear => {
@@ -418,7 +565,7 @@ impl Game {
                         self.banked += self.world.score();
                     }
                     let from = levels::place_of(self.world.level_index) as u8;
-                    let to = self.frontier_place();
+                    let to = self.fresh.unwrap_or_else(|| self.frontier_place());
                     self.open_map(to);
                     self.map_walk = (from != to && self.fresh == Some(to)).then_some((from, to));
                 }
@@ -510,6 +657,90 @@ impl Game {
         }
     }
 
+    /// The penguin's exchange, which opens when a casino boss is beaten: the coins on
+    /// the counter are this run's (unless it's a replay, which banks nothing) and
+    /// those kept from before.
+    fn open_exchange(&mut self) {
+        let run = if self.replay { 0 } else { self.world.coins };
+        self.exchange = Exchange { deal: Deal::Walk, coins: run.saturating_add(self.purse), accepted: None };
+        // The fight is over: nothing left in flight hangs in the air while he talks.
+        self.world.shots = [crate::shot::Shot::EMPTY; crate::shot::MAX_SHOTS];
+        self.world.fx.clear();
+        self.world.player.recoil = 0;
+        self.world.player.charge = 0;
+        self.enter(Scene::Exchange);
+    }
+
+    fn deal(&mut self, deal: Deal) {
+        self.exchange.deal = deal;
+        self.timer = 0;
+        self.talk_line = 0;
+        self.talk_shown = 0;
+    }
+
+    /// One frame of the exchange. The deal is struck once, on the frame A confirms the
+    /// offer, and saved with the level's clear when the penguin says goodbye.
+    fn step_exchange(&mut self, input: &Input, events: &mut Events) {
+        let pressed = |key| input.pressed & key != 0;
+        match self.exchange.deal {
+            Deal::Walk => {
+                if self.timer >= PENGUIN_WALK_FRAMES || (input.start_pressed() && self.timer > 10) {
+                    let next = if self.exchange.coins == 0 { Deal::Bye } else { Deal::Pitch };
+                    self.deal(next);
+                }
+            }
+            Deal::Pitch => {
+                if input.start_pressed() || self.talk(input, &PITCH, PITCH.len()) {
+                    self.deal(Deal::Offer);
+                    self.cursor = offer_menu::EXCHANGE;
+                }
+            }
+            Deal::Offer => {
+                // The question is up at once; the choice is made with the pad.
+                self.talk_shown = OFFER[0].len() as u16;
+                let move_keys = crate::keys::UP | crate::keys::DOWN | crate::keys::LEFT | crate::keys::RIGHT;
+                if pressed(move_keys) {
+                    self.cursor = (self.cursor + 1) % offer_menu::LEN;
+                    events.insert(Events::MENU_MOVE);
+                } else if pressed(crate::keys::A) {
+                    let accept = self.cursor == offer_menu::EXCHANGE;
+                    self.strike(accept);
+                    events.insert(if accept { Events::MENU_OK } else { Events::MENU_BACK });
+                    self.deal(if accept { Deal::Payout } else { Deal::Bye });
+                }
+            }
+            Deal::Payout => {
+                if self.timer % 6 == 0 {
+                    events.insert(Events::COIN);
+                }
+                if self.timer >= PAYOUT_FRAMES || (pressed(crate::keys::A) && self.timer > 10) {
+                    self.deal(Deal::Bye);
+                }
+            }
+            Deal::Bye => {
+                let lines = self.talk_lines();
+                if input.start_pressed() || self.talk(input, lines, lines.len()) {
+                    self.finish_level(events);
+                }
+            }
+        }
+    }
+
+    /// Settles the exchange, once: accepting pays the coins' worth into the wallet and
+    /// empties the purse; keeping them puts every coin on the counter in the purse.
+    fn strike(&mut self, accept: bool) {
+        if self.exchange.accepted.is_some() {
+            return;
+        }
+        self.exchange.accepted = Some(accept);
+        if accept {
+            self.wallet = self.wallet.saturating_add(self.exchange.diamonds());
+            self.purse = 0;
+        } else {
+            self.purse = self.exchange.coins;
+        }
+    }
+
     /// Play starts with the wassie standing on its start, armed.
     fn end_arrival(&mut self) {
         self.world.reset_player();
@@ -536,7 +767,7 @@ impl Game {
             events.insert(Events::MENU_BACK);
             self.return_to_title(title_menu::MAP);
         } else if input.start_pressed() || pressed(crate::keys::CONFIRM) {
-            match place.level.filter(|_| place.playable(self.cleared)) {
+            match place.level.filter(|_| place.playable(self.map_cleared())) {
                 Some(index) => {
                     events.insert(Events::MENU_OK);
                     self.start_level(index);
@@ -610,6 +841,9 @@ impl Game {
         let run = self.resumable().unwrap_or_default();
         self.cleared = run.cleared;
         self.banked = run.banked;
+        self.wallet = run.wallet;
+        self.purse = run.purse;
+        self.parts = run.parts;
         self.fresh = None;
         self.return_to_title(title_menu::PLAY);
     }
@@ -618,18 +852,19 @@ impl Game {
         self.enter(Scene::Map);
         self.cursor = place;
         self.map_walk = None;
-        self.world = World::new(0, self.difficulty);
+        self.world = new_world(0, self.difficulty);
     }
 
     fn return_to_title(&mut self, cursor: u8) {
         self.enter(Scene::Title);
         self.cursor = cursor;
-        self.world = World::new(0, self.difficulty);
+        self.world = new_world(0, self.difficulty);
     }
 
     /// Starts level `index` at its beginning. Its arrival plays on a first visit only.
     fn start_level(&mut self, index: u8) {
-        self.world = World::new(index, self.difficulty);
+        self.world = new_world(index, self.difficulty);
+        self.world.own_parts(self.parts);
         self.replay = levels::is_cleared(self.cleared, index);
         self.arrival_due = !self.replay;
         if self.fresh == Some(levels::place_of(index) as u8) {
@@ -641,7 +876,8 @@ impl Game {
     /// Picks up a saved run: its level, at its last beacon.
     fn continue_run(&mut self, progress: Progress) {
         self.banked = progress.banked;
-        self.world = World::resume(&progress, self.difficulty);
+        self.world = Box::new(World::resume(&progress, self.difficulty));
+        self.world.own_parts(self.parts | progress.parts);
         self.replay = levels::is_cleared(self.cleared, progress.level);
         self.arrival_due = false;
         self.enter(Scene::Intro);
@@ -656,6 +892,9 @@ impl Game {
 
     /// Marks the level cleared, which unlocks the next, and saves. A replay of a cleared
     /// level banks no score and can't set a best.
+    /// Marks the level cleared, which unlocks the next, banks the level's diamonds in
+    /// the wallet and saves. A replay of a cleared level banks no score or diamonds and
+    /// can't set a best. Shield parts are kept either way: each can only be found once.
     fn finish_level(&mut self, events: &mut Events) {
         self.enter(Scene::LevelClear);
         let index = self.world.level_index;
@@ -665,21 +904,50 @@ impl Game {
             self.best = score;
             events.insert(Events::SAVE);
         }
+        self.parts |= self.world.parts;
         if !self.replay {
+            self.wallet = self.wallet.saturating_add(self.world.diamonds);
             self.cleared |= 1 << index;
             let next = index + 1;
-            self.fresh = levels::is_unlocked(self.cleared, next).then(|| levels::place_of(next) as u8);
+            self.fresh = levels::MAP
+                .iter()
+                .position(|p| p.order == next)
+                .filter(|_| levels::is_reached(self.cleared, next))
+                .map(|i| i as u8);
         }
         let progress = Progress {
             level: levels::frontier(self.cleared),
             banked: if self.replay { self.banked } else { score },
             complete: self.cleared == levels::ALL_CLEARED,
             cleared: self.cleared,
+            wallet: self.wallet,
+            purse: self.purse,
+            parts: self.parts,
             ..Progress::default()
         };
         self.save_run(progress, events);
     }
 }
+
+/// A level's world, made in a stack frame of its own and moved straight to the heap.
+#[inline(never)]
+fn new_world(level: u8, difficulty: Difficulty) -> Box<World> {
+    Box::new(World::new(level, difficulty))
+}
+
+/// The penguin cashier's lines.
+static PITCH: [Line; 3] = [
+    Line { speaker: Speaker::Penguin, rows: &["HONK! NICE WIN, PAL.", "THE HOUSE IS CLOSED."] },
+    Line { speaker: Speaker::Penguin, rows: &["I CHANGE CASINO GOLD", "FOR REAL DIAMONDS."] },
+    Line { speaker: Speaker::Penguin, rows: &["ONE COIN BUYS EIGHT.", "NO FEES. NO RUGS."] },
+];
+static OFFER: [Line; 1] = [Line { speaker: Speaker::Penguin, rows: &["CASH OUT YOUR COINS?", "   EXCHANGE THEM", "   KEEP MY COINS"] }];
+static THANKS: [Line; 1] = [Line { speaker: Speaker::Penguin, rows: &["PLEASURE DOING", "BUSINESS. WADDLE ON!"] }];
+static KEPT: [Line; 1] = [Line { speaker: Speaker::Penguin, rows: &["HODLING GOLD, EH?", "MY BOOTH IS ALWAYS", "OPEN."] }];
+static BROKE: [Line; 1] = [Line { speaker: Speaker::Penguin, rows: &["NO COINS? COME BACK", "WHEN YOU WIN BIG."] }];
+
+/// Every line the penguin can say.
+pub static MERCHANT_LINES: [&[Line]; 5] = [&PITCH, &OFFER, &THANKS, &KEPT, &BROKE];
 
 #[cfg(test)]
 mod tests {
@@ -857,8 +1125,10 @@ mod tests {
         let file = game.files[0].expect("saved on clear");
         assert!(file.complete);
         assert_eq!(file.cleared, levels::ALL_CLEARED);
-        assert_eq!(game.fresh, None, "nothing left to unlock");
-        assert_eq!(game.map_walk, None);
+        assert_eq!(game.fresh, Some(2), "level 3 shows unlocked, though not built");
+        assert_eq!(game.map_walk, Some((1, 2)), "the wassie walks on to it");
+        assert_eq!(levels::MAP[2].status(game.cleared), levels::PlaceStatus::Upcoming);
+        assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "but it can't be played yet");
         tap(&mut game, keys::B);
         assert_eq!(game.scene, Scene::Title);
         tap(&mut game, keys::UP);
@@ -901,9 +1171,9 @@ mod tests {
         let x = game.world.player.body.x();
         assert!(tap(&mut game, keys::START).contains(Events::MENU_OK));
         assert_eq!((game.scene, game.menu.tab), (Scene::Paused, pause_menu::BAG));
-        tap(&mut game, keys::DOWN);
-        tap(&mut game, keys::DOWN);
-        tap(&mut game, keys::DOWN);
+        for _ in 0..ITEMS.len() {
+            tap(&mut game, keys::DOWN);
+        }
         assert_eq!(game.menu.item, 0, "the bag wraps");
         tap(&mut game, keys::UP);
         assert_eq!(game.menu.item as usize, ITEMS.len() - 1);
@@ -1100,10 +1370,10 @@ mod tests {
         }
     }
 
-    /// From the level card into play, skipping the arrival.
+    /// From the level card into play, skipping the arrival or CL207's call.
     fn play_level(game: &mut Game) {
         play_level_card(game);
-        if game.scene == Scene::Arrival {
+        if matches!(game.scene, Scene::Arrival | Scene::Dialog) {
             tap(game, keys::START);
         }
         assert_eq!(game.scene, Scene::Play);
@@ -1201,5 +1471,160 @@ mod tests {
         }
         tap(&mut game, keys::A);
         assert_eq!(game.scene, Scene::Map);
+    }
+
+    /// A game at SAM's defeat in the Trenches, with `coins` picked up there, `purse`
+    /// kept from before and `wallet` banked.
+    fn at_the_exchange(coins: u32, purse: u32, wallet: u32, replay: bool) -> Game {
+        let mut game = at_title();
+        game.cleared = if replay { 0b11 } else { 0b1 };
+        game.purse = purse;
+        game.wallet = wallet;
+        game.start_level(1);
+        game.enter(Scene::Play);
+        game.world.coins = coins;
+        game.world.diamonds = 3;
+        game.open_exchange();
+        game
+    }
+
+    /// Reads lines with A until the exchange reaches `deal` or ends.
+    fn exchange_until(game: &mut Game, deal: Deal) {
+        for _ in 0..2000 {
+            if game.scene != Scene::Exchange || game.exchange.deal == deal {
+                return;
+            }
+            if game.talking() && game.talk_lines().get(game.talk_line as usize).is_some_and(|l| game.talk_shown as usize >= l.len()) {
+                tap(game, keys::A);
+            } else {
+                game.step(&Input::default());
+            }
+        }
+        panic!("stuck in {:?}", game.exchange.deal);
+    }
+
+    #[test]
+    fn beating_a_casino_boss_opens_the_exchange_before_the_clear() {
+        let mut game = at_title();
+        game.cleared = 0b1;
+        game.start_level(1);
+        play_level(&mut game);
+        game.world.coins = 7;
+        game.world.boss.state = crate::boss::BossState::Dying;
+        game.world.boss.timer = 1;
+        game.world.boss.present = true;
+        game.world.arena = true;
+        game.step(&Input::default());
+        assert_eq!(game.scene, Scene::Exchange);
+        assert_eq!((game.exchange.coins, game.exchange.diamonds()), (7, 7 * EXCHANGE_RATE));
+        assert!(game.files[0].is_none() || game.files[0].unwrap().cleared == 0b1, "not saved until the deal is done");
+    }
+
+    #[test]
+    fn exchanging_pays_eight_diamonds_a_coin_once() {
+        let mut game = at_the_exchange(25, 0, 100, false);
+        exchange_until(&mut game, Deal::Offer);
+        assert_eq!(game.exchange.diamonds(), 200);
+        assert_eq!(game.cursor, offer_menu::EXCHANGE);
+        tap(&mut game, keys::A);
+        assert_eq!(game.exchange.deal, Deal::Payout);
+        assert_eq!(game.wallet, 300);
+        game.strike(true);
+        assert_eq!(game.wallet, 300, "a struck deal stays struck");
+        // Mashing A runs through the payout and the goodbye, and pays nothing twice.
+        for _ in 0..20 {
+            tap(&mut game, keys::A);
+        }
+        assert_eq!(game.scene, Scene::LevelClear);
+        assert_eq!(game.wallet, 303, "the level's own diamonds are banked too");
+        let file = game.files[0].unwrap();
+        assert_eq!((file.wallet, file.purse, file.cleared), (303, 0, 0b11), "saved with the clear");
+        assert_eq!(levels::MAP[2].status(file.cleared), levels::PlaceStatus::Upcoming);
+    }
+
+    #[test]
+    fn keeping_the_coins_carries_them_to_the_next_exchange() {
+        let mut game = at_the_exchange(25, 4, 0, false);
+        exchange_until(&mut game, Deal::Offer);
+        assert_eq!(game.exchange.coins, 29);
+        tap(&mut game, keys::DOWN);
+        assert_eq!(game.cursor, offer_menu::KEEP);
+        tap(&mut game, keys::A);
+        exchange_until(&mut game, Deal::Walk);
+        assert_eq!(game.scene, Scene::LevelClear);
+        assert_eq!((game.wallet, game.purse), (3, 29));
+        assert_eq!(game.files[0].unwrap().purse, 29);
+
+        // A replay pays nothing for its own coins, but the purse can still be changed.
+        let mut replay = at_the_exchange(50, 29, 3, true);
+        assert_eq!(replay.exchange.coins, 29, "a replay's coins aren't on the counter");
+        exchange_until(&mut replay, Deal::Offer);
+        tap(&mut replay, keys::A);
+        exchange_until(&mut replay, Deal::Walk);
+        assert_eq!((replay.wallet, replay.purse), (3 + 29 * EXCHANGE_RATE, 0), "no diamonds banked from a replay");
+    }
+
+    #[test]
+    fn no_coins_means_no_offer() {
+        let mut game = at_the_exchange(0, 0, 0, false);
+        exchange_until(&mut game, Deal::Offer);
+        assert_eq!(game.scene, Scene::LevelClear, "the penguin just says goodbye");
+        assert_eq!(game.exchange.accepted, None);
+    }
+
+    #[test]
+    fn the_wallet_and_parts_come_back_with_the_file() {
+        let mut game = at_the_exchange(2, 0, 0, false);
+        game.world.parts = 0b101;
+        exchange_until(&mut game, Deal::Offer);
+        tap(&mut game, keys::A);
+        exchange_until(&mut game, Deal::Walk);
+        let mut again = Game::with_save(game.best, game.difficulty, game.files);
+        again.open_files();
+        tap(&mut again, keys::A);
+        tap(&mut again, keys::A);
+        assert_eq!((again.wallet, again.purse, again.parts), (3 + 2 * EXCHANGE_RATE, 0, 0b101));
+        assert_eq!(again.diamond_balance(), again.wallet);
+    }
+
+    #[test]
+    fn cl207_calls_on_a_first_visit_to_the_trenches() {
+        let mut game = at_title();
+        game.cleared = 0b1;
+        game.start_level(1);
+        play_level_card(&mut game);
+        assert_eq!((game.scene, game.talk), (Scene::Dialog, Talk::Call));
+        assert!(game.ringing() && !game.talking());
+        for _ in 0..CALL_RING_FRAMES {
+            game.step(&Input::default());
+        }
+        assert!(game.talking());
+        assert_eq!(game.talk_lines()[0].speaker, Speaker::Cl207);
+        let mut lines = 0;
+        while game.scene == Scene::Dialog {
+            tap(&mut game, keys::A);
+            lines += 1;
+            assert!(lines < 100);
+        }
+        assert_eq!(game.scene, Scene::Play);
+
+        // A replay goes straight to play.
+        let mut game = at_title();
+        game.cleared = 0b11;
+        game.start_level(1);
+        play_level_card(&mut game);
+        assert_eq!(game.scene, Scene::Play);
+    }
+
+    #[test]
+    fn a_dev_build_opens_the_trenches_on_a_new_file_without_saving_a_clear() {
+        let mut game = at_title();
+        game.dev_cleared = 0b1;
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 1), "PLAY opens the map on the Trenches");
+        tap(&mut game, keys::A);
+        assert_eq!((game.scene, game.world.level_index), (Scene::Intro, 1));
+        assert!(!game.replay, "a first visit: CL207 calls, the clear counts");
+        assert_eq!(game.cleared, 0, "the file hasn't cleared the Badlands");
     }
 }

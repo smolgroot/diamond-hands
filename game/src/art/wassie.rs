@@ -32,19 +32,25 @@ use super::{Canvas, rgb};
 pub const CENTRE_COL: i32 = 14;
 /// The blaster's sprite sits this far forward of the body's.
 pub const BLASTER_SHIFT: i32 = 8;
-/// Blasters, top-left in the blaster's sprite. Forward is where the sheet holds it; up
-/// and down are the same drawing turned. The muzzles in `logic/src/player.rs` must
-/// match.
-const BLASTER_AT: (i32, i32) = (17 - BLASTER_SHIFT, 17);
+/// Cannons, top-left in the blaster's sprite. Forward is held across the belly, the
+/// muzzle well ahead of the bill; up and down are the same drawing turned. The muzzles
+/// in `logic/src/player.rs` must match: forward, the tip is 23 px ahead of the hitbox
+/// centre, level with the bill's underside.
+const BLASTER_AT: (i32, i32) = (CENTRE_COL - BLASTER_SHIFT, 15);
 /// Straight up, the cannon is raised over the head on the wassie's centre line, so the
-/// shot leaves right above it: its core columns land on [`CENTRE_COL`].
-const BLASTER_UP_AT: (i32, i32) = (CENTRE_COL - 3 - BLASTER_SHIFT, 0);
+/// shot leaves right above it: its core lands on [`CENTRE_COL`].
+const BLASTER_UP_AT: (i32, i32) = (CENTRE_COL - GUN_CORE_ROW - BLASTER_SHIFT, 0);
 /// How far the raised cannon's sprite sits above the body's, clear of the crown.
 const BLASTER_UP_RAISE: i32 = 14;
-const BLASTER_DOWN_AT: (i32, i32) = (21 - BLASTER_SHIFT, 13);
+/// Straight down, the core is 12 px ahead of the centre and the tip at the sprite's
+/// bottom row.
+const BLASTER_DOWN_AT: (i32, i32) = (CENTRE_COL + 12 - (10 - GUN_CORE_ROW) - BLASTER_SHIFT, 32 - GUN_LEN);
 /// Where the barrel axis crosses the fist, for the diagonal aims.
 const GRIP_UP_FORWARD: (i32, i32) = (20 - BLASTER_SHIFT, 25);
 const GRIP_DOWN_FORWARD: (i32, i32) = (19 - BLASTER_SHIFT, 20);
+/// Knocked out, the cannon lies on the floor ahead of the wassie: how far its sprite
+/// is moved from where it is held.
+const DROPPED_AT: (i32, i32) = (9, 8);
 /// Jetpack and its flame, top-left in the 32x32 frame facing right.
 pub const JETPACK_AT: (i32, i32) = (1, 15);
 pub const FLAME_AT: (i32, i32) = (1, 29);
@@ -303,9 +309,9 @@ const CAPE_FALL: Part = (
     ],
 );
 
-/// Feet: two white feet with a lilac top, apart at rest, striding (both ways) and
-/// passing while running, tucked up on the way up, dangling on the way down, and
-/// spread flat in the landing squash.
+/// Feet: two white feet with a lilac top, apart at rest, striding into a skid,
+/// tucked up on the way up, dangling on the way down, and spread flat in the landing
+/// squash.
 const FEET_STAND: Part = (
     10,
     28,
@@ -326,26 +332,49 @@ const FEET_STRIDE: Part = (
         "..kk......kkkkk.",
     ],
 );
-const FEET_STRIDE_BACK: Part = (
-    9,
-    28,
-    &[
-        ".kbbbk.....kk..",
-        "kwwwwbk...kwwk.",
-        "kwwwwwk..kwwk..",
-        ".kkkkk....kk...",
-    ],
-);
-const FEET_PASS: Part = (
-    12,
-    28,
-    &[
-        ".kbbbk.",
-        "kwwwwbk",
-        "kwwwwwk",
-        ".kkkkk.",
-    ],
-);
+/// Running, each foot is its own stamp: the near foot white, the far one shaded and
+/// drawn behind the belly. Reaching forward heel first, flat under the body, pushing
+/// off the toe behind, kicked up behind, and swinging through.
+const STEP_REACH: &[&str] = &[".....kk.", "..kkkwbk", ".kwwwwwk", "..kkkkk."];
+const STEP_FLAT: &[&str] = &[".kbbbk.", "kwwwwbk", "kwwwwwk", ".kkkkk."];
+const STEP_PUSH: &[&str] = &["kk....", "kwk...", "kwwk..", ".kwwk.", "..kkk."];
+const STEP_KICK: &[&str] = &["..kkk.", ".kwwbk", "kwwwk.", "kwwk..", ".kk..."];
+const STEP_SWING: &[&str] = &[".kkkk.", "kwwwbk", ".kkkk."];
+/// The far foot in shade: white to the bill's lilac shade, lilac to the dark lilac.
+const FAR_KEY: &[(u8, u8)] = &[(b'k', 1), (b'w', 3), (b'b', 13)];
+
+/// One step of the run: upper-body lean (x, and the bob down), cape frame, then the
+/// near and far feet with their top-left.
+struct Stride {
+    lean: (i32, i32),
+    cape: usize,
+    near: (i32, i32, &'static [&'static str]),
+    far: (i32, i32, &'static [&'static str]),
+}
+/// Six steps: contact, down, and up off the ground, once per foot. The body bobs
+/// lowest as the planted foot passes under it and highest in the flight between steps.
+const RUN: [Stride; 6] = [
+    Stride { lean: (1, 1), cape: 0, near: (20, 28, STEP_REACH), far: (3, 26, STEP_PUSH) },
+    Stride { lean: (1, 2), cape: 1, near: (13, 28, STEP_FLAT), far: (3, 23, STEP_KICK) },
+    Stride { lean: (1, 0), cape: 2, near: (2, 22, STEP_KICK), far: (17, 26, STEP_SWING) },
+    Stride { lean: (1, 1), cape: 0, near: (3, 26, STEP_PUSH), far: (20, 28, STEP_REACH) },
+    Stride { lean: (1, 2), cape: 1, near: (3, 23, STEP_KICK), far: (13, 28, STEP_FLAT) },
+    Stride { lean: (1, 0), cape: 2, near: (17, 26, STEP_SWING), far: (2, 22, STEP_KICK) },
+];
+/// Running, the upper body pitches forward: each row moves ahead by one pixel per
+/// [`PITCH_STEP`] rows above [`PITCH_PIVOT`] (the bill), and back below it.
+const PITCH_PIVOT: i32 = 15;
+const PITCH_STEP: i32 = 5;
+/// Run steps advance with travel: one per this many `anim` units (2 px each).
+const RUN_STEP: u32 = 4;
+
+fn pitch(row: i32) -> i32 {
+    (PITCH_PIVOT - row).div_euclid(PITCH_STEP)
+}
+
+/// How far the arm's end moves with the pitch, so the cannon goes with it.
+const ARM_ROW: i32 = 24;
+
 const FEET_TUCK: Part = (
     11,
     25,
@@ -375,23 +404,74 @@ const FEET_SQUAT: Part = (
     ],
 );
 
-/// The blaster facing right: a lilac body with a white top edge, a teal light and
-/// three vents, then a gap and the magenta muzzle block with its white-hot core.
-const BLASTER: [&str; 8] = [
-    "kkkkkkkkkkkkk.kkkkk",
-    "kwwwwwwwwwwwk.kmmmk",
-    "kSTTSSSSSSSSk.kmwmk",
-    "kTcTSSkSkSkSkkkmwmk",
-    "kSTTSSSSSSSSk.kmmmk",
-    "ksssssssssssk.kmmmk",
-    "kkkkkkkkkkkkk.kSSSk",
-    "..............kkkkk",
+/// The cannon has its own palette: gunmetal steels and navy, the laser's pinks and a
+/// deep magenta for its energy, cyan for the diamond insignia, and the body's teals
+/// for the fists that grip it.
+pub static GUN_PALETTE: Palette16 = Palette16::new([
+    rgb(0, 0, 0),
+    rgb(1, 1, 3),
+    rgb(31, 31, 31),
+    rgb(22, 24, 30),
+    rgb(15, 17, 25),
+    rgb(9, 10, 18),
+    rgb(4, 4, 10),
+    rgb(5, 24, 19),
+    rgb(2, 19, 15),
+    rgb(1, 12, 10),
+    rgb(19, 29, 27),
+    rgb(31, 19, 29),
+    rgb(31, 6, 22),
+    rgb(18, 2, 14),
+    rgb(12, 26, 31),
+    rgb(31, 27, 5),
+]);
+
+/// Characters in the cannon drawings: outline, white, three steels from light to dark,
+/// navy, three teals and the pale highlight (fists), laser pink, magenta, deep magenta,
+/// diamond cyan and gold.
+const GUN_KEY: &[(u8, u8)] = &[
+    (b'k', 1),
+    (b'w', 2),
+    (b'L', 3),
+    (b'S', 4),
+    (b's', 5),
+    (b'n', 6),
+    (b'T', 7),
+    (b't', 8),
+    (b'd', 9),
+    (b'c', 10),
+    (b'C', 11),
+    (b'm', 12),
+    (b'M', 13),
+    (b'D', 14),
+    (b'y', 15),
 ];
-/// The big green fist under the blaster and the other hand at its side, relative to
-/// the blaster.
+
+/// The cannon facing right, back to front: a glowing magenta power cell; the
+/// gunmetal housing with a carry handle and its cyan sight on top, a bevelled white
+/// top edge, the diamond insignia, two magenta vents and a grip underneath; a finned
+/// barrel; and the big muzzle ring with its white-hot core. The core is rows
+/// [`GUN_CORE_ROW`] ± 1 and the tip is the last column.
+const BLASTER: [&str; 11] = [
+    "......kkkkkkk...........",
+    ".....kwLLLLLDk......kkk.",
+    "..kkkkSkkkkkSkk....kmCmk",
+    ".kMkwwwwwwwwwwwkkkkkCwCk",
+    "kmCkLLLkkkLkLkLLkLkkCwwk",
+    "kCwkSSkDwDkmSmSSkSkkCwwk",
+    "kmCkSSSkDkSmSmSskskkCwwk",
+    ".kMkssssksskskskkkkkCwCk",
+    "..kkkkkkkkkkkkk....kmCmk",
+    ".......kssk.........kkk.",
+    ".......kkkk.............",
+];
+const GUN_LEN: i32 = 24;
+const GUN_CORE_ROW: i32 = 5;
+/// The big green fist round the grip and the other hand under the barrel, relative
+/// to the cannon.
 const HANDS: [(i32, i32, &[&str]); 2] = [
-    (3, 4, &[".kkkk.", "kTTTtk", "kTcttk", "kTttdk", "ktdddk", ".kkkk."]),
-    (8, 6, &[".kk", "kttk", "kdk"]),
+    (6, 8, &[".kkkk.", "kTTTtk", "kTcttk", "kTttdk", "ktdddk", ".kkkk."]),
+    (15, 7, &[".kk", "kttk", "kdk"]),
 ];
 
 /// Upper-body offsets for each pose.
@@ -399,10 +479,6 @@ mod lean {
     pub const NONE: (i32, i32) = (0, 0);
     /// Breathing out: everything above the feet one pixel lower.
     pub const SETTLED: (i32, i32) = (0, 1);
-    /// Running: head and belly pitched forward and down.
-    pub const RUN: (i32, i32) = (1, 1);
-    /// Mid-stride, bobbing back up.
-    pub const PASS: (i32, i32) = (1, 0);
     /// Touching down hard: squashed into the feet.
     pub const SQUASH: (i32, i32) = (0, 2);
     /// Skidding: leaning back on the heels.
@@ -447,6 +523,26 @@ fn pose(feet: Part, cape: Cape, lean: (i32, i32), eyes_shut: bool) -> SpriteVram
     c.vram_with(&PALETTE)
 }
 
+/// One step of the run: the cape and upper body pitched forward and bobbing, the far
+/// foot behind the belly and the near one in front.
+fn run_pose(stride: &Stride) -> SpriteVram {
+    let mut c = Canvas::new(Size::S32x32);
+    let (dx, dy) = stride.lean;
+    let pitched = |c: &mut Canvas, (x, y, rows): Part| {
+        for (i, row) in rows.iter().enumerate() {
+            let r = y + i as i32;
+            c.art_with(KEY, x + dx + pitch(r), r + dy, core::slice::from_ref(row));
+        }
+    };
+    pitched(&mut c, CAPE_RUN[stride.cape]);
+    let (fx, fy, far) = stride.far;
+    c.art_with(FAR_KEY, fx, fy, far);
+    pitched(&mut c, (0, 0, &UPPER));
+    let (nx, ny, near) = stride.near;
+    c.art_with(KEY, nx, ny, near);
+    c.vram_with(&PALETTE)
+}
+
 /// Out cold, flat on its face: the standing layers turned a quarter clockwise, so the
 /// head lies at the right with the bill in the dirt and the cape over the back.
 fn lying() -> SpriteVram {
@@ -462,70 +558,124 @@ fn lying() -> SpriteVram {
     c.vram_with(&PALETTE)
 }
 
-/// The blaster and hands for one aim, in the blaster's 32x32 frame.
+/// The cannon and hands for one aim, in the blaster's 32x32 frame.
 fn blaster(aim: Aim) -> SpriteVram {
     let mut c = Canvas::new(Size::S32x32);
     match aim {
         Aim::Forward => {
             let (bx, by) = BLASTER_AT;
-            c.art_with(KEY, bx, by, &BLASTER);
+            c.art_with(GUN_KEY, bx, by, &BLASTER);
             for (hx, hy, hand) in HANDS {
-                c.art_with(KEY, bx + hx, by + hy, hand);
+                c.art_with(GUN_KEY, bx + hx, by + hy, hand);
             }
         }
-        Aim::Up => c.art_turned(KEY, BLASTER_UP_AT.0, BLASTER_UP_AT.1, &BLASTER),
-        Aim::Down => c.art_turned_cw(KEY, BLASTER_DOWN_AT.0, BLASTER_DOWN_AT.1, &BLASTER),
+        Aim::Up => c.art_turned(GUN_KEY, BLASTER_UP_AT.0, BLASTER_UP_AT.1, &BLASTER),
+        Aim::Down => c.art_turned_cw(GUN_KEY, BLASTER_DOWN_AT.0, BLASTER_DOWN_AT.1, &BLASTER),
         Aim::UpForward => blaster_diagonal(&mut c, GRIP_UP_FORWARD, -1),
         Aim::DownForward => blaster_diagonal(&mut c, GRIP_DOWN_FORWARD, 1),
     }
-    c.vram_with(&PALETTE)
+    c.vram_with(&GUN_PALETTE)
 }
 
-/// Palette indices by name, for the shapes drawn in code.
+/// The cannon let go of, lying on the floor: the forward drawing without hands, and
+/// without the grip that would sink into the ground.
+fn dropped() -> SpriteVram {
+    let mut c = Canvas::new(Size::S32x32);
+    let (bx, by) = BLASTER_AT;
+    c.art_with(GUN_KEY, bx, by, &BLASTER[..9]);
+    c.vram_with(&GUN_PALETTE)
+}
+
+/// [`GUN_PALETTE`] indices by name, for the cannon drawn in code.
 mod px {
     pub const OUTLINE: u8 = 1;
     pub const WHITE: u8 = 2;
-    pub const TEAL_LIGHT: u8 = 4;
-    pub const TEAL: u8 = 5;
-    pub const TEAL_DARK: u8 = 6;
-    pub const CROWN: u8 = 11;
-    pub const LILAC: u8 = 12;
-    pub const LILAC_DARK: u8 = 13;
-    pub const MAGENTA: u8 = 15;
+    pub const STEEL_LIGHT: u8 = 3;
+    pub const STEEL: u8 = 4;
+    pub const STEEL_DARK: u8 = 5;
+    pub const NAVY: u8 = 6;
+    pub const TEAL_LIGHT: u8 = 7;
+    pub const TEAL: u8 = 8;
+    pub const TEAL_DARK: u8 = 9;
+    pub const PINK: u8 = 11;
+    pub const MAGENTA: u8 = 12;
+    pub const MAGENTA_DARK: u8 = 13;
+    pub const DIAMOND: u8 = 14;
 }
 
-/// The blaster at 45°, pointing forward and up (`dy` = -1) or down (`dy` = 1), drawn
+/// The cannon at 45°, pointing forward and up (`dy` = -1) or down (`dy` = 1), drawn
 /// from its shape so the outline stays one clean pixel staircase. `t` runs along the
 /// barrel from the grip (two per diagonal step), `s` across it, positive on the
-/// underside; the two always share parity. The parts match the side-on drawing: white
-/// top edge, teal light, vents, a gap, and the magenta muzzle block with a hot core.
+/// underside; the two always share parity. The parts match the side-on drawing: the
+/// power cell at the back, the housing with its white top edge, diamond insignia and
+/// vents, a finned barrel, and the wider muzzle ring with a hot core.
 fn blaster_diagonal(c: &mut Canvas, (gx, gy): (i32, i32), dy: i32) {
     const T_END: i32 = 22;
-    const T_BACK: i32 = -4;
-    const HALF: i32 = 3;
-    const FIST_T: i32 = 2;
+    const T_BACK: i32 = -8;
+    /// Half-width across the housing, in `s` (two per diagonal pixel step). The barrel
+    /// is narrower and the muzzle ring wider, as in the side-on drawing.
+    const HALF: i32 = 7;
+    /// The barrel between the housing and the muzzle is narrower.
+    const BARREL: (i32, i32) = (10, 15);
+    const MUZZLE: i32 = 16;
+    const INSIGNIA_T: i32 = 2;
+    const FIST_T: i32 = 0;
     let colour = |t: i32, s: i32| -> Option<u8> {
-        if s.abs() > HALF || !(T_BACK..=T_END).contains(&t) {
+        if !(T_BACK..=T_END).contains(&t) {
             return None;
         }
-        if s.abs() == HALF || t <= T_BACK + 1 || t >= T_END - 1 {
+        // The muzzle ring stands a pixel proud of the housing.
+        if t >= MUZZLE {
+            let half = HALF + 1;
+            return match s.abs() {
+                a if a > half => None,
+                a if a == half || t >= T_END - 1 || t == MUZZLE => Some(px::OUTLINE),
+                a if a <= 1 && t >= T_END - 3 => Some(px::WHITE),
+                a if a <= 4 && t >= MUZZLE + 2 => Some(px::PINK),
+                _ => Some(px::MAGENTA),
+            };
+        }
+        let half = if (BARREL.0..=BARREL.1).contains(&t) { HALF - 3 } else { HALF };
+        if s.abs() > half {
+            return None;
+        }
+        if s.abs() == half || t <= T_BACK + 1 {
             return Some(px::OUTLINE);
         }
-        // Muzzle block beyond a dark gap.
-        if t >= T_END - 8 {
-            return Some(match () {
-                _ if t <= T_END - 7 => px::OUTLINE,
-                _ if s.abs() <= 1 && (T_END - 5..=T_END - 3).contains(&t) => px::WHITE,
-                _ => px::MAGENTA,
+        // The power cell, split from the housing by a seam.
+        if t <= T_BACK + 4 {
+            return Some(match s.abs() {
+                0 | 1 => px::WHITE,
+                2..=4 => px::PINK,
+                _ => px::MAGENTA_DARK,
             });
         }
+        if t == T_BACK + 5 {
+            return Some(px::OUTLINE);
+        }
+        // Barrel fins.
+        if t >= BARREL.0 {
+            return Some(match () {
+                _ if t % 4 == 0 => px::OUTLINE,
+                _ if s < 0 => px::STEEL_LIGHT,
+                _ => px::STEEL_DARK,
+            });
+        }
+        // The diamond insignia, white at its heart. (`t` and `s` share parity, so the
+        // distance is even.)
+        match (t - INSIGNIA_T).abs() + s.abs() {
+            0 => return Some(px::WHITE),
+            2 => return Some(px::DIAMOND),
+            _ => {}
+        }
         Some(match s {
-            -2 => px::WHITE,
-            2 => px::LILAC_DARK,
-            0 if t == 0 => px::CROWN,
-            _ if t.abs() + s.abs() <= 2 => px::TEAL_LIGHT,
-            0 if t == 6 || t == 8 || t == 10 => px::OUTLINE,
-            _ => px::LILAC,
+            -6 => px::WHITE,
+            6 => px::NAVY,
+            _ if (t == 7 || t == 9) && s.abs() <= 3 => px::MAGENTA,
+            _ if t == 8 && s.abs() <= 3 => px::OUTLINE,
+            3..=5 => px::STEEL_DARK,
+            -5..=-3 => px::STEEL_LIGHT,
+            _ => px::STEEL,
         })
     };
     // Back from (t, s) to pixels: x = gx + (t - s * dy) / 2, y = gy + (t * dy + s) / 2.
@@ -539,7 +689,7 @@ fn blaster_diagonal(c: &mut Canvas, (gx, gy): (i32, i32), dy: i32) {
             }
         }
     }
-    // The fist round the grip, under the barrel.
+    // The fist round the grip, under the housing.
     let (t, s) = (FIST_T, HALF + 1);
     let (hx, hy) = (gx + (t - s * dy) / 2, gy + (t * dy + s) / 2);
     c.rect(hx - 1, hy - 1, 5, 5, px::OUTLINE);
@@ -576,17 +726,6 @@ const FLAMES: [&[&str]; 3] = [
     &["..wC....", "..Cm....", "...m....", "........", "........", "........"],
 ];
 
-/// Locomotion poses, in [`Wassie::poses`] order: feet, cape and lean.
-const STANCES: [(Part, Cape, (i32, i32)); 6] = [
-    (FEET_STAND, Cape::Hang, lean::NONE),
-    (FEET_STRIDE, Cape::Run(0), lean::RUN),
-    (FEET_PASS, Cape::Run(1), lean::PASS),
-    (FEET_STRIDE_BACK, Cape::Run(2), lean::RUN),
-    (FEET_TUCK, Cape::Jump, lean::NONE),
-    (FEET_DANGLE, Cape::Fall, lean::NONE),
-];
-/// The run cycle as indices into [`STANCES`].
-const RUN: [usize; 4] = [1, 2, 3, 2];
 /// Standing still: cape and breathing for each step of [`Wassie::idle`]'s loop, after
 /// the plain stance.
 const IDLE: [(Cape, (i32, i32)); 3] = [
@@ -599,18 +738,26 @@ const IDLE_STEP: u32 = 12;
 
 /// Every pose, built once at boot.
 pub struct Wassie {
-    /// Each stance ready, and recoiling from a shot.
-    poses: [[SpriteVram; 2]; 6],
+    /// Standing ready, and recoiling from a shot with the feet planted.
+    stand: [SpriteVram; 2],
+    /// Jumping and falling. In the air and on the run, recoil moves the whole sprite
+    /// back instead of having a pose of its own: sprite memory is tight.
+    jump: SpriteVram,
+    fall: SpriteVram,
+    /// Each step of [`RUN`].
+    run: [SpriteVram; 6],
     /// Standing still, after the plain stance: see [`IDLE`].
     idle: [SpriteVram; 3],
     hurt: SpriteVram,
     /// Touching down hard, and skidding to a stop.
     landing: SpriteVram,
     braking: SpriteVram,
-    /// Sagging, then flat out.
+    /// Down: sagging on impact, then flat out.
     knocked_out: [SpriteVram; 2],
     /// Blaster and hands per [`Aim`], in [`Aim::ALL`] order.
     blasters: [SpriteVram; 5],
+    /// The cannon on the floor, let go of.
+    dropped: SpriteVram,
     pub jetpack: SpriteVram,
     pub flames: [SpriteVram; 3],
     /// The portrait from the player sprite sheet, for the dialogue box.
@@ -620,16 +767,20 @@ pub struct Wassie {
 impl Wassie {
     pub fn new() -> Self {
         Self {
-            poses: STANCES.map(|(feet, cape, (dx, dy))| {
-                let recoil = (dx - RECOIL_BODY, dy);
-                [pose(feet, cape, (dx, dy), false), pose(feet, cape, recoil, false)]
-            }),
+            stand: [
+                pose(FEET_STAND, Cape::Hang, lean::NONE, false),
+                pose(FEET_STAND, Cape::Hang, (-RECOIL_BODY, 0), false),
+            ],
+            jump: pose(FEET_TUCK, Cape::Jump, lean::NONE, false),
+            fall: pose(FEET_DANGLE, Cape::Fall, lean::NONE, false),
+            run: RUN.each_ref().map(run_pose),
             idle: IDLE.map(|(cape, lean)| pose(FEET_STAND, cape, lean, false)),
             hurt: pose(FEET_TUCK, Cape::Run(1), lean::HURT, true),
             landing: pose(FEET_SQUAT, Cape::Hang, lean::SQUASH, false),
             braking: pose(FEET_STRIDE, Cape::Run(0), lean::BRAKE, false),
             knocked_out: [pose(FEET_SQUAT, Cape::Hang, lean::SLUMP, true), lying()],
             blasters: Aim::ALL.map(blaster),
+            dropped: dropped(),
             jetpack: {
                 let mut c = Canvas::new(Size::S8x16);
                 c.art_with(KEY, 0, 0, &JETPACK);
@@ -650,31 +801,38 @@ impl Wassie {
         }
     }
 
-    /// The body pose for this frame. `anim` advances the run cycle; `frame` paces the
-    /// idle loop.
-    pub fn sprite(&self, player: &Player, anim: u32, frame: u32) -> &SpriteVram {
+    /// The step of the run cycle for this much travel.
+    fn run_step(anim: u32) -> usize {
+        (anim / RUN_STEP % RUN.len() as u32) as usize
+    }
+
+    /// Knocked out and down on the floor, rather than still falling.
+    fn down(player: &Player) -> bool {
+        player.state == PlayerState::Dead && player.grounded
+    }
+
+    /// The body pose for this frame, and how far its sprite is moved back by recoil
+    /// (facing right). `anim` advances the run cycle; `frame` paces the idle loop.
+    pub fn sprite(&self, player: &Player, anim: u32, frame: u32) -> (&SpriteVram, i32) {
         let firing = player.recoil > 2;
-        let stance = match player.state {
-            PlayerState::Hurt => return &self.hurt,
+        let pushed = |sprite| (sprite, if firing { -RECOIL_BODY } else { 0 });
+        match player.state {
+            // Knocked out in the air, it tumbles down eyes shut; only once it hits the
+            // floor does it sag and keel over.
+            PlayerState::Hurt => (&self.hurt, 0),
+            PlayerState::Dead if !player.grounded => (&self.hurt, 0),
             PlayerState::Dead => {
                 let sagging = player.dead_timer > DEATH_FRAMES - SLUMP_FRAMES;
-                return &self.knocked_out[!sagging as usize];
+                (&self.knocked_out[!sagging as usize], 0)
             }
             // Firing keeps its own recoil pose; otherwise landing and skidding win.
-            PlayerState::Idle | PlayerState::Run if player.land > 0 && !firing => return &self.landing,
-            PlayerState::Run if player.braking && !firing => return &self.braking,
-            PlayerState::Idle => 0,
-            PlayerState::Run => RUN[(anim / 6 % 4) as usize],
-            PlayerState::Jump | PlayerState::Hover => 4,
-            PlayerState::Fall => 5,
-        };
-        let poses = &self.poses[stance];
-        if firing {
-            &poses[1]
-        } else if stance == 0 {
-            self.idle(frame)
-        } else {
-            &poses[0]
+            PlayerState::Idle | PlayerState::Run if player.land > 0 && !firing => (&self.landing, 0),
+            PlayerState::Run if player.braking && !firing => (&self.braking, 0),
+            PlayerState::Run => pushed(&self.run[Self::run_step(anim)]),
+            PlayerState::Idle if firing => (&self.stand[1], 0),
+            PlayerState::Idle => (self.idle(frame), 0),
+            PlayerState::Jump | PlayerState::Hover => pushed(&self.jump),
+            PlayerState::Fall => pushed(&self.fall),
         }
     }
 
@@ -682,7 +840,7 @@ impl Wassie {
     /// the wassie breathes.
     fn idle(&self, frame: u32) -> &SpriteVram {
         match (frame / IDLE_STEP % 4) as usize {
-            0 => &self.poses[0][0],
+            0 => &self.stand[0],
             step => &self.idle[step - 1],
         }
     }
@@ -693,10 +851,15 @@ impl Wassie {
         [(self.idle(frame), 0), (&self.blasters[Aim::Forward as usize], BLASTER_SHIFT)]
     }
 
-    /// The blaster for this frame and how far its sprite is moved, facing right: pushed
-    /// back by recoil, and raised over the head when aiming up. Its sprite sits
+    /// The blaster for this frame, how far its sprite is moved facing right, and
+    /// whether it goes behind the body. It is pushed back by recoil, carried along by
+    /// the run's lean and bob, raised over the head (and behind it) when aiming up,
+    /// and dropped on the floor once a knocked-out wassie is down. Its sprite sits
     /// [`BLASTER_SHIFT`] forward of the body's.
-    pub fn blaster(&self, player: &Player) -> (&SpriteVram, (i32, i32)) {
+    pub fn blaster(&self, player: &Player, anim: u32) -> (&SpriteVram, (i32, i32), bool) {
+        if Self::down(player) {
+            return (&self.dropped, DROPPED_AT, true);
+        }
         let aim = if matches!(player.state, PlayerState::Hurt | PlayerState::Dead) {
             Aim::Forward
         } else {
@@ -708,7 +871,16 @@ impl Wassie {
         } else {
             (0, 0)
         };
+        // Running, the arm carries the cannon with the body. Not while a shot is
+        // leaving it, so the flash stays on the muzzle.
+        let (bx, by) = match player.state {
+            PlayerState::Run if player.recoil == 0 && player.land == 0 && !player.braking => {
+                let lean = RUN[Self::run_step(anim)].lean;
+                (lean.0 + pitch(ARM_ROW), lean.1)
+            }
+            _ => (0, 0),
+        };
         let raise = if aim == Aim::Up { BLASTER_UP_RAISE } else { 0 };
-        (&self.blasters[aim as usize], (kx, ky - raise))
+        (&self.blasters[aim as usize], (kx + bx, ky + by - raise), aim == Aim::Up)
     }
 }

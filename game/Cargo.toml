@@ -11,6 +11,10 @@ agb_tracker = "0.25.0"
 diamond_hands_logic = { path = "../logic" }
 serde = { version = "1", default-features = false, features = ["derive"] }
 
+[features]
+# A dev build: every level is open on the world map, without beating the ones before.
+dev = []
+
 [profile.dev]
 opt-level = 3
 debug = true

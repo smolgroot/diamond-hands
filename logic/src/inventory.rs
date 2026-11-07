@@ -13,6 +13,8 @@ pub enum Item {
     Blaster,
     Jetpack,
     Scarf,
+    /// Parts for CL207's plasma shield, found in the Trenches.
+    Cells,
 }
 
 /// A gauge the bag can show under an item: the live value and its maximum.
@@ -21,7 +23,12 @@ pub enum Gauge {
     None,
     /// The jetpack's hover fuel.
     Fuel,
+    /// Plasma cells found, out of those the shield needs.
+    Cells,
 }
+
+/// Plasma cells CL207's shield needs.
+pub const SHIELD_CELLS: u32 = 3;
 
 #[derive(Debug)]
 pub struct ItemInfo {
@@ -43,7 +50,7 @@ pub const ABOUT_CHARS: usize = 23;
 pub const DETAIL_CHARS: usize = 17;
 pub const DETAIL_ROWS: usize = 5;
 
-pub static ITEMS: [ItemInfo; 3] = [
+pub static ITEMS: [ItemInfo; 4] = [
     ItemInfo {
         item: Item::Blaster,
         name: "BLASTER",
@@ -68,6 +75,14 @@ pub static ITEMS: [ItemInfo; 3] = [
         detail: &["NEVER SOLD.", "NEVER WILL BE.", "A DIAMOND HAND'S", "ONLY BANNER."],
         gauge: Gauge::None,
     },
+    ItemInfo {
+        item: Item::Cells,
+        name: "PLASMA CELLS",
+        kind: "PARTS",
+        about: ["FOR CL207'S NEW GADGET:", "A PLASMA SHIELD."],
+        detail: &["THREE ARE HIDDEN", "IN THE SOLANA", "TRENCHES. CL207", "NEEDS THEM ALL."],
+        gauge: Gauge::Cells,
+    },
 ];
 
 impl Item {
@@ -76,6 +91,7 @@ impl Item {
     pub fn equipped(self, game: &Game) -> bool {
         match self {
             Item::Scarf => true,
+            Item::Cells => (game.parts | game.world.parts) != 0,
             Item::Blaster | Item::Jetpack => game.scene != Scene::Arrival || game.beat > Beat::Gift,
         }
     }
@@ -87,6 +103,7 @@ impl Gauge {
         match self {
             Gauge::None => None,
             Gauge::Fuel => Some((game.world.player.hover_fuel as u32, HOVER_FRAMES as u32)),
+            Gauge::Cells => Some(((game.parts | game.world.parts).count_ones().min(SHIELD_CELLS), SHIELD_CELLS)),
         }
     }
 }
@@ -112,6 +129,7 @@ mod tests {
     fn the_wassie_plays_with_everything_equipped() {
         let mut game = Game::new(0);
         game.scene = Scene::Play;
-        assert!(ITEMS.iter().all(|i| i.item.equipped(&game)));
+        assert!(ITEMS.iter().filter(|i| i.item != Item::Cells).all(|i| i.item.equipped(&game)));
+        assert!(!Item::Cells.equipped(&game), "no cells until one is found");
     }
 }

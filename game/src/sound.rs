@@ -67,6 +67,8 @@ const LADDER: [u16; 10] = [
 const CHAIN_FRAMES: u16 = 50;
 /// Frames between the chime's two notes.
 const CHIME_GAP: u8 = 4;
+/// Frames between a coin's two notes: quicker than a diamond's.
+const COIN_GAP: u8 = 3;
 
 pub struct Sfx {
     /// Rungs climbed by the current chain of diamonds.
@@ -135,6 +137,7 @@ impl Sfx {
             }
         }
         self.menu(events);
+        self.casino(events);
         // SAFETY: as in `new`.
         unsafe {
             if events.contains(Events::BEAM) {
@@ -149,6 +152,25 @@ impl Sfx {
                 SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
             }
+        }
+    }
+
+    /// The casino's sounds on the chime's channel: a bright "ka-ching" for a gold coin
+    /// (higher and snappier than the diamond chime), a rising power-up for the elevator
+    /// terminal, a "ding-dong" for its doors and ride, and a sparkle for a plasma cell.
+    fn casino(&mut self, events: Events) {
+        if events.contains(Events::PART) {
+            Self::chime(LADDER[5], tone(0, 2, 2, 11));
+            self.pending = Some((CHIME_GAP * 2, LADDER[9]));
+        } else if events.contains(Events::POWER) {
+            Self::chime(rate(330), tone(0, 2, 3, 11));
+            self.pending = Some((CHIME_GAP * 2, rate(660)));
+        } else if events.contains(Events::LIFT) {
+            Self::chime(rate(1319), tone(0, 2, 3, 10));
+            self.pending = Some((CHIME_GAP * 3, rate(1047)));
+        } else if events.contains(Events::COIN) {
+            Self::chime(rate(1976), tone(0, 2, 1, 10));
+            self.pending = Some((COIN_GAP, rate(2637)));
         }
     }
 

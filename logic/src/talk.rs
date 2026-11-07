@@ -18,6 +18,10 @@ pub enum Speaker {
     Bera,
     /// The grey cat in the yellow hazmat suit who meets the wassie on CryptoTerra.
     Cl207,
+    /// The Trenches boss.
+    Sam,
+    /// The casino's penguin cashier.
+    Penguin,
 }
 
 impl Speaker {
@@ -26,6 +30,8 @@ impl Speaker {
             Speaker::Wassie => "WASSIE",
             Speaker::Bera => "BERA 3000",
             Speaker::Cl207 => "CL207",
+            Speaker::Sam => "SAM",
+            Speaker::Penguin => "WADDLES",
         }
     }
 }
@@ -79,7 +85,11 @@ mod tests {
     fn every_line_fits_and_is_printable() {
         const FONT: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!:/-+.<>,'? ";
         let arrivals = (0..levels::ALL.len() as u8).filter_map(levels::arrival);
-        let all = levels::ALL.iter().map(|l| l.boss_talk).chain(arrivals.map(|a| a.lines));
+        let all = levels::ALL
+            .iter()
+            .flat_map(|l| [l.boss_talk, l.call])
+            .chain(arrivals.map(|a| a.lines))
+            .chain(crate::game::MERCHANT_LINES);
         for lines in all {
             for line in lines {
                 assert!(!line.is_empty() && line.rows.len() <= MAX_ROWS, "{line:?}");

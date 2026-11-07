@@ -164,8 +164,6 @@ pub struct ArrivalArt {
     pub guide_top: SpriteVram,
     /// The bottom half standing, then the two walking frames.
     pub guide_legs: [SpriteVram; 3],
-    /// CL207's face for the dialogue box, facing left.
-    pub portrait: SpriteVram,
     /// The cargo ship's left half, 32x32, hatch shut; the right half is the same
     /// sprite mirrored. Sprite VRAM is nearly full, so the open hatch and the thruster
     /// flames are small overlays rather than whole ship frames.
@@ -197,11 +195,6 @@ impl ArrivalArt {
         Self {
             guide_top: half(0, None),
             guide_legs: [&BODY_STAND, &BODY_STRIDE, &BODY_PASS].map(|body| half(16, Some(body))),
-            portrait: {
-                let mut c = Canvas::new(Size::S32x32);
-                c.art_with(KEY, 0, 0, &PORTRAIT);
-                c.vram_with(&PALETTE)
-            },
             ship_half: ship_half(),
             hatch_open: {
                 let mut c = Canvas::new(Size::S16x8);
@@ -220,6 +213,14 @@ impl ArrivalArt {
             }),
         }
     }
+}
+
+/// CL207's face for the dialogue box, facing left. Kept loaded in every level: CL207
+/// calls in the Trenches too. The rest of [`ArrivalArt`] is the Badlands' alone.
+pub fn portrait() -> SpriteVram {
+    let mut c = Canvas::new(Size::S32x32);
+    c.art_with(KEY, 0, 0, &PORTRAIT);
+    c.vram_with(&PALETTE)
 }
 
 /// The left half of a 64-pixel cargo ship: an armoured pod with a lit window at each

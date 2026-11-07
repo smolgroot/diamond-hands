@@ -73,7 +73,7 @@ pub const WASSIE_FEET: (i32, i32) = (47, 96);
 /// The bag's item list: first row of text, the step between rows, and where the
 /// icons, names and equipped badges go.
 const LIST_Y: i32 = 32;
-const LIST_STEP: i32 = 24;
+const LIST_STEP: i32 = 20;
 const LIST_ICON_X: i32 = 104;
 const LIST_NAME_X: i32 = 128;
 const LIST_BADGE_X: i32 = 216;
@@ -107,7 +107,7 @@ impl PageKey {
             tab: m.tab,
             item: m.item,
             inspecting: m.inspecting,
-            diamonds: game.world.diamonds,
+            diamonds: game.diamond_balance() ^ game.world.coins << 20,
             fuel: game.world.player.hover_fuel as u32,
             score: game.score(),
         }
@@ -643,7 +643,8 @@ fn item_card(p: &mut Pixels, game: &Game, selected: usize) {
         p.text(row, CARD_X, 64 + CELL * i as i32, ix::STEEL_LIGHT);
     }
     if let Some((value, max)) = info.gauge.reading(game) {
-        let end = p.text("FUEL", CARD_X, 104 - CELL, ix::GOLD);
+        let label = if info.item == Item::Cells { "CELLS" } else { "FUEL" };
+        let end = p.text(label, CARD_X, 104 - CELL, ix::GOLD);
         let (bx, bw) = (end + CELL, RIGHT - end - CELL);
         let y = 104 - CELL + 1;
         p.fill(bx, y, bw, 6, ix::OUTLINE);
@@ -665,8 +666,8 @@ fn wallet_page(p: &mut Pixels, game: &Game) {
 
     p.text("BALANCE", SIDE_X, 24, ix::CYAN);
     let mut buf = [0; 10];
-    let end = p.text_with(font::number(world.diamonds, &mut buf), SIDE_X, 40, ix::WHITE, 2, 16);
-    p.text("DIAMONDS", end + CELL, 48, ix::STEEL_LIGHT);
+    let end = p.text_with(font::number(game.diamond_balance(), &mut buf), SIDE_X, 36, ix::WHITE, 2, 16);
+    p.text("DIAMONDS", end + CELL, 44, ix::STEEL_LIGHT);
 
     let total = world.level.markers().filter(|&(c, _, _)| c == b'o').count() as u32;
     let mut a = [0; 10];
@@ -678,25 +679,23 @@ fn wallet_page(p: &mut Pixels, game: &Game) {
     found[n.len()] = b'/';
     found[n.len() + 1..len].copy_from_slice(t.as_bytes());
     let found = core::str::from_utf8(&found[..len]).unwrap_or("");
-    // The file keeps the count from the last beacon lit in this level.
-    let saved = game.files[game.file as usize]
-        .filter(|f| f.level == world.level_index && f.checkpoint.is_some())
-        .map(|f| f.diamonds);
     let mut c = [0; 10];
     let mut d = [0; 10];
+    let mut e = [0; 10];
     let rows = [
+        ("BANKED", font::number(game.wallet, &mut c)),
         ("FOUND HERE", found),
-        ("LAST BEACON", saved.map_or("-", |n| font::number(n, &mut c))),
-        ("SCORE", font::number(game.score(), &mut d)),
+        ("GOLD COINS", font::number(world.coins + game.purse, &mut d)),
+        ("SCORE", font::number(game.score(), &mut e)),
     ];
     for (i, (label, value)) in rows.into_iter().enumerate() {
-        let y = 64 + 16 * i as i32;
-        p.fill(SIDE_X, y + 11, RIGHT - SIDE_X, 1, ix::PURPLE);
+        let y = 58 + 13 * i as i32;
+        p.fill(SIDE_X, y + 10, RIGHT - SIDE_X, 1, ix::PURPLE);
         p.text(label, SIDE_X, y, ix::STEEL_LIGHT);
         p.text_right(value, RIGHT, y, ix::WHITE);
     }
 
-    describe(p, &DIAMOND_ICON, "DIAMONDS", "B: RESUME", ["CRYPTOTERRA'S MONEY.", "BEACONS SAVE YOUR BAG."]);
+    describe(p, &DIAMOND_ICON, "DIAMONDS", "B: RESUME", ["CLEARS BANK THEM. THE", "PENGUIN BUYS GOLD 1:8."]);
 }
 
 /// A round steel plinth under whatever stands on the pocket panel, with a magenta rim.
@@ -759,8 +758,29 @@ fn icon(item: Item) -> &'static [&'static str] {
         Item::Blaster => &BLASTER_ICON,
         Item::Jetpack => &JETPACK_ICON,
         Item::Scarf => &SCARF_ICON,
+        Item::Cells => &CELL_ICON,
     }
 }
+
+/// A plasma cell: steel caps on a glass tube of glowing cyan plasma.
+const CELL_ICON: [&str; 16] = [
+    "................",
+    ".....kkkkkk.....",
+    "....kSSSSSgk....",
+    "....kgggggGk....",
+    ".....kkkkkk.....",
+    ".....kbiibk.....",
+    ".....kbiwbk..i..",
+    ".....kiwwik.....",
+    "..i..kiwwik.....",
+    ".....kbwwbk.....",
+    ".....kbiibk...i.",
+    ".....kkkkkk.....",
+    "....kSSSSSgk....",
+    "....kgggggGk....",
+    ".....kkkkkk.....",
+    "................",
+];
 
 /// The oversized cannon: steel housing, magenta vents, a diamond insignia and a hot
 /// pink muzzle.

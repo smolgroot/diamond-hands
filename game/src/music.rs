@@ -6,7 +6,7 @@
 
 use agb::sound::mixer::Mixer;
 use agb_tracker::{Track, Tracker, include_xm};
-use diamond_hands_logic::{Game, Scene};
+use diamond_hands_logic::{Game, Scene, game::Talk};
 
 static TITLE: Track = include_xm!("music/title.xm");
 static BADLANDS: Track = include_xm!("music/badlands.xm");
@@ -35,13 +35,13 @@ impl Cue {
             | Scene::Map
             | Scene::Files
             | Scene::FileChoice => Cue::Title,
-            Scene::LevelClear => Cue::Clear,
+            Scene::LevelClear | Scene::Exchange => Cue::Clear,
             Scene::Intro | Scene::Arrival | Scene::Play | Scene::Paused | Scene::Dialog => {
                 if world.player.is_dead() && world.player.hp <= 0 {
                     Cue::Down
                 } else if world.boss.is_beaten() {
                     Cue::Clear
-                } else if game.scene == Scene::Dialog || world.boss.is_active() {
+                } else if (game.scene == Scene::Dialog && game.talk == Talk::Boss) || world.boss.is_active() {
                     Cue::Boss
                 } else {
                     Cue::Level
