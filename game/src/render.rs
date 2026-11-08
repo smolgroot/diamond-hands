@@ -20,7 +20,7 @@ use diamond_hands_logic::{
     Difficulty, Game, Level, Progress, Scene, TILE,
     boss::BossState,
     controls::{self, BINDINGS},
-    enemy::{ActorKind, state},
+    enemy::{ActorKind, GUARD_BURST_GAP, GUARD_RECOIL_FRAMES, SENTRY_MUZZLE, SENTRY_RECOIL_FRAMES, state},
     fx::FxKind,
     game::{CLEAR_LOCK_FRAMES, Deal, FILES, MAP_WALK_FRAMES, PAYOUT_FRAMES, PENGUIN_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
     inventory::SHIELD_CELLS,
@@ -37,8 +37,8 @@ use crate::{
     art::{
         Common, SPRITE_PALETTE, TileCache,
         arrival::{self, ArrivalArt},
-        badlands::{self, Bera, SKY_PALETTES, Villains},
-        casino::{self, ArenaArt, CasinoArt, FloorArt, SamPose},
+        badlands::{self, Bera, SENTRY_ANCHOR, SKY_PALETTES, SentryPose, Villains},
+        casino::{self, ArenaArt, CasinoArt, FloorArt, NINJA_ANCHOR, NINJA_FLAME_X, NinjaPose, SamPose},
         menu::{self, MenuScreen},
         trenches, ui,
         wassie::{self, Wassie},
@@ -346,6 +346,13 @@ impl Renderer {
         self.draw_overlay(game, frame);
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             self.draw_hud(game, frame);
+        }
+        self.villains.sentry.sweep();
+        if let Some(floor) = self.level_art.as_ref().and_then(LevelArt::floor) {
+            floor.ninja.sweep();
+        }
+        if !in_menu {
+            self.draw_fences(game, frame);
         }
         self.draw_fx(game, frame);
         self.draw_player(game, frame);
@@ -1292,6 +1299,65 @@ impl Renderer {
             .show(frame);
     }
 
+    /// Electric fences' lightning: while live, a crackling curtain up each emitter's
+    /// column to the rock above, redrawn from shuffled pieces every couple of frames;
+    /// while warning, sparks blinking over the emitters. Drawn over the wassie, so a
+    /// shock reads as the current running through it.
+    fn draw_fences(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let world = &game.world;
+        let state = diamond_hands_logic::world::fence_state(world.frames);
+        if state == 0 {
+            return;
+        }
+        let (cam, level, c) = (self.view_x, world.level, &self.common);
+        let tick = game.frame / 2;
+        let mix = |a: i32, b: i32| {
+            let h = (a as u32).wrapping_mul(73_856_093) ^ (b as u32).wrapping_mul(19_349_663) ^ tick.wrapping_mul(83_492_791);
+            h ^ (h >> 13)
+        };
+        for tx in cam.div_euclid(TILE)..=(cam + WIDTH).div_euclid(TILE) {
+            for ty in 0..level.height() {
+                if level.tile(tx, ty) != diamond_hands_logic::level::Tile::Spike {
+                    continue;
+                }
+                let x = tx * TILE - cam;
+                let base = ty * TILE;
+                if state == 1 {
+                    let h = mix(tx, ty);
+                    Object::new(c.fence_spark.clone())
+                        .set_pos(vec2(x, base - 7))
+                        .set_hflip(h & 1 != 0)
+                        .set_priority(self.world_layer)
+                        .show(frame);
+                    continue;
+                }
+                // Stack pieces up from the emitter: 32px ones, then 8px to the top.
+                let top = level.fence_top(tx, ty) * TILE;
+                let mut y = base;
+                let mut piece = 0;
+                while y > top {
+                    let h = mix(tx, piece);
+                    let tall = y - top >= 32;
+                    let (sprite, step) = if tall {
+                        (&c.lightning[(h % 4) as usize], 32)
+                    } else {
+                        (&c.lightning_short[(h % 4) as usize], 8)
+                    };
+                    y -= step;
+                    // Each piece's ends sit on the centre line: flipping either way
+                    // still joins up, and doubles the crackles.
+                    Object::new(sprite.clone())
+                        .set_pos(vec2(x, y))
+                        .set_hflip(h & 16 != 0)
+                        .set_vflip(h & 32 != 0)
+                        .set_priority(self.world_layer)
+                        .show(frame);
+                    piece += 1;
+                }
+            }
+        }
+    }
+
     fn draw_fx(&self, game: &Game, frame: &mut GraphicsFrame) {
         let cam = self.view_x;
         let c = &self.common;
@@ -1306,6 +1372,40 @@ impl Renderer {
                     // Sits on the ground and drifts up a little as it thins.
                     let y = f.y + 3 - 8 - f.age as i32 / 5;
                     self.put(frame, &c.dust[f.frame(3)], f.x - 4 - cam, y);
+                    continue;
+                }
+                FxKind::Wreck | FxKind::NinjaWreck => {
+                    // Down in three moves, then lying there smoking until it blinks out.
+                    let t = f.age as i32;
+                    if t > 66 && t % 4 < 2 {
+                        continue;
+                    }
+                    let step = match t {
+                        0..8 => 0,
+                        8..18 => 1,
+                        _ => 2,
+                    };
+                    let (sprite, anchor) = if f.kind == FxKind::Wreck {
+                        let pose = [SentryPose::Stagger, SentryPose::Kneel, SentryPose::Down][step];
+                        (self.villains.sentry.sprite(pose as usize), SENTRY_ANCHOR)
+                    } else {
+                        let Some(floor) = self.level_art.as_ref().and_then(LevelArt::floor) else {
+                            continue;
+                        };
+                        let pose = [NinjaPose::Stagger, NinjaPose::Kneel, NinjaPose::Down][step];
+                        (floor.ninja.sprite(pose as usize), NINJA_ANCHOR)
+                    };
+                    if t >= 18 {
+                        // A wisp of smoke curling up off the wreck.
+                        let rise = (t - 18) % 24;
+                        let sway = [0, 1, 1, 0, -1, -1][(rise / 4) as usize];
+                        self.put(frame, &c.dust[(rise / 8) as usize], f.x - 4 + sway - cam, f.y - 14 - rise / 2);
+                    }
+                    Object::new(sprite)
+                        .set_pos(vec2(pose_left(f.x, anchor, f.flip) - cam, f.y - 32))
+                        .set_hflip(f.flip)
+                        .set_priority(self.world_layer)
+                        .show(frame);
                     continue;
                 }
                 FxKind::CoinPop | FxKind::Splat => {
@@ -1564,8 +1664,27 @@ impl Renderer {
                     (&c.flag[lit], x - 2, r.bottom() - 32, false)
                 }
                 ActorKind::Sentry => {
-                    let pose = if a.state == state::AIM { 2 } else { step };
-                    (&v.sentry[pose], r.centre_x() - 8 - cam, r.bottom() - 32, a.facing > 0)
+                    // Walks a step every 4px, raises the cannon and charges it, then
+                    // rocks back from the shot with a flash at the muzzle.
+                    let recoil = a.state == state::RECOIL && a.timer > SENTRY_RECOIL_FRAMES - 5;
+                    let pose = match a.state {
+                        _ if a.flash > 0 => SentryPose::Hit,
+                        state::AIM if a.timer > 8 => SentryPose::Aim,
+                        state::AIM => SentryPose::Charge,
+                        state::RECOIL => SentryPose::Aim,
+                        _ => SentryPose::WALK[(r.x.unsigned_abs() / 4 % 6) as usize],
+                    };
+                    let flip = a.facing < 0;
+                    let kick = if recoil { -a.facing } else { 0 };
+                    if recoil {
+                        let (mx, my) = (r.centre_x() + a.facing * (SENTRY_MUZZLE.0 + 2), r.bottom() - SENTRY_MUZZLE.1);
+                        Object::new(c.muzzle[(a.timer % 2) as usize].clone())
+                            .set_pos(vec2(mx - 4 - cam, my - 4))
+                            .set_hflip(flip)
+                            .set_priority(self.world_layer)
+                            .show(frame);
+                    }
+                    (&v.sentry.sprite(pose as usize), pose_left(r.centre_x(), SENTRY_ANCHOR, flip) + kick - cam, r.bottom() - 32, flip)
                 }
                 ActorKind::Crawler => {
                     let lunge = (a.state == state::LUNGE) as usize;
@@ -1587,7 +1706,37 @@ impl Renderer {
                     let spin = [0, 1, 2, 1][((game.frame + r.x as u32) / 6 % 4) as usize];
                     (&casino.coin[spin], x, r.y, spin == 1 && (game.frame / 24).is_multiple_of(2))
                 }
-                ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer | ActorKind::Guard => {
+                ActorKind::Guard => {
+                    let Some(floor) = floor else {
+                        continue;
+                    };
+                    // Signals before a burst, points the gun through it with a flame
+                    // at each shot, and holds the aim a moment after.
+                    let flip = a.facing < 0;
+                    let fired = match a.state {
+                        state::LUNGE => a.timer > GUARD_BURST_GAP - 3 && a.count < 3,
+                        state::RECOIL => a.timer > GUARD_RECOIL_FRAMES - 3,
+                        _ => false,
+                    };
+                    let pose = match a.state {
+                        _ if a.flash > 0 => NinjaPose::Hit,
+                        state::AIM => NinjaPose::Signal,
+                        state::LUNGE | state::RECOIL => NinjaPose::Point,
+                        _ if a.body.vx_fx == 0 => NinjaPose::Walk0,
+                        _ => NinjaPose::WALK[(r.x.unsigned_abs() / 4 % 6) as usize],
+                    };
+                    let left = pose_left(r.centre_x(), NINJA_ANCHOR, flip) - cam;
+                    if fired {
+                        let x = if flip { left - NINJA_FLAME_X } else { left + NINJA_FLAME_X };
+                        Object::new(floor.ninja.sprite(NinjaPose::Flame as usize))
+                            .set_pos(vec2(x, r.bottom() - 32))
+                            .set_hflip(flip)
+                            .set_priority(self.world_layer)
+                            .show(frame);
+                    }
+                    (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
+                }
+                ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;
                     };
@@ -1597,9 +1746,6 @@ impl Renderer {
                     let overlay = match a.kind {
                         ActorKind::Terminal if a.state == state::LIT => Some((&floor.terminal_on, 0, 0)),
                         ActorKind::Dealer if a.state == state::AIM => Some((&floor.cards_in_hand, casino::CARDS_AT.0, casino::CARDS_AT.1)),
-                        ActorKind::Guard if matches!(a.state, state::AIM | state::LUNGE) => {
-                            Some((&floor.guard_aim, casino::GUARD_AIM_AT.0, casino::GUARD_AIM_AT.1))
-                        }
                         _ => None,
                     };
                     if let Some((sprite, ox, oy)) = overlay {
@@ -1620,8 +1766,7 @@ impl Renderer {
                             (&floor.cell, x - 3, r.y - 2 - bob, false)
                         }
                         ActorKind::Terminal => (&floor.terminal, left, top, false),
-                        ActorKind::Dealer => (&floor.dealer[step], left, top, flip),
-                        _ => (&floor.guard[step], left, top, flip),
+                        _ => (&floor.dealer[step], left, top, flip),
                     }
                 }
             };
@@ -1644,6 +1789,12 @@ impl Renderer {
             obj.show(frame);
         }
     }
+}
+
+/// Where a 32x32 sheet-drawn pose's left edge goes for a hitbox centred on
+/// `centre_x`, the pose's legs being centred on column `anchor` when facing right.
+fn pose_left(centre_x: i32, anchor: i32, flip: bool) -> i32 {
+    centre_x - if flip { 31 - anchor } else { anchor }
 }
 
 fn show(frame: &mut GraphicsFrame, sprite: &SpriteVram, x: i32, y: i32) {

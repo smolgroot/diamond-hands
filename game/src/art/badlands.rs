@@ -9,7 +9,7 @@ use agb::display::{
 };
 use diamond_hands_logic::{Level, Tile, level::Theme};
 
-use super::{Canvas, TileCache, drawing, ix, rgb};
+use super::{Canvas, LazyPoses, POSE_BYTES, TileCache, drawing, ix, rgb};
 
 /// Backdrop layers repeat every 256 px as they scroll.
 pub const MAP_TILES: i32 = 32;
@@ -157,11 +157,11 @@ pub fn ground_palette(stage: u8, fence: u8) -> Palette16 {
         let (num, den) = if matches!(i, 11 | 12 | 15) { (1, 1) } else { (num, den) };
         *out = rgb((r * num / den + red).min(31), g * num / den, b * num / den);
     }
-    // Fence wire: dead and dark, a dim blink as a warning, or crackling hot.
+    // Fence nodes: dead and dark, a dim blink as a warning, or white-blue hot.
     colours[ground_ix::ENERGY as usize] = match fence {
         0 => rgb(5, 6, 9),
-        1 => rgb(14, 8, 12),
-        _ => rgb(31, 6, 22),
+        1 => rgb(8, 14, 24),
+        _ => rgb(22, 30, 31),
     };
     Palette16::new(colours)
 }
@@ -350,16 +350,18 @@ const BOT_HEAD_ART: [&[u8; 8]; 8] = [
     b"kSSSggSk",
     b".kkkkkk.",
 ];
-/// An electric fence: a post with live wire strung to the next tile. The wire is the
-/// only thing drawn in [`ground_ix::ENERGY`], so the palette switches the current on and off.
+/// An electric fence's emitter: a steel pylon with a live node on top, where the
+/// lightning curtain (sprites, see [`crate::art::Common::lightning`]) rises from. The
+/// node and status light are the only things drawn in [`ground_ix::ENERGY`], so the
+/// palette switches the current on and off.
 const SPIKES_ART: [&[u8; 8]; 8] = [
-    b"Sg......",
-    b"Sgeeeeee",
-    b"Sg......",
-    b"Sgeeeeee",
-    b"Sg......",
-    b"Sgeeeeee",
-    b"SSSSSSSS",
+    b"..keek..",
+    b".keeeek.",
+    b"..kSgk..",
+    b"..kSgk..",
+    b".kSegk..",
+    b".kSSggk.",
+    b"kSSSSSgk",
     b"gkgkgkgk",
 ];
 
@@ -501,8 +503,8 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
 
 /// The Badlands bots, their shots, and the boss.
 pub struct Villains {
-    /// Walk frames, then aiming.
-    pub sentry: [SpriteVram; 3],
+    /// The Sentry bot's poses, 32x32, facing right: see [`SentryPose`].
+    pub sentry: LazyPoses<SENTRY_POSES>,
     /// Crouched, then lunging.
     pub crawler: [SpriteVram; 2],
     /// Rotor frames.
@@ -516,43 +518,41 @@ pub struct Villains {
     pub star: SpriteVram,
 }
 
-/// Sentry bot, facing left: red armour, red visor, a steel arm cannon. The body is
-/// drawn above the legs; the hitbox is the bottom 22 rows of a 16x32 sprite.
-const SENTRY_BODY: [&str; 12] = [
-    "....kkkkkkk.....",
-    "...krrrrrrRk....",
-    "..krkkkkkrRRk...",
-    "..kkrwrrkrRRk...",
-    "..krRRRRkrRRk...",
-    "...kkkkkkkkk....",
-    "..kSSkrrrrkSk...",
-    "kkSggkrryrkgSk..",
-    "kiSggkrrrrkgGk..",
-    "kkSggkRRRRkgGk..",
-    "..kkkkRRRRkkk...",
-    "...kgGGGGGGk....",
-];
-const SENTRY_LEGS0: [&str; 6] = [
-    "...krRk.krRk....",
-    "...kRRk.kRRk....",
-    "..kgGk...kgGk...",
-    "..krrk...krrk...",
-    ".kRRRk...kRRRk..",
-    ".kkkkk...kkkkk..",
-];
-const SENTRY_LEGS1: [&str; 6] = [
-    "..krRk...krRk...",
-    "..kRRk...kRRk...",
-    "..kgGk..kgGk....",
-    ".krrk...krrk....",
-    ".kRRRk.kRRRk....",
-    ".kkkkk.kkkkk....",
-];
-const SENTRY_AIM: [&str; 3] = [
-    "kkSggk",
-    "ywSggk",
-    "kkSggk",
-];
+/// The Sentry bot's poses in `game/gfx/sentry.tiles`, cut from
+/// `.claude/skills/diamond-hands-gba/lvl1-bot-sprite-sheet.png` by
+/// `scripts/make-bots.py`: a red one-eyed bot with a steel fist and an arm cannon.
+/// Each is 32x32 facing right, feet on the bottom row, legs centred on column
+/// [`SENTRY_ANCHOR`]. In the script's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SentryPose {
+    Walk0,
+    Walk1,
+    Walk2,
+    Walk3,
+    Walk4,
+    Walk5,
+    /// Cannon raised.
+    Aim,
+    /// Cannon raised, its muzzle glowing pink.
+    Charge,
+    Hit,
+    /// Beaten: rocking back, on its knees, face down.
+    Stagger,
+    Kneel,
+    Down,
+}
+
+impl SentryPose {
+    pub const WALK: [SentryPose; 6] =
+        [SentryPose::Walk0, SentryPose::Walk1, SentryPose::Walk2, SentryPose::Walk3, SentryPose::Walk4, SentryPose::Walk5];
+}
+
+pub const SENTRY_POSES: usize = 12;
+/// The column of a pose the hitbox's centre sits on (facing right).
+pub const SENTRY_ANCHOR: i32 = 13;
+static SENTRY_TILES: &[u8; SENTRY_POSES * POSE_BYTES] = include_bytes!("../../gfx/sentry.tiles");
+static SENTRY_PALETTE: Palette16 = super::gfx_palette(include_bytes!("../../gfx/sentry.pal"));
+
 const CRAWLER0: [&str; 13] = [
     "................",
     "................",
@@ -676,7 +676,7 @@ const SHOCKWAVE: [&str; 12] = [
 impl Villains {
     pub fn new() -> Self {
         Self {
-            sentry: [sentry(&SENTRY_LEGS0, false), sentry(&SENTRY_LEGS1, false), sentry(&SENTRY_LEGS0, true)],
+            sentry: LazyPoses::new(SENTRY_TILES, &SENTRY_PALETTE),
             crawler: [
                 drawing(Size::S16x16, 0, 16 - CRAWLER0.len() as i32, &CRAWLER0),
                 drawing(Size::S16x16, 0, 16 - CRAWLER1.len() as i32, &CRAWLER1),
@@ -690,17 +690,6 @@ impl Villains {
             star: drawing(Size::S8x8, 1, 1, &["..y..", ".yoy.", "yowoy", ".yoy.", "..y.."]),
         }
     }
-}
-
-fn sentry(legs: &[&str], aim: bool) -> SpriteVram {
-    let mut c = Canvas::new(Size::S16x32);
-    let top = 32 - legs.len() as i32 - SENTRY_BODY.len() as i32;
-    c.art(0, top, &SENTRY_BODY);
-    if aim {
-        c.art(0, top + 7, &SENTRY_AIM);
-    }
-    c.art(0, 32 - legs.len() as i32, legs);
-    c.vram()
 }
 
 /// BERA 3000, facing left, after `.claude/skills/diamond-hands-gba/bera-mockup.png`: a

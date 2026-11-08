@@ -46,6 +46,67 @@ pub mod ix {
     pub const LASER_LIGHT: u8 = 15;
 }
 
+/// A 16-colour palette written by the gfx scripts: little-endian BGR555, colour 0 unused.
+pub const fn gfx_palette(raw: &[u8; 32]) -> Palette16 {
+    let mut colours = [agb::display::Rgb15::new(0); 16];
+    let mut i = 0;
+    while i < 16 {
+        colours[i] = agb::display::Rgb15::new(u16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]));
+        i += 1;
+    }
+    Palette16::new(colours)
+}
+
+/// Bytes of one 32x32 pose in the gfx scripts' 4-bit tiles.
+pub const POSE_BYTES: usize = 32 * 32 / 2;
+
+/// A sheet-drawn bot's 32x32 poses (see `scripts/make-bots.py`), each loaded into
+/// sprite VRAM from ROM when something on screen shows it and let go once nothing has
+/// for a frame: a whole set would take 6 KB or more, and only a few poses are ever on
+/// screen at once.
+pub struct LazyPoses<const N: usize> {
+    /// `N` poses of [`POSE_BYTES`].
+    tiles: &'static [u8],
+    palette: &'static Palette16,
+    loaded: core::cell::RefCell<[Option<SpriteVram>; N]>,
+    /// Poses shown since the last [`LazyPoses::sweep`], one bit each.
+    used: core::cell::Cell<u32>,
+}
+
+impl<const N: usize> LazyPoses<N> {
+    pub fn new(tiles: &'static [u8], palette: &'static Palette16) -> Self {
+        assert_eq!(tiles.len(), N * POSE_BYTES, "a pose sheet of the wrong size");
+        Self {
+            tiles,
+            palette,
+            loaded: core::cell::RefCell::new(core::array::from_fn(|_| None)),
+            used: core::cell::Cell::new(0),
+        }
+    }
+
+    /// Pose `i`, loading it if it isn't already.
+    pub fn sprite(&self, i: usize) -> SpriteVram {
+        self.used.set(self.used.get() | 1 << i);
+        self.loaded.borrow_mut()[i]
+            .get_or_insert_with(|| {
+                let bytes = &self.tiles[i * POSE_BYTES..(i + 1) * POSE_BYTES];
+                DynamicSprite16::from_bytes_in(Size::S32x32, bytes, ExternalAllocator).to_vram(self.palette)
+            })
+            .clone()
+    }
+
+    /// Lets go of the poses nothing showed since the last sweep. Call once a frame,
+    /// before drawing.
+    pub fn sweep(&self) {
+        let used = self.used.replace(0);
+        for (i, slot) in self.loaded.borrow_mut().iter_mut().enumerate() {
+            if used & 1 << i == 0 {
+                *slot = None;
+            }
+        }
+    }
+}
+
 pub static SPRITE_PALETTE: Palette16 = Palette16::new([
     rgb(0, 0, 0),
     rgb(2, 2, 6),
@@ -299,6 +360,62 @@ pub struct Common {
     pub kick: [SpriteVram; 3],
     /// Wind streaks over a hard fall.
     pub speed_lines: SpriteVram,
+    /// An electric fence's lightning curtain, stacked up a tile column: 32px and 8px
+    /// pieces, four crackles of each. Every piece starts and ends on the centre line,
+    /// so any of them stack seamlessly.
+    pub lightning: [SpriteVram; LIGHTNING_FRAMES],
+    pub lightning_short: [SpriteVram; LIGHTNING_FRAMES],
+    /// A spark flickering over an emitter about to go live.
+    pub fence_spark: SpriteVram,
+}
+
+pub const LIGHTNING_FRAMES: usize = 4;
+
+/// One piece of a lightning bolt `h` pixels tall in an 8px-wide sprite: a white-hot
+/// core wandering left and right of the centre (x 3), cyan glow beside it, blue haze
+/// and the odd forked twig. `seed` picks the crackle.
+fn lightning(size: Size, seed: u32) -> SpriteVram {
+    let (_, h) = size.to_width_height();
+    let h = h as i32;
+    let mut c = Canvas::new(size);
+    let mut rng = seed.wrapping_mul(2_654_435_761) | 1;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng
+    };
+    let mut x: i32 = 3;
+    for y in 0..h {
+        // Head back to the centre line by the last row so pieces join up.
+        let left = h - 1 - y;
+        let step = match next() % 5 {
+            0 | 1 => -1,
+            2 | 3 => 1,
+            _ => 0,
+        };
+        let mut nx = (x + step).clamp(1, 6);
+        if (nx - 3).abs() > left {
+            nx = x - (x - 3).signum();
+        }
+        // A sideways jump draws the corner too, so the core stays unbroken.
+        let (lo, hi) = (x.min(nx), x.max(nx));
+        if next() % 3 == 0 {
+            c.px(lo - 2, y, ix::BLUE);
+            c.px(hi + 2, y, ix::BLUE);
+        }
+        c.rect(lo - 1, y, hi - lo + 3, 1, ix::CYAN);
+        c.rect(lo, y, hi - lo + 1, 1, ix::WHITE);
+        // A short forked twig off the side now and then.
+        if h > 8 && y > 2 && y < h - 4 && next() % 9 == 0 {
+            let dir = if nx < 3 { 1 } else { -1 };
+            for i in 1..=2 {
+                c.px(nx + dir * (i + 1), y + i, if i == 1 { ix::CYAN } else { ix::BLUE });
+            }
+        }
+        x = nx;
+    }
+    c.vram()
 }
 
 /// Cream and tan for the dust, after the sprite sheet's dust clouds.
@@ -658,6 +775,9 @@ impl Common {
             muzzle_ring: [muzzle_ring(8, 16), muzzle_ring(6, 11)],
             dust: [dust(Size::S8x8, 0, 2, &DUST0), dust(Size::S8x8, 0, 1, &DUST1), dust(Size::S8x8, 0, 2, &DUST2)],
             kick: [&KICK0, &KICK1, &KICK2].map(|r| dust(Size::S16x8, 0, 0, r)),
+            lightning: core::array::from_fn(|i| lightning(Size::S8x32, 7 + i as u32 * 31)),
+            lightning_short: core::array::from_fn(|i| lightning(Size::S8x8, 101 + i as u32 * 17)),
+            fence_spark: drawing(Size::S8x8, 1, 2, &["..b...", ".bi..b", "..wib.", ".biw..", "b..ib.", "...b.."]),
             speed_lines: drawing(
                 Size::S8x16,
                 0,

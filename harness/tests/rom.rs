@@ -421,6 +421,12 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
         if model.talking() && dialog_frames % 50 == 49 {
             screenshot(runner, &format!("{talk}-{}", model.talk_line));
         }
+        // The route bot waiting at an electric fence: its curtain warning and live.
+        let w = &model.world;
+        let r = w.player.body.rect();
+        if model.scene == Scene::Play && i % 8 == 0 && w.level.fence_hit(r.right(), r.y, 24, r.h).is_some() {
+            screenshot(runner, &format!("fence-{i:05}"));
+        }
         if model.scene == Scene::Play && model.world.boss.is_active() && i % 10 == 0 {
             screenshot(runner, &format!("boss-{i:05}"));
         }
@@ -523,6 +529,11 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
                     if cam >= x && cam < x + 4 {
                         shot(&runner, name);
                     }
+                }
+                let r = w.player.body.rect();
+                if w.level.fence_hit(r.right(), r.y, 24, r.h).is_some() {
+                    let state = diamond_hands_logic::world::fence_state(w.frames);
+                    shot(&runner, &format!("t2-fence-{}-{state}", r.x / 256));
                 }
                 if let Some(lift) = w.lift {
                     match lift.state {

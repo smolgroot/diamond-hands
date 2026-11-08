@@ -9,7 +9,7 @@ use crate::{
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
     game::{Progress, keys},
-    level::{Level, Tile},
+    level::Level,
     levels,
     physics::Body,
     player::{
@@ -39,6 +39,8 @@ const DEAD_SKID_FX: i32 = 24;
 pub const PIT_FRAMES: u16 = 30;
 pub const SPIKE_DAMAGE: i32 = 2;
 /// Electric fences run on a cycle: dead, a warning blink, then live for a few seconds.
+/// Live, a fence's curtain of lightning is a wall from its emitters up to the rock
+/// above: touching it shocks, and nothing gets through until it goes dead again.
 const FENCE_CYCLE: u32 = 360;
 const FENCE_WARN: u32 = 60;
 const FENCE_LIVE: u32 = 150;
@@ -55,6 +57,12 @@ pub fn fence_state(frames: u32) -> u8 {
         2
     }
 }
+/// Frames until a fence goes live again, or 0 while it is warning or live.
+pub fn fence_open_for(frames: u32) -> u32 {
+    let t = frames % FENCE_CYCLE;
+    (FENCE_CYCLE - FENCE_WARN - FENCE_LIVE).saturating_sub(t)
+}
+
 pub const PIT_DAMAGE: i32 = 2;
 pub const HEAL_AMOUNT: i32 = 2;
 /// The camera keeps the wassie's centre inside this band of the screen.
@@ -879,7 +887,13 @@ impl World {
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
                 if a.damage(s.kind.damage()) {
                     self.kills += 1;
-                    self.fx.spawn(FxKind::Explosion, ar.centre_x(), ar.centre_y());
+                    if let Some(wreck) = a.kind.wreck() {
+                        // It goes down where it stood, with a burst of sparks.
+                        self.fx.spawn_facing(wreck, ar.centre_x(), ar.bottom(), a.facing < 0);
+                        self.fx.spawn(FxKind::Sparks, ar.centre_x(), ar.centre_y());
+                    } else {
+                        self.fx.spawn(FxKind::Explosion, ar.centre_x(), ar.centre_y());
+                    }
                     events.insert(Events::ENEMY_DOWN);
                     if self.level.coins {
                         self.coins += a.kind.bounty();
@@ -1018,6 +1032,7 @@ impl World {
         }
     }
 
+    #[cfg(test)]
     fn hurt_player(&mut self, damage: i32, from_x: i32, events: &mut Events) {
         self.knock_player(damage, from_x, false, events);
     }
@@ -1082,12 +1097,22 @@ impl World {
 
     fn hazards(&mut self, events: &mut Events) {
         let r = self.player.body.rect();
-        let spiked = fence_state(self.frames) == 2
-            && crate::physics::tiles_in(&r.inset(2)).any(|(tx, ty)| self.level.tile(tx, ty) == Tile::Spike);
-        if spiked {
-            let from_x = r.centre_x() - self.player.facing * 8;
-            self.hurt_player(SPIKE_DAMAGE, from_x, events);
+        let live = fence_state(self.frames) == 2;
+        if let Some((x0, x1)) = self.level.fence_hit(r.x, r.y, r.w, r.h).filter(|_| live && !self.player.is_dead()) {
+            // Thrown back out the side it came in by, shocked or not: a wassie still
+            // blinking from the last jolt can't slip through either.
+            let mid = (x0 + x1) / 2;
+            let body = &mut self.player.body;
+            if r.centre_x() < mid {
+                body.x_fx = (x0 - r.w - 1) * FX;
+                body.vx_fx = body.vx_fx.min(0);
+            } else {
+                body.x_fx = (x1 + 1) * FX;
+                body.vx_fx = body.vx_fx.max(0);
+            }
+            self.knock_player(SPIKE_DAMAGE, mid, true, events);
         }
+        let r = self.player.body.rect();
         if r.y > self.level.px_height() && !self.player.is_dead() {
             if !self.god {
                 self.player.hp -= self.difficulty.damage(PIT_DAMAGE);
@@ -1334,6 +1359,47 @@ mod tests {
     }
 
     #[test]
+    fn a_beaten_sentry_leaves_a_wreck_facing_its_way() {
+        let mut w = world();
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        w.actors[sentry].awake = true;
+        w.actors[sentry].hp = 1;
+        w.actors[sentry].facing = -1;
+        let r = w.actors[sentry].rect();
+        shot::spawn(&mut w.shots, ShotKind::Bolt, r.centre_x(), r.centre_y(), FX, 0);
+        w.collide(&mut Events::default());
+        let wreck = w.fx.active().find(|f| f.kind == FxKind::Wreck).expect("a wreck");
+        assert_eq!((wreck.x, wreck.y, wreck.flip), (r.centre_x(), r.bottom(), true));
+        assert!(w.fx.active().all(|f| f.kind != FxKind::Explosion));
+    }
+
+    #[test]
+    fn sentry_fires_from_its_cannon_then_recoils() {
+        use crate::enemy::{SENTRY_MUZZLE, SENTRY_RECOIL_FRAMES, state};
+        let mut w = world();
+        let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
+        let a = &mut w.actors[sentry];
+        a.awake = true;
+        a.state = state::AIM;
+        a.timer = 1;
+        a.facing = -1;
+        w.player.body.x_fx = (a.rect().x - 60) * FX;
+        w.step(&Input::default());
+        let a = w.actors[sentry];
+        assert_eq!(a.state, state::RECOIL);
+        let shot = w.shots.iter().find(|s| s.active && s.kind == ShotKind::Bullet).expect("a plasma round");
+        let (r, sr) = (a.rect(), shot.rect());
+        assert!((sr.centre_x() - (r.centre_x() - SENTRY_MUZZLE.0)).abs() <= 2, "{sr:?} from {r:?}");
+        assert_eq!(sr.centre_y(), r.bottom() - SENTRY_MUZZLE.1);
+        let x = a.body.x();
+        for _ in 0..SENTRY_RECOIL_FRAMES {
+            w.step(&Input::default());
+        }
+        assert_eq!(w.actors[sentry].body.x(), x, "stands still while recoiling");
+        assert_eq!(w.actors[sentry].state, state::IDLE);
+    }
+
+    #[test]
     fn beam_hits_each_enemy_once() {
         let mut w = world();
         let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
@@ -1383,6 +1449,36 @@ mod tests {
             assert!(events.contains(Events::HIT), "{difficulty:?}");
             assert_eq!(w.player.hp, expected, "{difficulty:?}");
         }
+    }
+
+    #[test]
+    fn live_fence_is_a_wall_up_to_the_sky() {
+        let mut w = World::with_level(&RANGE, 0, Difficulty::Normal);
+        w.frames = FENCE_CYCLE - FENCE_LIVE;
+        // High above the emitters, well over any jump: still in the curtain.
+        w.player.body.x_fx = (50 * TILE) * FX;
+        w.player.body.y_fx = 2 * TILE * FX;
+        let events = w.step(&Input::default());
+        assert!(events.contains(Events::HIT));
+        let r = w.player.body.rect();
+        assert!(r.right() <= 50 * TILE, "thrown back out the left: {r:?}");
+        // Still blinking from the jolt, it can't slip through either.
+        assert!(w.player.invuln > 0);
+        for _ in 0..30 {
+            w.player.body.x_fx = (50 * TILE - PLAYER_W + 2) * FX;
+            w.player.body.vx_fx = 2 * FX;
+            w.step(&Input::default());
+            assert!(w.player.body.rect().right() <= 50 * TILE);
+        }
+    }
+
+    #[test]
+    fn fence_curtain_stops_at_rock() {
+        assert_eq!(RANGE.fence_top(50, 15), 0);
+        assert_eq!(RANGE.fence_hit(50 * TILE, 3 * TILE, 8, 8), Some((50 * TILE, 52 * TILE)));
+        assert_eq!(RANGE.fence_hit(48 * TILE, 3 * TILE, 8, 8), None);
+        // Inside the rock under the emitters: no curtain.
+        assert_eq!(RANGE.fence_hit(50 * TILE, 17 * TILE, 8, 8), None);
     }
 
     #[test]
@@ -1524,6 +1620,57 @@ mod tests {
         w.player = Player::new(Body::standing_on_tile(tx, 15, PLAYER_W, PLAYER_H));
         w.snap_camera();
         w
+    }
+
+    #[test]
+    fn guard_fires_a_burst_of_three_from_its_gun_then_holds_its_aim() {
+        use crate::enemy::{GUARD_BURST_GAP, GUARD_MUZZLE, GUARD_RECOIL_FRAMES, state};
+        let mut w = trenches_at(6);
+        let guard = w.actors.iter().position(|a| a.kind == ActorKind::Guard).unwrap();
+        let a = &mut w.actors[guard];
+        a.alive = true;
+        a.killed = false;
+        a.awake = true;
+        a.state = state::AIM;
+        a.timer = 1;
+        a.facing = 1;
+        let r = a.rect();
+        // Behind its back, so the burst flies clear, and close enough to keep it awake.
+        w.player.body.x_fx = (r.x - 60) * FX;
+        w.player.body.y_fx = (r.bottom() - PLAYER_H) * FX;
+        w.snap_camera();
+        w.god = true;
+        let mut shots = 0;
+        for _ in 0..(2 + 3 * GUARD_BURST_GAP as usize) {
+            w.step(&Input::default());
+            let fired = w.shots.iter().filter(|s| s.active && s.kind == ShotKind::Bullet).count();
+            if fired > shots {
+                let s = w.shots.iter().filter(|s| s.active && s.kind == ShotKind::Bullet).last().unwrap().rect();
+                let r = w.actors[guard].rect();
+                assert_eq!(s.centre_y(), r.bottom() - GUARD_MUZZLE.1);
+                assert!((s.centre_x() - (r.centre_x() + GUARD_MUZZLE.0)).abs() <= 2, "{s:?} from {r:?}");
+            }
+            shots = shots.max(fired);
+        }
+        assert_eq!(shots, 3);
+        assert_eq!(w.actors[guard].state, state::RECOIL);
+        for _ in 0..GUARD_RECOIL_FRAMES {
+            w.step(&Input::default());
+        }
+        assert_eq!(w.actors[guard].state, state::IDLE);
+    }
+
+    #[test]
+    fn a_beaten_guard_leaves_a_ninja_wreck() {
+        let mut w = trenches_at(6);
+        let guard = w.actors.iter().position(|a| a.kind == ActorKind::Guard).unwrap();
+        let a = &mut w.actors[guard];
+        (a.alive, a.killed, a.awake, a.hp, a.facing) = (true, false, true, 1, 1);
+        let r = a.rect();
+        shot::spawn(&mut w.shots, ShotKind::Bolt, r.centre_x(), r.centre_y(), FX, 0);
+        w.collide(&mut Events::default());
+        let wreck = w.fx.active().find(|f| f.kind == FxKind::NinjaWreck).expect("a wreck");
+        assert_eq!((wreck.x, wreck.y, wreck.flip), (r.centre_x(), r.bottom(), false));
     }
 
     #[test]

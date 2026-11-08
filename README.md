@@ -98,6 +98,10 @@ with a boss.
   double damage), lobs arcing cucumbers, and calls a **Market Crash** (the screens go red,
   candles rain, magenta energy flies). At half health his implants overload: faster, three
   cucumbers a volley, and the Cucumber Hit ends in shockwaves.
+- **Electric fences:** pylons on the ground throw up a curtain of lightning that reaches the
+  rock above (or the sky), so it can't be jumped. They cycle: dead, a blinking warning with
+  sparks, then live for about 2.5 seconds. Touching a live curtain shocks you and throws you
+  back; wait for it to die, then run through.
 - **Health and respawns:** you have 8 HP. Touching a beacon makes it your respawn point, and
   retries are unlimited.
 - **Diamonds:** they are scattered along the route, and the upper ledges hold the most.
@@ -136,11 +140,15 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
 - `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
   - All art is drawn in code, in `game/src/art/` (`casino.rs` and `trenches.rs` for the
     Trenches, after `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png` and
-    `level2-casino-mockup.png`), except the splash, the wassie's portrait and SAM. The splash
+    `level2-casino-mockup.png`), except the splash, the wassie's portrait, SAM, the Sentry bot and the Guard. The splash
     is `cover.png` cropped and fitted to 16 palettes by `scripts/make-splash.py` (needs
     Pillow), which writes the tiles, palettes and a preview to `game/gfx/`. SAM's poses and
     portrait are cut from the SBF sprite sheet at gameplay size by `scripts/make-sam.py`
-    (review them in `game/gfx/sam.png`); only his current pose sits in sprite VRAM. Rerun a
+    (review them in `game/gfx/sam.png`); only his current pose sits in sprite VRAM. The Sentry
+    bot's and the Guard's (the casino's ninja bot) poses are cut from
+    `lvl1-bot-sprite-sheet.png` and `lvl2-bot-ninja-sprite-sheet.png` by
+    `scripts/make-bots.py` (review in `game/gfx/sentry.png` and `ninja.png`); a pose is
+    loaded only while something on screen shows it. Rerun a
     script when its source changes; the ROM includes those files as they are.
   - Music is tracker modules in `game/music/*.xm`, played by agb-tracker on the mixer
     (`game/src/music.rs` picks the cue from the scene); the blaster effects stay on the DMG

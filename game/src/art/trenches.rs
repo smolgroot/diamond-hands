@@ -6,7 +6,7 @@
 //! what is around it ([`terrain_key`]), so each distinct cell is drawn once. Pictures
 //! bigger than a cell (see `level::DECOR`) key each of their cells by its place in the
 //! picture. Animation is all palette: the marquee bulbs chase by swapping two colours,
-//! the electric floor switches with the fences, and the screens go red when the market
+//! the fence emitters switch with the fence cycle, and the screens go red when the market
 //! crashes.
 
 use agb::display::{Palette16, Rgb15, tiled::RegularBackground};
@@ -32,7 +32,7 @@ mod gx {
     /// Marquee bulbs: the two sets swap colours to chase.
     pub const BULB_A: u8 = 13;
     pub const BULB_B: u8 = 14;
-    /// The electric floor, switched with the fence cycle.
+    /// Fence emitter nodes, switched with the fence cycle.
     pub const ENERGY: u8 = 15;
 }
 
@@ -59,8 +59,8 @@ pub fn ground_palette(stage: u8, fence: u8, chase: bool, crash: bool) -> Palette
     colours[gx::BULB_B as usize] = if chase { off } else { on };
     colours[gx::ENERGY as usize] = match fence {
         0 => rgb(6, 4, 10),
-        1 => rgb(16, 8, 14),
-        _ => rgb(31, 8, 24),
+        1 => rgb(8, 14, 24),
+        _ => rgb(22, 30, 31),
     };
     if crash {
         colours[gx::SCREEN as usize] = rgb(18, 1, 4);
@@ -440,14 +440,26 @@ fn ledge(x: i32, y: i32) -> u8 {
     }
 }
 
-/// The electric floor: gold posts with a live grid strung between them.
+/// An electric fence's emitter: a gold pylon with a live node on top, where the
+/// lightning curtain rises from.
 fn grid(x: i32, y: i32) -> u8 {
     use gx::*;
-    match (x, y) {
-        (0 | 1, 0..=5) => if x == 0 { GOLD_LIGHT } else { GOLD_DARK },
-        (_, 1 | 3 | 5) => ENERGY,
-        (_, 6) => GOLD,
-        (_, 7) => if x % 2 == 0 { GOLD_DARK } else { OUTLINE },
+    const ART: [&[u8; 8]; 8] = [
+        b"..keek..",
+        b".keeeek.",
+        b"..kYyk..",
+        b"..kYyk..",
+        b".kYedk..",
+        b".kYYyyk.",
+        b"kYYYYYdk",
+        b"dkdkdkdk",
+    ];
+    match ART[y as usize][x as usize] {
+        b'k' => OUTLINE,
+        b'Y' => GOLD_LIGHT,
+        b'y' => GOLD,
+        b'd' => GOLD_DARK,
+        b'e' => ENERGY,
         _ => 0,
     }
 }

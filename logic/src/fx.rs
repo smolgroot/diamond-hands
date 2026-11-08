@@ -25,6 +25,11 @@ pub enum FxKind {
     CoinPop,
     /// A cucumber bursting on impact.
     Splat,
+    /// A beaten Sentry bot staggering, sinking to its knees and keeling over, then
+    /// lying there until it fades. Faces the way [`Fx::flip`] says.
+    Wreck,
+    /// A beaten Guard, the casino's ninja bot, going down the same way.
+    NinjaWreck,
 }
 
 impl FxKind {
@@ -40,6 +45,7 @@ impl FxKind {
             FxKind::Kick => 12,
             FxKind::CoinPop => 24,
             FxKind::Splat => 12,
+            FxKind::Wreck | FxKind::NinjaWreck => 90,
         }
     }
 }
@@ -53,6 +59,8 @@ pub struct Fx {
     /// Frames since it spawned.
     pub age: u8,
     pub active: bool,
+    /// Facing left, for effects drawn facing a way (a wreck).
+    pub flip: bool,
 }
 
 impl Fx {
@@ -62,6 +70,7 @@ impl Fx {
         y: 0,
         age: 0,
         active: false,
+        flip: false,
     };
 
     /// Animation frame out of `count`, spread over the effect's life.
@@ -86,6 +95,11 @@ impl FxPool {
     }
 
     pub fn spawn(&mut self, kind: FxKind, x: i32, y: i32) {
+        self.spawn_facing(kind, x, y, false);
+    }
+
+    /// [`FxPool::spawn`], facing left when `flip`.
+    pub fn spawn_facing(&mut self, kind: FxKind, x: i32, y: i32, flip: bool) {
         let slot = self
             .items
             .iter()
@@ -97,6 +111,7 @@ impl FxPool {
             y,
             age: 0,
             active: true,
+            flip,
         };
         self.next = (slot + 1) % MAX_FX;
     }

@@ -10,12 +10,12 @@ use core::cell::RefCell;
 use agb::{
     ExternalAllocator,
     display::{
-        Palette16, Rgb15,
+        Palette16,
         object::{DynamicSprite16, Size, SpriteVram},
     },
 };
 
-use super::{Canvas, drawing, ix, rgb};
+use super::{Canvas, LazyPoses, POSE_BYTES, drawing, ix, rgb};
 
 /// The colours of SAM's cucumbers and attack effects. His body has its own palette,
 /// picked from the sprite sheet with his poses (see [`SamPose`]).
@@ -87,19 +87,8 @@ impl SamPose {
 const SAM_FRAME_BYTES: usize = 64 * 64 / 2;
 static SAM_TILES: &[u8; 16 * SAM_FRAME_BYTES] = include_bytes!("../../gfx/sam.tiles");
 
-/// A 16-colour palette written by the gfx scripts: little-endian BGR555, colour 0 unused.
-const fn gfx_palette(raw: &[u8; 32]) -> Palette16 {
-    let mut colours = [Rgb15::new(0); 16];
-    let mut i = 0;
-    while i < 16 {
-        colours[i] = Rgb15::new(u16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]));
-        i += 1;
-    }
-    Palette16::new(colours)
-}
-
-static SAM_BODY_PALETTE: Palette16 = gfx_palette(include_bytes!("../../gfx/sam.pal"));
-static SAM_PORTRAIT_PALETTE: Palette16 = gfx_palette(include_bytes!("../../gfx/sam-portrait.pal"));
+static SAM_BODY_PALETTE: Palette16 = super::gfx_palette(include_bytes!("../../gfx/sam.pal"));
+static SAM_PORTRAIT_PALETTE: Palette16 = super::gfx_palette(include_bytes!("../../gfx/sam-portrait.pal"));
 /// The dialogue portrait, from the card in the sheet's corner. Colour indices, row by row.
 static SAM_PORTRAIT: &[u8; 1024] = include_bytes!("../../gfx/sam-portrait.idx");
 
@@ -276,9 +265,8 @@ pub struct FloorArt {
     /// Croupier bot walking; a fan of cards in hand laid over it while dealing.
     pub dealer: [SpriteVram; 2],
     pub cards_in_hand: SpriteVram,
-    /// Security bot walking; its levelled cannon laid over it while firing.
-    pub guard: [SpriteVram; 2],
-    pub guard_aim: SpriteVram,
+    /// The Guard, a ninja bot: see [`NinjaPose`].
+    pub ninja: LazyPoses<NINJA_POSES>,
     /// A playing card spinning through the air.
     pub card: [SpriteVram; 2],
     /// A casino chip rolling: the Trenches' rolling mine.
@@ -357,8 +345,7 @@ impl FloorArt {
             },
             dealer: [dealer(&LEGS0), dealer(&LEGS1)],
             cards_in_hand: drawing(Size::S8x8, 0, 0, &DEALER_CARDS),
-            guard: [guard(&GUARD_LEGS0), guard(&GUARD_LEGS1)],
-            guard_aim: drawing(Size::S8x8, 0, 2, &GUARD_AIM),
+            ninja: LazyPoses::new(NINJA_TILES, &NINJA_PALETTE),
             card: [
                 drawing(Size::S8x8, 1, 0, &[".kkkk.", "kwwwwk", "kwrwwk", "kwrrwk", "kwwrwk", "kwwwwk", ".kkkk."]),
                 drawing(Size::S8x8, 0, 2, &[".kkkkkk.", "kwwrrwwk", "kwwwrwwk", ".kkkkkk."]),
@@ -386,9 +373,48 @@ impl FloorArt {
     }
 }
 
-/// Where the dealer's cards and the guard's cannon sit on their 16x32 sprites.
+/// Where the dealer's cards sit on its 16x32 sprite.
 pub const CARDS_AT: (i32, i32) = (0, 20);
-pub const GUARD_AIM_AT: (i32, i32) = (0, 19);
+
+/// The Guard's poses in `game/gfx/ninja.tiles`, cut from
+/// `.claude/skills/diamond-hands-gba/lvl2-bot-ninja-sprite-sheet.png` by
+/// `scripts/make-bots.py`: a hooded ninja bot with a red visor, a pink scarf and a
+/// pistol. Each is 32x32 facing right, feet on the bottom row, legs centred on column
+/// [`NINJA_ANCHOR`]. In the script's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NinjaPose {
+    Walk0,
+    Walk1,
+    Walk2,
+    Walk3,
+    Walk4,
+    Walk5,
+    /// Hand up, signalling: the wind-up before a burst.
+    Signal,
+    /// Arm out, gun levelled.
+    Point,
+    /// The muzzle flame alone, at the frame's left edge: drawn [`NINJA_FLAME_X`] right
+    /// of a [`NinjaPose::Point`].
+    Flame,
+    Hit,
+    /// Beaten: rocking back, on its knees, face down.
+    Stagger,
+    Kneel,
+    Down,
+}
+
+impl NinjaPose {
+    pub const WALK: [NinjaPose; 6] =
+        [NinjaPose::Walk0, NinjaPose::Walk1, NinjaPose::Walk2, NinjaPose::Walk3, NinjaPose::Walk4, NinjaPose::Walk5];
+}
+
+pub const NINJA_POSES: usize = 13;
+/// The column of a pose the hitbox's centre sits on (facing right).
+pub const NINJA_ANCHOR: i32 = 12;
+/// How far right of a pose's left edge its muzzle flame starts (the script prints it).
+pub const NINJA_FLAME_X: i32 = 30;
+static NINJA_TILES: &[u8; NINJA_POSES * POSE_BYTES] = include_bytes!("../../gfx/ninja.tiles");
+static NINJA_PALETTE: Palette16 = super::gfx_palette(include_bytes!("../../gfx/ninja.pal"));
 
 const COIN0: [&str; 8] = [
     "..kkkk..",
@@ -598,34 +624,3 @@ fn dealer(legs: &[&str]) -> SpriteVram {
     c.vram()
 }
 
-/// The security bot, facing left: bulky dark armour, a red visor, a gold badge, big
-/// shoulder plates and a steel arm cannon.
-const GUARD_BODY: [&str; 16] = [
-    "....kkkkkkk.....",
-    "...kVVVVVVVk....",
-    "..kVkkkkkkVVk...",
-    "..kkrrrrwrkVk...",
-    "..kVkkkkkkVVk...",
-    "...kVVVVVVVk....",
-    ".kkkkkkkkkkkkk..",
-    "kVVVkVVVVVkVVVk.",
-    "kVvVkVVyyVkVvVk.",
-    "kkkkkVVyyVkkkkk.",
-    "kSgkkVVVVVkkgSk.",
-    "kSgkkVVVVVkkgSk.",
-    "kggk.kVVVk..kgk.",
-    ".kk..kkkkk...k..",
-    ".....kVVVk......",
-    ".....kkkkk......",
-];
-const GUARD_AIM: [&str; 3] = ["kkkkkk", "rwSggk", "kkkkkk"];
-const GUARD_LEGS0: [&str; 4] = ["...kVk.kVk......", "..kVVk.kVVk.....", "..kkkkkkkkkk....", "..kkkk..kkkk...."];
-const GUARD_LEGS1: [&str; 4] = ["...kVk..kVk.....", "..kVVk..kVVk....", ".kkkkk..kkkkk...", ".kkkk....kkkk..."];
-
-fn guard(legs: &[&str]) -> SpriteVram {
-    let mut c = Canvas::new(Size::S16x32);
-    let top = 32 - legs.len() as i32 - GUARD_BODY.len() as i32;
-    c.art(0, top, &GUARD_BODY);
-    c.art(0, 32 - legs.len() as i32, legs);
-    c.vram()
-}

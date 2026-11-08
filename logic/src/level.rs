@@ -1,7 +1,9 @@
 //! Levels are hand-drawn ASCII maps, one character per 8x8 tile, read in place.
 //!
 //! Terrain: `#` solid rock, `r` crystal boulder (solid), `=` one-way steel girder
-//! (solid from above only), `T` one-way casino table top, `^` energy spikes. Scenery,
+//! (solid from above only), `T` one-way casino table top, `^` an electric fence's
+//! emitter: its lightning curtain runs from there up to the rock above (see
+//! [`Level::fence_hit`]). Scenery,
 //! which is air for collision: `,` moss, `*` scrap, `&` a dead bot's head, `|` a table's
 //! pedestal, `%` a false wall that looks like rock (a secret passage). Big pictures are
 //! scenery too, drawn across a block of their letter: see [`DECOR`]. Anything else is
@@ -177,6 +179,47 @@ impl Level {
 
     pub fn is_floor(&self, tx: i32, ty: i32) -> bool {
         matches!(self.tile(tx, ty), Tile::Solid | Tile::OneWay)
+    }
+
+    /// The top row of the lightning curtain over a fence emitter at `(tx, ty)`: it rises
+    /// through air, girders and tables until rock or the top of the map.
+    pub fn fence_top(&self, tx: i32, ty: i32) -> i32 {
+        let mut top = ty;
+        while top > 0 && self.tile(tx, top - 1) != Tile::Solid {
+            top -= 1;
+        }
+        top
+    }
+
+    /// The fence whose curtain overlaps the pixel rect `(x, y, w, h)`, as the left and
+    /// right pixel edges of its run of emitters. A curtain fills its column from the
+    /// emitter up to the rock above, so a point is inside one when, looking down from
+    /// it, an emitter comes before any rock.
+    pub fn fence_hit(&self, x: i32, y: i32, w: i32, h: i32) -> Option<(i32, i32)> {
+        let bottom = self.height();
+        if y + h <= 0 {
+            return None;
+        }
+        for tx in x.div_euclid(TILE)..=(x + w - 1).div_euclid(TILE) {
+            let mut ty = y.div_euclid(TILE).max(0);
+            while ty < bottom {
+                match self.tile(tx, ty) {
+                    Tile::Solid => break,
+                    Tile::Spike => {
+                        let (mut l, mut r) = (tx, tx);
+                        while self.tile(l - 1, ty) == Tile::Spike {
+                            l -= 1;
+                        }
+                        while self.tile(r + 1, ty) == Tile::Spike {
+                            r += 1;
+                        }
+                        return Some((l * TILE, (r + 1) * TILE));
+                    }
+                    _ => ty += 1,
+                }
+            }
+        }
+        None
     }
 
     /// Every marker character with its tile position, in row-major order. Terrain and

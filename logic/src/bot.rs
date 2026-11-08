@@ -1,5 +1,5 @@
 //! A simple route bot for tests. It runs right, fires constantly, and jumps at walls,
-//! pits, energy spikes and bots. At an elevator it switches the terminal on, waits for
+//! pits and bots, and waits at electric fences for the current to go off. At an elevator it switches the terminal on, waits for
 //! the doors and rides up. In the boss arena it holds a spot near the left wall, faces
 //! the boss and jumps charges, lunges and low shots. Playing in god mode, reaching
 //! the end of a level shows the route has no wall or gap the wassie cannot clear.
@@ -31,6 +31,12 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
     if let Some(keys) = lift_keys(world, previous) {
         return keys;
     }
+    // An electric fence ahead: stop short unless it stays dead long enough to cross.
+    let r = p.body.rect();
+    let fence_ahead = world.level.fence_hit(r.right(), r.y, 20, r.h).is_some();
+    if fence_ahead && p.grounded && crate::world::fence_open_for(world.frames) < 40 {
+        return out;
+    }
     out |= keys::RIGHT;
     if !p.grounded {
         // Hold for full-height jumps, but let go at the top: holding on would hover.
@@ -49,7 +55,6 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
     // are walked off; leaping off a high ledge can overshoot into the next pit.
     let ahead = (front + 4).div_euclid(TILE);
     let gap = (feet_row..feet_row + 6).all(|ty| !level.is_floor(ahead, ty));
-    let spikes = (1..=3).any(|d| level.tile((front + d * 4).div_euclid(TILE), feet_row - 1) == Tile::Spike);
     let villain = world.actors.iter().any(|a| {
         let ar = a.rect();
         a.is_threat()
@@ -58,7 +63,7 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
             && ar.y < r.bottom()
             && r.y < ar.bottom()
     });
-    if (wall || gap || spikes || villain) && previous & keys::A == 0 {
+    if (wall || gap || villain) && previous & keys::A == 0 {
         out |= keys::A;
     }
     out

@@ -65,7 +65,7 @@ impl ActorKind {
             ActorKind::Diamond => (8, 8),
             ActorKind::Heal => (10, 10),
             ActorKind::Checkpoint => (8, 24),
-            ActorKind::Sentry => (14, 22),
+            ActorKind::Sentry => (16, 26),
             ActorKind::Crawler => (16, 14),
             ActorKind::Drone => (16, 10),
             ActorKind::Mine => (12, 12),
@@ -74,6 +74,15 @@ impl ActorKind {
             ActorKind::Terminal => (12, 20),
             ActorKind::Dealer => (14, 22),
             ActorKind::Guard => (16, 26),
+        }
+    }
+
+    /// What a beaten bot leaves behind when it doesn't just blow apart.
+    pub fn wreck(self) -> Option<crate::fx::FxKind> {
+        match self {
+            ActorKind::Sentry => Some(crate::fx::FxKind::Wreck),
+            ActorKind::Guard => Some(crate::fx::FxKind::NinjaWreck),
+            _ => None,
         }
     }
 
@@ -139,12 +148,25 @@ impl ActorKind {
     }
 }
 
+/// Where a sentry's cannon fires from: ahead of its centre, and up from its feet.
+pub const SENTRY_MUZZLE: (i32, i32) = (17, 16);
+/// Where a guard's gun fires from: ahead of its centre, and up from its feet.
+pub const GUARD_MUZZLE: (i32, i32) = (18, 16);
+/// Frames between the shots of a guard's burst.
+pub const GUARD_BURST_GAP: u16 = 8;
+/// Frames a guard holds its aim after the last shot of a burst.
+pub const GUARD_RECOIL_FRAMES: u16 = 10;
+/// Frames a sentry stands rocking back after a shot.
+pub const SENTRY_RECOIL_FRAMES: u16 = 14;
+
 /// Crawler and sentry behaviour states.
 pub mod state {
     pub const IDLE: u8 = 0;
     pub const AIM: u8 = 1;
     pub const LUNGE: u8 = 2;
     pub const RETURN: u8 = 3;
+    /// A sentry rocking back from its shot, cannon still up.
+    pub const RECOIL: u8 = 4;
     /// Checkpoint flag that has been touched, or a terminal switched on.
     pub const LIT: u8 = 1;
 }
@@ -322,10 +344,24 @@ impl Actor {
                 self.fall(ctx.level);
                 if self.timer == 0 {
                     let r = self.rect();
-                    let muzzle = r.centre_x() + self.facing * 10;
-                    shot::spawn(ctx.shots, ShotKind::Bullet, muzzle, r.y + 9, self.facing * 3 * FX / 2, 0);
+                    shot::spawn(
+                        ctx.shots,
+                        ShotKind::Bullet,
+                        r.centre_x() + self.facing * SENTRY_MUZZLE.0,
+                        r.bottom() - SENTRY_MUZZLE.1,
+                        self.facing * 3 * FX / 2,
+                        0,
+                    );
+                    self.state = state::RECOIL;
+                    self.timer = SENTRY_RECOIL_FRAMES;
+                }
+            }
+            state::RECOIL => {
+                self.body.vx_fx = 0;
+                self.fall(ctx.level);
+                if self.timer == 0 {
                     self.state = state::IDLE;
-                    self.timer = ctx.difficulty.fire_interval(110);
+                    self.timer = ctx.difficulty.fire_interval(110) - SENTRY_RECOIL_FRAMES;
                 }
             }
             _ => {
@@ -465,14 +501,27 @@ impl Actor {
                 self.body.vx_fx = 0;
                 if self.timer == 0 {
                     let r = self.rect();
-                    let muzzle = r.centre_x() + self.facing * 11;
-                    shot::spawn(ctx.shots, ShotKind::Bullet, muzzle, r.y + 11, self.facing * 2 * FX, 0);
+                    shot::spawn(
+                        ctx.shots,
+                        ShotKind::Bullet,
+                        r.centre_x() + self.facing * GUARD_MUZZLE.0,
+                        r.bottom() - GUARD_MUZZLE.1,
+                        self.facing * 2 * FX,
+                        0,
+                    );
                     self.count = self.count.saturating_sub(1);
-                    self.timer = 8;
+                    self.timer = GUARD_BURST_GAP;
                     if self.count == 0 {
-                        self.state = state::IDLE;
-                        self.timer = ctx.difficulty.fire_interval(100);
+                        self.state = state::RECOIL;
+                        self.timer = GUARD_RECOIL_FRAMES;
                     }
+                }
+            }
+            state::RECOIL => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.state = state::IDLE;
+                    self.timer = ctx.difficulty.fire_interval(100) - GUARD_RECOIL_FRAMES;
                 }
             }
             _ => {
