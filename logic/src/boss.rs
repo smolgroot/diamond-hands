@@ -1,4 +1,4 @@
-//! The bosses waiting at the end of each level.
+    //! The bosses waiting at the end of each level.
 //!
 //! BERA 3000, the Badlands boss, is a bear-shaped war mech with an arm cannon. The
 //! fight loops Walk → Aim (two volleys of three shots, alternating low and high) →
@@ -35,9 +35,9 @@ const _: () = assert!(CHARGE_H < crate::player::JUMP_APEX, "the charge must be j
 pub const BOSS_HP: i32 = 30;
 pub const CONTACT_DAMAGE: i32 = 2;
 
-/// SAM's hitbox: stocky, and nearly twice the wassie's height.
-pub const SAM_W: i32 = 26;
-pub const SAM_H: i32 = 50;
+/// SAM's hitbox: stocky, and half again the wassie's height.
+pub const SAM_W: i32 = 24;
+pub const SAM_H: i32 = 40;
 pub const SAM_HP: i32 = 40;
 /// Running into SAM mid-lunge.
 pub const SWING_DAMAGE: i32 = 3;
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn sam_is_bigger_than_the_wassie_and_throws_a_cucumber_in_an_arc() {
         let mut a = sam();
-        assert!(a.boss.rect().h >= 2 * crate::player::PLAYER_H - 4);
+        assert!(a.boss.rect().h >= crate::player::PLAYER_H * 3 / 2);
         assert_eq!(a.boss.hp, SAM_HP);
         sam_until(&mut a, BossState::Throw, 800);
         sam_until(&mut a, BossState::Walk, 100);

@@ -38,7 +38,7 @@ use crate::{
         Common, SPRITE_PALETTE, TileCache,
         arrival::{self, ArrivalArt},
         badlands::{self, Bera, SKY_PALETTES, Villains},
-        casino::{self, ArenaArt, CasinoArt, FloorArt},
+        casino::{self, ArenaArt, CasinoArt, FloorArt, SamPose},
         menu::{self, MenuScreen},
         trenches, ui,
         wassie::{self, Wassie},
@@ -862,7 +862,7 @@ impl Renderer {
             (Speaker::Wassie, _) => &self.wassie.portrait,
             (Speaker::Cl207, _) => &self.cl207,
             (Speaker::Bera, LevelArt::Badlands(bera, _)) => &bera.portrait,
-            (Speaker::Sam, LevelArt::Trenches(c)) => &c.arena.as_ref()?.sam.head,
+            (Speaker::Sam, LevelArt::Trenches(c)) => &c.arena.as_ref()?.sam.portrait,
             (Speaker::Penguin, LevelArt::Trenches(c)) => &c.arena.as_ref()?.penguin,
             _ => return None,
         })
@@ -1437,66 +1437,52 @@ impl Renderer {
         part(&bera.legs, badlands::BERA_LEGS_AT, 64, top, frame);
     }
 
-    /// SAM, built from parts in a 64x64 frame: his pose follows his attack, he breathes
-    /// and bobs as he walks, blinks white when hit, glows once overloaded, and comes apart
-    /// in the end, falling flat on his face.
-    fn draw_sam(&self, game: &Game, frame: &mut GraphicsFrame, casino: &ArenaArt) {
+    /// SAM, one 64x64 pose from his sprite sheet: he breathes standing, strides as he
+    /// walks, raises and throws his cucumbers, crouches in his aura for the Cucumber
+    /// Hit, doubles over winded, winces and blinks when hit, and in the end sinks to his
+    /// knees and falls flat on his face.
+    fn draw_sam(&self, game: &Game, frame: &mut GraphicsFrame, arena: &ArenaArt) {
         let boss = &game.world.boss;
-        let (sam, t) = (&casino.sam, game.frame);
+        let t = game.frame;
         let r = boss.rect();
         let cam = self.view_x;
         let state = boss.state;
-        let dying = state == BossState::Dying;
-        if dying && boss.timer < 40 {
-            // Down for good.
-            // Down for good: flipped, the halves swap sides.
-            let flip = boss.facing > 0;
-            for (i, half) in sam.down.iter().enumerate() {
-                let x = r.centre_x() - 32 - cam + badlands::flip_x(i as i32 * 32, 32, flip);
-                Object::new(half.clone())
-                    .set_pos(vec2(x, r.bottom() - 16))
-                    .set_hflip(flip)
-                    .set_priority(self.world_layer)
-                    .show(frame);
-            }
-            return;
-        }
-        if boss.flash > 0 && (t / 2).is_multiple_of(2) {
-            return;
-        }
-        let flip = boss.facing > 0;
-        let shaking = matches!(state, BossState::Windup | BossState::Overload) || dying;
+        let pose = match state {
+            BossState::Dying if boss.timer > 100 => SamPose::Shock,
+            BossState::Dying if boss.timer > 40 => SamPose::Kneel,
+            BossState::Dying => SamPose::Down,
+            _ if boss.flash > 0 && (t / 2).is_multiple_of(2) => return,
+            BossState::Walk | BossState::Intro if boss.flash > 0 => SamPose::Ouch,
+            BossState::Walk if boss.body.vx_fx != 0 => SamPose::WALK[(r.x.unsigned_abs() / 6 % 4) as usize],
+            // The cucumber comes out, goes up behind his head and leaves at 0.
+            BossState::Throw if boss.timer > 14 => SamPose::Hold,
+            BossState::Throw if boss.timer > 4 => SamPose::Raise,
+            BossState::Throw => SamPose::Throw,
+            BossState::Windup | BossState::Overload | BossState::Crash => SamPose::Charge,
+            BossState::Swing => SamPose::Punch,
+            // Market Crash: a punch for each spray of energy, fired at 16.
+            BossState::Barrage if (8..=16).contains(&(boss.timer % 32)) => SamPose::Punch,
+            BossState::Barrage => SamPose::Charge,
+            BossState::Winded => SamPose::Dazed,
+            _ if (t / 24).is_multiple_of(2) => SamPose::Idle0,
+            _ => SamPose::Idle1,
+        };
+        let shaking = matches!(state, BossState::Windup | BossState::Overload)
+            || (state == BossState::Dying && boss.timer > 100);
         let shake = if shaking { (t % 2) as i32 * 2 - 1 } else { 0 };
-        let x = r.centre_x() - 32 - cam + shake;
-        let top = r.bottom() - 64;
-        let part = |sprite: &SpriteVram, (px, py): (i32, i32), w: i32, dy: i32, frame: &mut GraphicsFrame| {
-            Object::new(sprite.clone())
-                .set_pos(vec2(x + badlands::flip_x(px, w, flip), top + py + dy))
-                .set_hflip(flip)
-                .set_priority(self.world_layer)
-                .show(frame);
-        };
-        let walking = state == BossState::Walk && boss.body.vx_fx != 0;
-        let stride = (r.x.unsigned_abs() / 6 % 2) as usize;
-        let pace = if boss.dazed() { 3 } else { 10 };
-        let breath = BERA_BREATH[(t / pace) as usize % BERA_BREATH.len()] / 2;
-        let bob = if walking { stride as i32 } else { 0 };
-        let crouch = match state {
-            BossState::Windup => 3,
-            BossState::Swing => 1,
-            BossState::Winded => 2,
-            _ => 0,
-        };
-        let upper = bob + crouch - breath;
-        let glow = boss.phase() == 2 || matches!(state, BossState::Crash | BossState::Barrage | BossState::Overload);
-        let head = if dying { &sam.head_dead } else if glow && !(t / 8).is_multiple_of(3) { &sam.head_glow } else { &sam.head };
+        // The sheet draws him facing right.
+        Object::new(arena.sam.sprite(pose))
+            .set_pos(vec2(r.centre_x() - 32 - cam + shake, r.bottom() - 64))
+            .set_hflip(boss.facing < 0)
+            .set_priority(self.world_layer)
+            .show(frame);
 
         // The Cucumber Hit's tell: lightning crackling round him.
         if matches!(state, BossState::Windup | BossState::Overload) {
             for i in 0..4 {
                 let a = (t as i32 / 2 + i * 4) % 16;
-                let (ax, ay) = (SIN16[(a as usize + 4) % 16] * 26 / 64, SIN16[a as usize] * 28 / 64);
-                let spark = &casino.sam_fx.aura[((t / 2 + i as u32) % 2) as usize];
+                let (ax, ay) = (SIN16[(a as usize + 4) % 16] * 22 / 64, SIN16[a as usize] * 22 / 64);
+                let spark = &arena.sam_fx.aura[((t / 2 + i as u32) % 2) as usize];
                 self.put(frame, spark, r.centre_x() - 4 - cam + ax, r.centre_y() - 8 + ay);
             }
         }
@@ -1504,27 +1490,8 @@ impl Renderer {
             for i in 0..3 {
                 let a = (t as i32 / 4 + i * 8) % 24;
                 let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
-                self.put(frame, &self.villains.star, sx, top - 2 + (a % 12) / 3);
+                self.put(frame, &self.villains.star, sx, r.y - 4 + (a % 12) / 3);
             }
-        }
-        // The near arm in front, unless it is cocked back behind him.
-        let arm_up = match state {
-            BossState::Throw => boss.timer > 4,
-            BossState::Crash | BossState::Barrage => true,
-            _ => false,
-        };
-        match state {
-            BossState::Throw if !arm_up => part(&sam.arm_out, casino::SAM_ARM_OUT_AT, 32, upper, frame),
-            BossState::Windup | BossState::Swing => part(&sam.arm_swing, casino::SAM_ARM_SWING_AT, 32, upper, frame),
-            _ if !arm_up => part(&sam.arm_hold, casino::SAM_ARM_HOLD_AT, 16, upper, frame),
-            _ => {}
-        }
-        part(head, casino::SAM_HEAD_AT, 32, upper - breath, frame);
-        part(&sam.torso, casino::SAM_TORSO_AT, 32, upper, frame);
-        let legs = if walking { 1 + stride } else { 0 };
-        part(&sam.legs[legs], casino::SAM_LEGS_AT, 32, 0, frame);
-        if arm_up {
-            part(&sam.arm_up, casino::SAM_ARM_UP_AT, 32, upper, frame);
         }
     }
 

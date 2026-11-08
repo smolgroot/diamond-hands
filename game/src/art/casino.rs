@@ -5,16 +5,20 @@
 //! they don't all fit, so they come in two halves swapped as the camera goes: the
 //! floors' ([`FloorArt`]) and the arena's ([`ArenaArt`]). Only the coins stay loaded.
 
-use agb::display::{
-    Palette16,
-    object::{Size, SpriteVram},
+use core::cell::RefCell;
+
+use agb::{
+    ExternalAllocator,
+    display::{
+        Palette16, Rgb15,
+        object::{DynamicSprite16, Size, SpriteVram},
+    },
 };
 
 use super::{Canvas, drawing, ix, rgb};
 
-/// SAM's colours, after `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png`: a
-/// white jacket over a navy shirt and shorts, pink cyber glasses and implants, purple
-/// curls, and his cucumbers' greens.
+/// The colours of SAM's cucumbers and attack effects. His body has its own palette,
+/// picked from the sprite sheet with his poses (see [`SamPose`]).
 pub static SAM_PALETTE: Palette16 = Palette16::new([
     rgb(0, 0, 0),
     rgb(3, 1, 6),
@@ -34,276 +38,103 @@ pub static SAM_PALETTE: Palette16 = Palette16::new([
     rgb(13, 26, 6),
 ]);
 
-/// [`SAM_PALETTE`] indices.
+/// The [`SAM_PALETTE`] indices the effects use.
 mod sx {
     pub const OUTLINE: u8 = 1;
     pub const WHITE: u8 = 2;
-    pub const JACKET_SHADE: u8 = 3;
     pub const CUKE_DARK: u8 = 4;
     pub const SKIN_LIGHT: u8 = 5;
-    pub const SKIN: u8 = 6;
-    pub const SKIN_SHADE: u8 = 7;
-    pub const HAIR_LIGHT: u8 = 8;
-    pub const HAIR: u8 = 9;
-    pub const HAIR_DARK: u8 = 10;
-    pub const SHIRT: u8 = 11;
     pub const CYAN: u8 = 12;
-    pub const PINK: u8 = 13;
-    pub const PINK_LIGHT: u8 = 14;
     pub const CUKE: u8 = 15;
 }
 
-/// Where each of SAM's parts sits in his 64x64 frame, facing left, feet on row 63.
-pub const SAM_HEAD_AT: (i32, i32) = (14, 2);
-pub const SAM_TORSO_AT: (i32, i32) = (16, 26);
-pub const SAM_LEGS_AT: (i32, i32) = (16, 48);
-/// The near arm: hanging with the cucumber, raised behind for a throw, flung out after
-/// it, and levelling the giant cucumber for the Cucumber Hit.
-pub const SAM_ARM_HOLD_AT: (i32, i32) = (6, 26);
-pub const SAM_ARM_UP_AT: (i32, i32) = (34, 0);
-pub const SAM_ARM_OUT_AT: (i32, i32) = (0, 26);
-pub const SAM_ARM_SWING_AT: (i32, i32) = (0, 30);
+/// SAM's poses, cut from `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png` by
+/// `scripts/make-sam.py`: 64x64 frames, facing right, feet on row 63 and his body on
+/// column 32, as 4-bit tiles in this order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SamPose {
+    /// Standing, breathing in and out.
+    Idle0,
+    Idle1,
+    Walk0,
+    Walk1,
+    Walk2,
+    Walk3,
+    /// A cucumber in hand, ready.
+    Hold,
+    /// The cucumber raised behind his head.
+    Raise,
+    /// Arm flung out as it leaves his hand.
+    Throw,
+    /// Crouched in his crackling cyan aura: the Cucumber Hit's tell.
+    Charge,
+    /// The Cucumber Hit itself, fist out, aura still on.
+    Punch,
+    /// Hit: wincing, mouth open.
+    Ouch,
+    /// Winded and doubled over.
+    Dazed,
+    /// Beaten: shocked, then sinking to his knees, then face down with steam rising.
+    Shock,
+    Kneel,
+    Down,
+}
 
+impl SamPose {
+    pub const WALK: [SamPose; 4] = [SamPose::Walk0, SamPose::Walk1, SamPose::Walk2, SamPose::Walk3];
+}
+
+const SAM_FRAME_BYTES: usize = 64 * 64 / 2;
+static SAM_TILES: &[u8; 16 * SAM_FRAME_BYTES] = include_bytes!("../../gfx/sam.tiles");
+
+/// A 16-colour palette written by the gfx scripts: little-endian BGR555, colour 0 unused.
+const fn gfx_palette(raw: &[u8; 32]) -> Palette16 {
+    let mut colours = [Rgb15::new(0); 16];
+    let mut i = 0;
+    while i < 16 {
+        colours[i] = Rgb15::new(u16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]));
+        i += 1;
+    }
+    Palette16::new(colours)
+}
+
+static SAM_BODY_PALETTE: Palette16 = gfx_palette(include_bytes!("../../gfx/sam.pal"));
+static SAM_PORTRAIT_PALETTE: Palette16 = gfx_palette(include_bytes!("../../gfx/sam-portrait.pal"));
+/// The dialogue portrait, from the card in the sheet's corner. Colour indices, row by row.
+static SAM_PORTRAIT: &[u8; 1024] = include_bytes!("../../gfx/sam-portrait.idx");
+
+/// SAM. Only the pose on screen sits in sprite VRAM: all of them would take 32 KB, more
+/// than there is. Changing pose copies the new one in from ROM.
 pub struct Sam {
-    pub head: SpriteVram,
-    /// Overloaded: the glasses and implant glow, sparks crackle off them.
-    pub head_glow: SpriteVram,
-    /// Beaten: glasses knocked askew, eyes crossed out, mouth open.
-    pub head_dead: SpriteVram,
-    pub torso: SpriteVram,
-    /// Standing, then the two strides.
-    pub legs: [SpriteVram; 3],
-    pub arm_hold: SpriteVram,
-    pub arm_up: SpriteVram,
-    pub arm_out: SpriteVram,
-    pub arm_swing: SpriteVram,
-    /// Face down on the floor at the end, 64 wide in two 32x16 halves, floor on row 15.
-    pub down: [SpriteVram; 2],
+    shown: RefCell<Option<(SamPose, SpriteVram)>>,
+    pub portrait: SpriteVram,
 }
 
 impl Sam {
     pub fn new() -> Self {
-        Self {
-            head: sam_head(Face::Smug),
-            head_glow: sam_head(Face::Glow),
-            head_dead: sam_head(Face::Dead),
-            torso: sam_torso(),
-            legs: [0, 1, 2].map(sam_legs),
-            arm_hold: sam_arm_hold(),
-            arm_up: sam_arm_up(),
-            arm_out: sam_arm_out(),
-            arm_swing: sam_arm_swing(),
-            down: [0, 32].map(sam_down),
+        let mut c = Canvas::new(Size::S32x32);
+        for (i, &colour) in SAM_PORTRAIT.iter().enumerate() {
+            c.px(i as i32 % 32, i as i32 / 32, colour);
         }
+        Self { shown: RefCell::new(None), portrait: c.vram_with(&SAM_PORTRAIT_PALETTE) }
     }
-}
 
-fn sam_canvas(size: Size, (x, y): (i32, i32)) -> Canvas {
-    Canvas::at(size, x, y)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Face {
-    Smug,
-    Glow,
-    Dead,
-}
-
-/// The wild purple curls: a ring of round curls, each lit on its upper left.
-fn curls(c: &mut Canvas, curls: &[(i32, i32, i32)]) {
-    for &(cx, cy, r) in curls {
-        c.ellipse(cx, cy, r + 1, r + 1, sx::OUTLINE);
-    }
-    for &(cx, cy, r) in curls {
-        c.ellipse(cx, cy, r, r, sx::HAIR);
-    }
-    for &(cx, cy, r) in curls {
-        // A dark core and a lit arc make each one read as a ringlet.
-        c.px(cx + 1, cy + 1, sx::HAIR_DARK);
-        c.px(cx, cy + 1, sx::HAIR_DARK);
-        c.px(cx - r / 2, cy - r / 2, sx::HAIR_LIGHT);
-        c.px(cx - r / 2 + 1, cy - r / 2, sx::HAIR_LIGHT);
-    }
-}
-
-/// SAM's head, facing left: a big mop of curls, a round clean-shaven face with a soft
-/// double chin, pink rectangular cyber glasses, a mechanical implant over the far ear
-/// with a pink lamp and an antenna, and a smug toothy grin.
-fn draw_head(c: &mut Canvas, face: Face) {
-    // Curls behind the head, framing it.
-    curls(
-        c,
-        &[
-            (20, 9, 4),
-            (25, 5, 4),
-            (31, 3, 4),
-            (37, 4, 4),
-            (42, 8, 4),
-            (44, 14, 3),
-            (43, 20, 3),
-            (18, 15, 3),
-            (40, 25, 3),
-        ],
-    );
-    // The face and its double chin.
-    c.ellipse(28, 19, 10, 10, sx::OUTLINE);
-    c.ellipse(28, 19, 9, 9, sx::SKIN);
-    c.ellipse(26, 17, 7, 7, sx::SKIN_LIGHT);
-    c.ellipse(29, 26, 6, 3, sx::OUTLINE);
-    c.ellipse(29, 26, 5, 2, sx::SKIN);
-    c.rect(25, 27, 8, 1, sx::SKIN_SHADE);
-    // The far cheek in shadow, and a few freckles.
-    c.rect(35, 17, 2, 6, sx::SKIN_SHADE);
-    for (x, y) in [(22, 21), (24, 22), (33, 20)] {
-        c.px(x, y, sx::SKIN_SHADE);
-    }
-    // Curls falling over the forehead.
-    curls(c, &[(22, 10, 3), (27, 9, 3), (32, 9, 3), (36, 11, 3), (19, 12, 2)]);
-    // Glasses: two pink frames joined at the bridge.
-    let (frame, lens) = match face {
-        Face::Glow => (sx::PINK_LIGHT, sx::PINK),
-        _ => (sx::PINK, sx::OUTLINE),
-    };
-    let tilt = if face == Face::Dead { 1 } else { 0 };
-    for (x0, w) in [(18, 7), (27, 7)] {
-        let y0 = 14 + if x0 > 20 { tilt } else { 0 };
-        c.rect(x0, y0, w, 5, frame);
-        c.rect(x0 + 1, y0 + 1, w - 2, 3, sx::WHITE);
-        match face {
-            // Half-lidded and pleased with himself.
-            Face::Smug | Face::Glow => {
-                c.rect(x0 + 1, y0 + 1, w - 2, 1, lens);
-                c.rect(x0 + 2, y0 + 2, 2, 2, sx::OUTLINE);
-            }
-            Face::Dead => {
-                c.line(x0 + 1, y0 + 1, x0 + 3, y0 + 3, sx::OUTLINE);
-                c.line(x0 + 3, y0 + 1, x0 + 1, y0 + 3, sx::OUTLINE);
-            }
+    /// The 64x64 sprite for `pose`, loading it if it isn't the one already loaded.
+    pub fn sprite(&self, pose: SamPose) -> SpriteVram {
+        let mut shown = self.shown.borrow_mut();
+        if let Some((loaded, sprite)) = shown.as_ref()
+            && *loaded == pose
+        {
+            return sprite.clone();
         }
+        // Let the old pose go first, so the two never need VRAM at once.
+        *shown = None;
+        let at = pose as usize * SAM_FRAME_BYTES;
+        let bytes = &SAM_TILES[at..at + SAM_FRAME_BYTES];
+        let sprite = DynamicSprite16::from_bytes_in(Size::S64x64, bytes, ExternalAllocator).to_vram(&SAM_BODY_PALETTE);
+        *shown = Some((pose, sprite.clone()));
+        sprite
     }
-    c.rect(25, 15, 2, 1, frame);
-    c.rect(34, 15, 3, 1, frame);
-    // The implant over the far ear: a steel-dark disc with a pink lamp and antenna.
-    c.ellipse(39, 18, 4, 4, sx::OUTLINE);
-    c.ellipse(39, 18, 3, 3, sx::SHIRT);
-    c.ellipse(39, 18, 1, 1, if face == Face::Dead { sx::SHIRT } else { sx::PINK });
-    c.px(38, 17, sx::PINK_LIGHT);
-    c.line(42, 15, 46, 12, sx::OUTLINE);
-    c.px(46, 11, if face == Face::Glow { sx::PINK_LIGHT } else { sx::PINK });
-    c.line(36, 21, 34, 24, sx::CYAN);
-    // The nose, a nub pointing left.
-    c.rect(18, 19, 2, 2, sx::SKIN);
-    c.px(17, 20, sx::OUTLINE);
-    c.px(19, 21, sx::SKIN_SHADE);
-    // The mouth.
-    match face {
-        Face::Dead => {
-            c.ellipse(24, 24, 2, 2, sx::OUTLINE);
-            c.px(24, 24, sx::SHIRT);
-        }
-        _ => {
-            // A lopsided grin up to the far cheek, teeth showing.
-            c.line(20, 23, 30, 24, sx::OUTLINE);
-            c.line(30, 24, 32, 22, sx::OUTLINE);
-            c.rect(21, 24, 8, 1, sx::WHITE);
-            c.line(21, 25, 28, 25, sx::OUTLINE);
-            c.px(24, 24, sx::OUTLINE);
-        }
-    }
-    if face == Face::Glow {
-        // Sparks off the overloaded implant.
-        for (x, y) in [(45, 18), (47, 16), (44, 22), (16, 13)] {
-            c.px(x, y, sx::CYAN);
-        }
-        c.px(46, 20, sx::PINK_LIGHT);
-    }
-}
-
-fn sam_head(face: Face) -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x32, SAM_HEAD_AT);
-    draw_head(&mut c, face);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// Tiny three-by-five capitals for the jacket's lettering.
-fn mini_text(c: &mut Canvas, text: &[u8], x: i32, y: i32, colour: u8) {
-    for (i, &ch) in text.iter().enumerate() {
-        let rows: [u8; 5] = match ch {
-            b'F' => [0b111, 0b100, 0b110, 0b100, 0b100],
-            b'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
-            b'X' => [0b101, 0b101, 0b010, 0b101, 0b101],
-            _ => [0; 5],
-        };
-        for (dy, bits) in rows.iter().enumerate() {
-            for dx in 0..3 {
-                if bits & (0b100 >> dx) != 0 {
-                    c.px(x + i as i32 * 4 + dx, y + dy as i32, colour);
-                }
-            }
-        }
-    }
-}
-
-/// The oversized white exchange-operator jacket hanging open over a navy shirt with
-/// the exchange's bars on it, riding up over his belly; the far sleeve and fist.
-fn sam_torso() -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x32, SAM_TORSO_AT);
-    // The far sleeve, behind.
-    c.pod(40, 30, 7, 15, sx::WHITE, sx::JACKET_SHADE, sx::JACKET_SHADE);
-    c.ellipse(43, 46, 3, 2, sx::OUTLINE);
-    c.ellipse(43, 46, 2, 1, sx::SKIN);
-    // The shirt and the belly under it.
-    c.ellipse(30, 40, 11, 8, sx::OUTLINE);
-    c.ellipse(30, 40, 10, 7, sx::SHIRT);
-    c.ellipse(29, 45, 8, 3, sx::OUTLINE);
-    c.ellipse(29, 45, 7, 2, sx::SKIN);
-    c.rect(24, 44, 10, 1, sx::SKIN_LIGHT);
-    c.px(29, 46, sx::SKIN_SHADE);
-    // The exchange's bars on the shirt.
-    c.rect(25, 34, 6, 1, sx::CYAN);
-    c.rect(26, 36, 6, 1, sx::CYAN);
-    c.rect(27, 38, 4, 1, sx::CYAN);
-    // Jacket panels: the near one over his front, the far one wide over the back.
-    c.pod(16, 27, 9, 19, sx::WHITE, sx::WHITE, sx::JACKET_SHADE);
-    c.pod(32, 27, 12, 19, sx::WHITE, sx::WHITE, sx::JACKET_SHADE);
-    c.rect(33, 42, 10, 3, sx::JACKET_SHADE);
-    c.rect(18, 42, 6, 3, sx::JACKET_SHADE);
-    // Lapels and collar.
-    c.line(24, 27, 27, 33, sx::JACKET_SHADE);
-    c.line(33, 27, 31, 33, sx::JACKET_SHADE);
-    c.rect(25, 26, 8, 2, sx::OUTLINE);
-    c.rect(26, 26, 6, 1, sx::SKIN_SHADE);
-    // A cyan stripe down the sleeve seam and the lettering on the back panel.
-    c.rect(43, 30, 1, 12, sx::CYAN);
-    mini_text(&mut c, b"FTX", 34, 33, sx::OUTLINE);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// Navy shorts with a cyan side stripe, bare calves, chunky white sneakers with pink
-/// soles. `pose` 0 stands; 1 and 2 stride.
-fn sam_legs(pose: i32) -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x16, SAM_LEGS_AT);
-    let (front, back) = match pose {
-        1 => (-3, 3),
-        2 => (3, -3),
-        _ => (0, 0),
-    };
-    // Shorts.
-    c.pod(19, 47, 24, 8, sx::SHIRT, sx::SHIRT, sx::OUTLINE);
-    c.rect(41, 48, 1, 6, sx::CYAN);
-    c.rect(30, 50, 1, 5, sx::OUTLINE);
-    for (x, dx) in [(22, front), (34, back)] {
-        let x = x + dx;
-        // Calf.
-        c.rect(x, 55, 6, 4, sx::OUTLINE);
-        c.rect(x + 1, 55, 4, 4, sx::SKIN);
-        c.px(x + 4, 56, sx::SKIN_SHADE);
-        // Sneaker, toe to the left.
-        c.pod(x - 4, 58, 12, 6, sx::WHITE, sx::WHITE, sx::JACKET_SHADE);
-        c.rect(x - 3, 62, 10, 1, sx::PINK);
-        c.rect(x, 59, 3, 1, sx::CYAN);
-    }
-    c.vram_with(&SAM_PALETTE)
 }
 
 /// A cucumber from (x0, y0) to (x1, y1), `r` pixels thick, with bumps and a lit side.
@@ -334,81 +165,6 @@ fn cucumber(c: &mut Canvas, (x0, y0): (i32, i32), (x1, y1): (i32, i32), r: i32) 
         c.px(x, y + r / 2, sx::CUKE_DARK);
         c.px(x + 1, y - r / 2, sx::SKIN_LIGHT);
     }
-}
-
-/// A white sleeve from the shoulder at `from` to the wrist at `to`, then a fist.
-fn sleeve(c: &mut Canvas, from: (i32, i32), to: (i32, i32)) {
-    for (colour, r) in [(sx::OUTLINE, 4), (sx::JACKET_SHADE, 3), (sx::WHITE, 2)] {
-        let n = (to.0 - from.0).abs().max((to.1 - from.1).abs()).max(1);
-        for i in 0..=n {
-            let x = from.0 + (to.0 - from.0) * i / n;
-            let y = from.1 + (to.1 - from.1) * i / n;
-            c.ellipse(x, y, r, r, colour);
-        }
-    }
-}
-
-fn fist(c: &mut Canvas, x: i32, y: i32) {
-    c.ellipse(x, y, 3, 3, sx::OUTLINE);
-    c.ellipse(x, y, 2, 2, sx::SKIN);
-    c.px(x - 1, y - 1, sx::SKIN_LIGHT);
-}
-
-/// The near arm at his side, a cucumber in his fist pointing down.
-fn sam_arm_hold() -> SpriteVram {
-    let mut c = sam_canvas(Size::S16x32, SAM_ARM_HOLD_AT);
-    sleeve(&mut c, (17, 30), (14, 41));
-    cucumber(&mut c, (11, 44), (9, 55), 2);
-    fist(&mut c, 13, 44);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// The arm cocked back over his shoulder, the cucumber raised high behind his head.
-fn sam_arm_up() -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x32, SAM_ARM_UP_AT);
-    sleeve(&mut c, (42, 30), (49, 17));
-    cucumber(&mut c, (50, 14), (60, 4), 2);
-    fist(&mut c, 50, 15);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// Flung out ahead after a throw, the hand open.
-fn sam_arm_out() -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x16, SAM_ARM_OUT_AT);
-    sleeve(&mut c, (19, 30), (7, 32));
-    fist(&mut c, 3, 32);
-    c.px(0, 31, sx::SKIN);
-    c.px(0, 33, sx::SKIN);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// Both hands on the giant cucumber, levelled ahead like a bat.
-fn sam_arm_swing() -> SpriteVram {
-    let mut c = sam_canvas(Size::S32x16, SAM_ARM_SWING_AT);
-    sleeve(&mut c, (19, 34), (12, 39));
-    cucumber(&mut c, (1, 39), (13, 37), 3);
-    fist(&mut c, 11, 39);
-    c.vram_with(&SAM_PALETTE)
-}
-
-/// Face down on the floor, curls spread out, sneakers up.
-fn sam_down(left: i32) -> SpriteVram {
-    let mut c = Canvas::at(Size::S32x16, left, 16);
-    // Jacket and shorts along the floor.
-    c.pod(18, 18, 26, 13, sx::WHITE, sx::WHITE, sx::JACKET_SHADE);
-    mini_text(&mut c, b"FTX", 28, 21, sx::OUTLINE);
-    c.pod(42, 20, 12, 10, sx::SHIRT, sx::SHIRT, sx::OUTLINE);
-    for y in [19, 24] {
-        c.pod(52, y, 11, 6, sx::WHITE, sx::WHITE, sx::JACKET_SHADE);
-        c.rect(62, y + 1, 1, 4, sx::PINK);
-    }
-    // The head, face down, the curls fanned on the floor.
-    curls(&mut c, &[(6, 22, 4), (11, 17, 4), (17, 16, 3), (4, 28, 3), (13, 27, 4), (19, 23, 3)]);
-    c.ellipse(12, 24, 6, 5, sx::OUTLINE);
-    c.ellipse(12, 24, 5, 4, sx::HAIR);
-    c.rect(14, 28, 6, 2, sx::PINK);
-    c.rect(0, 31, 64, 1, sx::OUTLINE);
-    c.vram_with(&SAM_PALETTE)
 }
 
 /// SAM's projectiles and the effects of his attacks.
