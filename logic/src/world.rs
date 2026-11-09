@@ -177,6 +177,10 @@ impl Events {
     pub const LIFT: Events = Events(1 << 23);
     /// SAM swung the Cucumber Hit.
     pub const SWING: Events = Events(1 << 24);
+    /// The electric fences went live with one on screen.
+    pub const FENCE_ON: Events = Events(1 << 25);
+    /// A live fence shocked the wassie.
+    pub const SHOCK: Events = Events(1 << 26);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -1037,18 +1041,22 @@ impl World {
         self.knock_player(damage, from_x, false, events);
     }
 
-    fn knock_player(&mut self, damage: i32, from_x: i32, heavy: bool, events: &mut Events) {
+    /// Hurts and throws the wassie unless it is still blinking from the last hit.
+    /// Returns whether it was hurt.
+    fn knock_player(&mut self, damage: i32, from_x: i32, heavy: bool, events: &mut Events) -> bool {
         if self.god {
-            return;
+            return false;
         }
-        if self.player.knocked(self.difficulty.damage(damage), from_x, heavy) {
-            let r = self.player.body.rect();
-            self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
-            events.insert(Events::HIT);
-            if self.player.hp <= 0 {
-                self.die(DEATH_FRAMES, events);
-            }
+        if !self.player.knocked(self.difficulty.damage(damage), from_x, heavy) {
+            return false;
         }
+        let r = self.player.body.rect();
+        self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
+        events.insert(Events::HIT);
+        if self.player.hp <= 0 {
+            self.die(DEATH_FRAMES, events);
+        }
+        true
     }
 
     /// A knocked-out wassie under gravity: it keeps the knockback's arc, skids to a
@@ -1110,7 +1118,14 @@ impl World {
                 body.x_fx = (x1 + 1) * FX;
                 body.vx_fx = body.vx_fx.max(0);
             }
-            self.knock_player(SPIKE_DAMAGE, mid, true, events);
+            if self.knock_player(SPIKE_DAMAGE, mid, true, events) {
+                events.insert(Events::SHOCK);
+            }
+        }
+        // The current coming on, heard only with a fence in view.
+        let switched_on = live && self.frames > 0 && fence_state(self.frames - 1) != 2;
+        if switched_on && self.level.fence_between(self.camera_x, self.camera_x + SCREEN_W) {
+            events.insert(Events::FENCE_ON);
         }
         let r = self.player.body.rect();
         if r.y > self.level.px_height() && !self.player.is_dead() {
@@ -1470,6 +1485,29 @@ mod tests {
             w.step(&Input::default());
             assert!(w.player.body.rect().right() <= 50 * TILE);
         }
+    }
+
+    #[test]
+    fn fences_coming_on_are_heard_only_in_view_and_a_shock_is_its_own_sound() {
+        // In view: the emitters at tile 50 are on screen from the start of RANGE.
+        let mut w = World::with_level(&RANGE, 0, Difficulty::Normal);
+        w.player.body.x_fx = 40 * TILE * FX;
+        w.snap_camera();
+        w.frames = FENCE_CYCLE - FENCE_LIVE - 1;
+        let on = w.step(&Input::default());
+        assert!(on.contains(Events::FENCE_ON));
+        assert!(!w.step(&Input::default()).contains(Events::FENCE_ON), "once, as they switch");
+        // Out of view: silent.
+        let mut far = World::with_level(&RANGE, 0, Difficulty::Normal);
+        far.frames = FENCE_CYCLE - FENCE_LIVE - 1;
+        assert!(!far.step(&Input::default()).contains(Events::FENCE_ON));
+        // Walking into the live curtain: a shock, but not again while still blinking.
+        w.player.body.x_fx = (50 * TILE - PLAYER_W) * FX;
+        w.player.body.vx_fx = 2 * FX;
+        let shocked = w.step(&Input::default());
+        assert!(shocked.contains(Events::SHOCK) && shocked.contains(Events::HIT));
+        w.player.body.x_fx = (50 * TILE - PLAYER_W + 2) * FX;
+        assert!(!w.step(&Input::default()).contains(Events::SHOCK));
     }
 
     #[test]

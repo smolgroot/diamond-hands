@@ -1,5 +1,5 @@
 //! Sound effects on the GBA's built-in tone and noise channels: the blaster on channels 1
-//! and 4, the diamond chime on channel 2.
+//! and 4, the diamond chime on channel 2, the electric fences' crackle on channel 4.
 //!
 //! agb's mixer plays sampled audio, which needs WAV assets and CPU time every frame. The
 //! hardware square-wave channel 1 has a pitch sweep instead: triggered once, it falls in
@@ -70,7 +70,61 @@ const CHIME_GAP: u8 = 4;
 /// Frames between a coin's two notes: quicker than a diamond's.
 const COIN_GAP: u8 = 3;
 
+/// Noise register: clock divider `div` (bits 0-2), the 7-step LFSR (bit 3: a buzzy,
+/// metallic noise rather than a hiss) and clock shift `shift` (bits 4-7). Lower values
+/// are higher-pitched.
+const fn buzz(div: u16, shift: u16) -> u16 {
+    div | 1 << 3 | shift << 4
+}
+
+/// A crackle: the noise channel retriggered every few frames, each burst quieter, so
+/// it stutters like an arc instead of hissing once.
+#[derive(Clone, Copy)]
+struct Crackle {
+    /// Bursts left after this one.
+    bursts: u8,
+    /// Frames between bursts, and until the next.
+    gap: u8,
+    wait: u8,
+    volume: u16,
+    /// Volume lost each burst.
+    fade: u16,
+    noise: u16,
+}
+
+impl Crackle {
+    /// The fences coming on: three dry "bz" ticks.
+    const FENCE_ON: Crackle = Crackle { bursts: 3, gap: 3, wait: 0, volume: 8, fade: 1, noise: buzz(2, 3) };
+    /// The wassie shocked: a loud, bright stutter that dies away.
+    const SHOCK: Crackle = Crackle { bursts: 6, gap: 3, wait: 0, volume: 14, fade: 2, noise: buzz(1, 1) };
+
+    /// Plays this frame's burst, if it's time. Returns what's left of the crackle.
+    fn step(mut self) -> Option<Crackle> {
+        if self.wait > 0 {
+            self.wait -= 1;
+            return Some(self);
+        }
+        // SAFETY: as in `Sfx::new`.
+        unsafe {
+            SOUND4CNT_L.write_volatile(tone(0, 0, 1, self.volume));
+            SOUND4CNT_H.write_volatile(self.noise | RESTART);
+        }
+        if self.bursts == 0 {
+            return None;
+        }
+        self.bursts -= 1;
+        self.wait = self.gap - 1;
+        self.volume = self.volume.saturating_sub(self.fade);
+        Some(self)
+    }
+}
+
+/// The shock's hum under the crackle: a thin square wave at mains-ish 110 Hz, sagging.
+const SHOCK_RATE: u16 = rate(110);
+
 pub struct Sfx {
+    /// The fences' crackle, while it plays.
+    crackle: Option<Crackle>,
     /// Rungs climbed by the current chain of diamonds.
     chain: u8,
     /// Frames since the last diamond, saturating.
@@ -96,6 +150,7 @@ impl Sfx {
             SOUNDCNT_H.write_volatile(SOUNDCNT_H.read_volatile() & !0b11 | 0b10);
         }
         Self {
+            crackle: None,
             chain: 0,
             since_diamond: u16::MAX,
             pending: None,
@@ -138,9 +193,23 @@ impl Sfx {
         }
         self.menu(events);
         self.casino(events);
+        // A shock outranks the fences coming on; the beam's rumble outranks both.
+        if events.contains(Events::SHOCK) {
+            self.crackle = Some(Crackle::SHOCK);
+        } else if events.contains(Events::FENCE_ON) && self.crackle.is_none() {
+            self.crackle = Some(Crackle::FENCE_ON);
+        }
+        if events.contains(Events::BEAM) {
+            self.crackle = None;
+        }
+        self.crackle = self.crackle.and_then(Crackle::step);
         // SAFETY: as in `new`.
         unsafe {
-            if events.contains(Events::BEAM) {
+            if events.contains(Events::SHOCK) {
+                SOUND1CNT_L.write_volatile(sweep_down(3, 4));
+                SOUND1CNT_H.write_volatile(tone(0, 0, 3, 12));
+                SOUND1CNT_X.write_volatile(SHOCK_RATE | RESTART);
+            } else if events.contains(Events::BEAM) {
                 SOUND1CNT_L.write_volatile(sweep_down(7, 2));
                 SOUND1CNT_H.write_volatile(tone(0, 2, 2, 12));
                 SOUND1CNT_X.write_volatile(BEAM_RATE | RESTART);

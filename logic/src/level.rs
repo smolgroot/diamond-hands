@@ -191,6 +191,12 @@ impl Level {
         top
     }
 
+    /// Whether any fence emitter stands between pixel columns `x0` and `x1`.
+    pub fn fence_between(&self, x0: i32, x1: i32) -> bool {
+        (x0.div_euclid(TILE)..=(x1 - 1).div_euclid(TILE))
+            .any(|tx| (0..self.height()).any(|ty| self.tile(tx, ty) == Tile::Spike))
+    }
+
     /// The fence whose curtain overlaps the pixel rect `(x, y, w, h)`, as the left and
     /// right pixel edges of its run of emitters. A curtain fills its column from the
     /// emitter up to the rock above, so a point is inside one when, looking down from

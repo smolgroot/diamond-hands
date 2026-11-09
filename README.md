@@ -101,7 +101,8 @@ with a boss.
 - **Electric fences:** pylons on the ground throw up a curtain of lightning that reaches the
   rock above (or the sky), so it can't be jumped. They cycle: dead, a blinking warning with
   sparks, then live for about 2.5 seconds. Touching a live curtain shocks you and throws you
-  back; wait for it to die, then run through.
+  back; wait for it to die, then run through. Fences in view crackle as they come on, and
+  a shock buzzes loudly.
 - **Health and respawns:** you have 8 HP. Touching a beacon makes it your respawn point, and
   retries are unlimited.
 - **Diamonds:** they are scattered along the route, and the upper ledges hold the most.
