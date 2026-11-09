@@ -33,6 +33,8 @@ pub enum ActorKind {
     Coin,
     /// A plasma cell for CL207's shield.
     Part,
+    /// The jetpack, lying where an explorable level hides it.
+    Jetpack,
     /// The elevator's access terminal: off until the wassie presses Up at it.
     Terminal,
     /// Casino croupier bot: deals a fan of three cards.
@@ -53,6 +55,7 @@ impl ActorKind {
             b't' => ActorKind::Mine,
             b'$' => ActorKind::Coin,
             b'p' => ActorKind::Part,
+            b'J' => ActorKind::Jetpack,
             b'E' => ActorKind::Terminal,
             b'd' => ActorKind::Dealer,
             b'g' => ActorKind::Guard,
@@ -71,6 +74,7 @@ impl ActorKind {
             ActorKind::Mine => (12, 12),
             ActorKind::Coin => (8, 8),
             ActorKind::Part => (10, 12),
+            ActorKind::Jetpack => (12, 16),
             ActorKind::Terminal => (12, 20),
             ActorKind::Dealer => (14, 22),
             ActorKind::Guard => (16, 26),
@@ -131,7 +135,7 @@ impl ActorKind {
 
     /// Picked up by touching it.
     pub fn is_pickup(self) -> bool {
-        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part)
+        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack)
     }
 
     /// Floats instead of falling.
@@ -144,6 +148,7 @@ impl ActorKind {
                 | ActorKind::Checkpoint
                 | ActorKind::Coin
                 | ActorKind::Part
+                | ActorKind::Jetpack
         )
     }
 }
@@ -317,6 +322,7 @@ impl Actor {
             | ActorKind::Checkpoint
             | ActorKind::Coin
             | ActorKind::Part
+            | ActorKind::Jetpack
             | ActorKind::Terminal => {}
         }
     }

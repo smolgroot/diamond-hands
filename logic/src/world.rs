@@ -4,7 +4,7 @@
 use alloc::{boxed::Box, vec};
 
 use crate::{
-    FX, SCREEN_W, TILE,
+    FX, SCREEN_H, SCREEN_W, TILE,
     boss::{Boss, BossCtx},
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
@@ -67,6 +67,17 @@ pub const PIT_DAMAGE: i32 = 2;
 pub const HEAL_AMOUNT: i32 = 2;
 /// The camera keeps the wassie's centre inside this band of the screen.
 const CAMERA_BAND: (i32, i32) = (96, 136);
+/// And vertically, in a level taller than the screen: a little above the middle, so
+/// more shows below than above when dropping down a shaft.
+const CAMERA_BAND_Y: (i32, i32) = (56, 100);
+/// The bit of the file's part mask that records the jetpack, found in a level that
+/// hides it. The other bits are CL207's plasma cells.
+pub const GEAR_JETPACK: u16 = 1 << 15;
+
+/// The plasma cells in a part mask, without the gear bits.
+pub fn cells(parts: u16) -> u16 {
+    parts & !GEAR_JETPACK
+}
 /// Actors wake once this close to the screen edges.
 const WAKE_MARGIN: i32 = 16;
 /// Frames between jetpack exhaust puffs.
@@ -181,6 +192,8 @@ impl Events {
     pub const FENCE_ON: Events = Events(1 << 25);
     /// A live fence shocked the wassie.
     pub const SHOCK: Events = Events(1 << 26);
+    /// The wassie picked up a piece of gear (the jetpack).
+    pub const GEAR: Events = Events(1 << 27);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -339,6 +352,12 @@ pub struct World {
     pub kick: u8,
     /// Left edge of the screen in level pixels.
     pub camera_x: i32,
+    /// Top edge of the screen in level pixels: 0 in a level one screen tall.
+    pub camera_y: i32,
+    /// Where the camera's top settles in the boss arena.
+    pub arena_y: i32,
+    /// The level hides the jetpack: the wassie starts without it.
+    pub jetpack_here: bool,
     /// Tile the wassie respawns on, and how many checkpoints have been lit.
     pub checkpoint: (i32, i32),
     pub checkpoints_lit: u8,
@@ -371,9 +390,29 @@ impl World {
     }
 
     pub fn with_level(level: &'static Level, level_index: u8, difficulty: Difficulty) -> Self {
-        let start = level.find(b'P').unwrap_or((2, level.height() - 2));
-        let lift = level.find(b'L').map(|(tx, ty)| {
-            let dest = level.find(b'l').unwrap_or((tx, ty));
+        // One pass over the map's markers for its actors and the places that matter.
+        let mut actors = new_actors();
+        let mut count = 0;
+        let (mut start, mut car, mut dest, mut jetpack, mut boss_row) = (None, None, None, false, None);
+        for (c, tx, ty) in level.markers() {
+            match c {
+                b'P' if start.is_none() => start = Some((tx, ty)),
+                b'L' if car.is_none() => car = Some((tx, ty)),
+                b'l' if dest.is_none() => dest = Some((tx, ty)),
+                b'J' => jetpack = true,
+                b'B' if boss_row.is_none() => boss_row = Some(ty),
+                _ => {}
+            }
+            if let Some(kind) = ActorKind::from_marker(c)
+                && count < MAX_ACTORS
+            {
+                actors[count] = Actor::spawn(kind, tx, ty);
+                count += 1;
+            }
+        }
+        let start = start.unwrap_or((2, level.height() - 2));
+        let lift = car.map(|(tx, ty)| {
+            let dest = dest.unwrap_or((tx, ty));
             Lift {
                 car: (tx * TILE, (ty + 1) * TILE),
                 dest: (dest.0 * TILE, (dest.1 + 1) * TILE),
@@ -400,13 +439,16 @@ impl World {
             level_index,
             difficulty,
             player: Player::new(Body::standing_on_tile(start.0, start.1, PLAYER_W, PLAYER_H)),
-            actors: new_actors(),
+            actors,
             shots: [Shot::EMPTY; MAX_SHOTS],
             boss: Boss::new(level),
             fx: FxPool::new(),
             shake: 0,
             kick: 0,
             camera_x: 0,
+            camera_y: 0,
+            arena_y: 0,
+            jetpack_here: jetpack,
             checkpoint: start,
             checkpoints_lit: 0,
             arena: false,
@@ -423,19 +465,33 @@ impl World {
             god: false,
             rng: Rng::new(0x5EED ^ level_index as u32),
         };
-        let mut count = 0;
-        for (ty, row) in level.rows.iter().enumerate() {
-            for (tx, c) in row.bytes().enumerate() {
-                if let Some(kind) = ActorKind::from_marker(c)
-                    && count < MAX_ACTORS
-                {
-                    world.actors[count] = Actor::spawn(kind, tx as i32, ty as i32);
-                    count += 1;
-                }
-            }
+        world.player.jetpack = !world.jetpack_here;
+        if let Some(ty) = boss_row {
+            // The arena's floor sits four rows above the bottom of the screen, as in a
+            // level one screen tall.
+            world.arena_y = ((ty + 5) * TILE - SCREEN_H).clamp(0, world.max_camera_y());
         }
         world.snap_camera();
         world
+    }
+
+    fn max_camera_y(&self) -> i32 {
+        (self.level.px_height() - SCREEN_H).max(0)
+    }
+
+    /// Whether the wassie owns the jetpack in this level.
+    pub fn has_jetpack(&self) -> bool {
+        !self.jetpack_here || self.parts & GEAR_JETPACK != 0
+    }
+
+    /// The actors taken so far, one bit per actor slot: pickups collected, villains
+    /// beaten for good, beacons lit and terminals on. Saved with the run so an
+    /// explorable level comes back exactly as it was left.
+    pub fn taken(&self) -> u128 {
+        self.actors.iter().enumerate().fold(0, |mask, (i, a)| {
+            let done = a.killed || (matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) && a.state == enemy::state::LIT);
+            if done { mask | 1 << i } else { mask }
+        })
     }
 
     pub fn score(&self) -> u32 {
@@ -450,6 +506,13 @@ impl World {
     /// The file already owns the parts in `mask`: those here are gone from the map.
     pub fn own_parts(&mut self, mask: u16) {
         self.parts |= mask;
+        if mask & GEAR_JETPACK != 0 {
+            for a in self.actors.iter_mut().filter(|a| a.kind == ActorKind::Jetpack) {
+                a.alive = false;
+                a.killed = true;
+            }
+        }
+        self.player.jetpack = self.has_jetpack();
         let base = self.level.parts_base;
         for (n, a) in self.actors.iter_mut().filter(|a| a.kind == ActorKind::Part).enumerate() {
             if mask & (1 << (base as usize + n)) != 0 {
@@ -480,7 +543,23 @@ impl World {
         let Some((tx, ty)) = progress.checkpoint else {
             return;
         };
-        let edge = (tx + 1) * TILE;
+        let edge = if self.level.explore {
+            // No left-to-right order to go by: put back exactly what was taken.
+            for (i, a) in self.actors.iter_mut().enumerate() {
+                if progress.taken & (1 << i) == 0 {
+                    continue;
+                }
+                if matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) {
+                    a.state = enemy::state::LIT;
+                } else {
+                    a.alive = false;
+                    a.killed = true;
+                }
+            }
+            i32::MIN
+        } else {
+            (tx + 1) * TILE
+        };
         for a in self.actors.iter_mut().filter(|a| a.alive) {
             if a.home.0 + a.kind.size().0 / 2 >= edge {
                 continue;
@@ -595,7 +674,10 @@ impl World {
             if !s.active && matches!(s.kind, ShotKind::Cucumber | ShotKind::MegaCucumber) {
                 self.fx.spawn(FxKind::Splat, r.centre_x(), r.centre_y());
             }
-            if r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16 {
+            let off_side = r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16;
+            // Well above or below the screen too, in a tall level.
+            let off_end = r.bottom() < self.camera_y - SCREEN_H || r.y > self.camera_y + 2 * SCREEN_H;
+            if off_side || off_end {
                 s.active = false;
             }
         }
@@ -814,9 +896,17 @@ impl World {
         }
     }
 
+    /// Where the camera's top starts in `level`: on the wassie standing at its start.
+    pub fn start_camera_y(level: &Level) -> i32 {
+        let (tx, ty) = level.find(b'P').unwrap_or((2, level.height() - 2));
+        let r = Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H).rect();
+        (r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2).clamp(0, (level.px_height() - SCREEN_H).max(0))
+    }
+
     fn snap_camera(&mut self) {
-        let centre = self.player.body.rect().centre_x();
-        self.camera_x = centre - (CAMERA_BAND.0 + CAMERA_BAND.1) / 2;
+        let r = self.player.body.rect();
+        self.camera_x = r.centre_x() - (CAMERA_BAND.0 + CAMERA_BAND.1) / 2;
+        self.camera_y = r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2;
         self.clamp_camera();
     }
 
@@ -839,19 +929,28 @@ impl World {
         let (lo, hi) = self.view_bounds();
         let max = (hi - SCREEN_W).max(lo);
         self.camera_x = self.camera_x.clamp(lo, max);
+        self.camera_y = self.camera_y.clamp(0, self.max_camera_y());
     }
 
     fn update_camera(&mut self) {
         if self.arena {
             let target = self.boss.arena.0;
             self.camera_x += (target - self.camera_x).clamp(-3, 3);
+            self.camera_y += (self.arena_y - self.camera_y).clamp(-3, 3);
             return;
         }
-        let centre = self.player.body.rect().centre_x();
+        let r = self.player.body.rect();
+        let centre = r.centre_x();
         if centre < self.camera_x + CAMERA_BAND.0 {
             self.camera_x = centre - CAMERA_BAND.0;
         } else if centre > self.camera_x + CAMERA_BAND.1 {
             self.camera_x = centre - CAMERA_BAND.1;
+        }
+        let middle = r.centre_y();
+        if middle < self.camera_y + CAMERA_BAND_Y.0 {
+            self.camera_y = middle - CAMERA_BAND_Y.0;
+        } else if middle > self.camera_y + CAMERA_BAND_Y.1 {
+            self.camera_y = middle - CAMERA_BAND_Y.1;
         }
         self.clamp_camera();
     }
@@ -865,14 +964,18 @@ impl World {
             camera_x: self.camera_x,
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
+        let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
         for a in self.actors.iter_mut().filter(|a| a.alive) {
             let r = a.rect();
-            let visible = r.right() > view.0 && r.x < view.1;
+            let visible = r.right() > view.0 && r.x < view.1 && r.bottom() > view_y.0 && r.y < view_y.1;
             if !a.awake && visible {
                 a.awake = true;
             }
             // Villains far off screen stop, so the CPU and object budget stay bounded.
-            let far = r.right() < view.0 - SCREEN_W / 2 || r.x > view.1 + SCREEN_W / 2;
+            let far = r.right() < view.0 - SCREEN_W / 2
+                || r.x > view.1 + SCREEN_W / 2
+                || r.bottom() < view_y.0 - SCREEN_H / 2
+                || r.y > view_y.1 + SCREEN_H / 2;
             if a.awake && !far {
                 a.update(&mut ctx);
             }
@@ -980,6 +1083,17 @@ impl World {
                     let r = a.rect();
                     self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
                     events.insert(Events::PART);
+                }
+                ActorKind::Jetpack => {
+                    a.alive = false;
+                    a.killed = true;
+                    self.parts |= GEAR_JETPACK;
+                    self.player.jetpack = true;
+                    self.player.hover_fuel = HOVER_FRAMES;
+                    let r = a.rect();
+                    self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
+                    self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
+                    events.insert(Events::GEAR);
                 }
                 ActorKind::Terminal => {}
                 ActorKind::Checkpoint => {
@@ -1156,6 +1270,7 @@ impl World {
         let (tx, ty) = self.checkpoint;
         self.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
         self.player.hp = hp;
+        self.player.jetpack = self.has_jetpack();
     }
 
     /// Back to the last checkpoint. A knockout restores full health; a pit keeps what

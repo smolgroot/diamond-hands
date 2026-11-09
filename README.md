@@ -5,12 +5,17 @@
 
 A side-scrolling action platformer for the Game Boy Advance, written in Rust with [agb](https://agbrs.dev).
 In a dystopian future the bears have built machines. A wassie in a red poncho, hauling an
-oversized laser cannon, blasts its way left to right through their cyber bots. Each level ends
-with a boss.
+oversized laser cannon, blasts its way through their cyber bots. Each level ends with a boss.
 
-1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
-   night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a
-   bear-shaped war mech.
+1. **The Badlands** (playable): an explorable map, Metroidvania style, three screens tall.
+   Mossy cliffs below a ruined city, from a violet dusk to a burning night. Sentry walkers,
+   Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a bear-shaped war mech.
+   The way to her runs over a cliff face too high to jump. The only other way on is down a
+   pit, which can't be climbed back up without the jetpack. Below it are the caves: a long
+   cavern, a false wall hiding a secret room at its west end, and a shaft. The shaft drops to
+   the deep, a crystal cave where the **jetpack** lies at the far west end, past electric
+   fences. With the jetpack, the girders up the shaft climb all the way back to the plateau
+   over the cliff, and the high ledges passed on the way down are in reach.
 2. **Solana Trenches** (playable): not a battlefield but Crypto Twitter's memecoin casino,
    where a coin launches every minute and most of them rug. CL207 calls as it starts: he is
    building a **Plasma Shield** and needs the three plasma cells hidden in the level. A neon
@@ -43,14 +48,16 @@ with a boss.
   the levels before it cleared.
 - **Combat:** you can stomp bots by landing on them. A "!" over a bot means it is about to
   attack. The blaster fires in eight directions; diagonal shots fly at the same speed.
-- **Jetpack:** after a jump's rise, keeping A held lights a jetpack that climbs slowly for
+- **Jetpack:** in the Badlands it has to be found first (in the deep); the Trenches start with
+  it. After a jump's rise, keeping A held lights a jetpack that climbs slowly for
   48 frames. This reaches about 62 px, against 38 px for a plain jump, so the diamonds on
   the floating rocks are reachable. Letting go saves the rest of the fuel, landing or
   stomping a bot refuels it, and a quick tap in the air never hovers (it stays a buffered
   jump).
 - **Arrival:** starting the Badlands fresh plays its arrival on CryptoTerra. A cargo ship drops the
   wassie off, rekt and owning nothing but its scarf. CL207, a white cat in a yellow cat-eared hazmat suit,
-  explains the rules, then hands over the blaster and the jetpack. A reads the lines and Start
+  explains the rules, then hands over the blaster. A bear bot dragged the jetpack he meant
+  to give it down into the caves. A reads the lines and Start
   skips the scene. Continuing a saved run never replays it.
 - **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie
   trade a few lines. A finishes a line and then turns the page; Start skips the rest. It
@@ -135,6 +142,15 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
     of their letter. Each
     level also carries its boss dialogue; places on the world map and the unlock rules are in
     `logic/src/levels.rs`.
+  - A map is one screen (20 rows) tall, or taller for an explorable level (`explore`): the
+    Badlands are 180 x 60. There the camera follows the wassie up and down too, the sky and
+    the city fade to black below `sky_rows`, a resumed run comes back with exactly what it
+    had taken (`World::taken`, saved per actor), and `route` lists waypoints for the route
+    bot. `J` is the jetpack for a level that hides it; owning it is a bit of the file's part
+    mask (`GEAR_JETPACK`), next to the plasma cells.
+  - Each map's markers are listed when the game compiles (`Markers::scan`): on the GBA the
+    map sits in cartridge ROM, and reading every cell of a tall one as a level starts
+    overran a frame.
   - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
     `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
     A new item needs an entry there and an icon in `game/src/art/menu.rs`.
@@ -195,24 +211,29 @@ cargo test -p diamond_hands_harness  # boots the ROM on gba-wasm (needs dist/dia
 The logic tests also check every map for authoring mistakes: unreachable steps, spawns inside
 rock, the arena size, and diamonds on floating rock that the jetpack can't reach. They also
 check that the dialogue fits the box and the font. A route bot then plays each level in god
-mode and must beat the boss.
+mode and must beat the boss; in an explorable level it follows the level's waypoints there
+(down the pit, through the caves, to the jetpack and back up the shaft). The Badlands' gate
+is checked too: a jump can't top the cliff and the jetpack can, and a resumed run keeps the
+jetpack and exactly what it had taken.
 
 Each frame, the ROM mirrors a `Probe` struct into EWRAM. The harness finds it by its `DHPR` magic, then checks:
 - scene flow
 - running, jumping, firing
 - pausing
 - SRAM persistence
-- hovering, and diagonal and downward aim
+- that the Badlands start without the jetpack, and diagonal and downward aim
 - the world map: locked and coming-soon places, and unlocking the Trenches by clearing the
   Badlands, which survives a power cycle
 - the pause menu's tabs, items and inspect card, and that closing it neither fires nor
   moves the level on
 - that the ROM matches the host-side model frame by frame while the route bot clears the
-  Badlands, including the boss dialogue
+  Badlands, including the boss dialogue. A frame that runs long on the ROM is followed rather
+  than flagged: the model steps as often as the ROM's frame counter did (`step_in_sync`)
 
 Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of the title, map,
-hovering, aiming, each line of dialogue, the level-clear sequence, each pause-menu page and
-every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
+aiming, each line of dialogue, each waypoint on the Badlands' route (`b1-*`), the
+level-clear sequence, each pause-menu page and every area of the Trenches, SAM's attacks and
+the exchange (`t2-*`).
 
 ## Known limitations
 
@@ -229,7 +250,16 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   stack they overflowed it at boot.
 - Saves from before the casino (version 5) are moved over with an empty wallet: version 5
   kept no diamond balance. A run saved part-way through the old Trenches starts the
-  rebuilt level from the top.
+  rebuilt level from the top, and one part-way through the Badlands from before they became
+  explorable (version 6 and older) starts them from the top too.
+- The caves have no backdrop of their own yet: underground, the sky and the city fade to
+  black behind the rock.
+- The ROM runs close to its frame budget. Each terrain cell costs agb's VRAM manager a few
+  thousand cycles, so the renderer loads terrain a little ahead of the camera, makes the
+  level's tiles ahead of time on the level card and in the menus, and after a respawn
+  refills the screen over about ten frames, dark behind the sprites. Opening BERA 3000's
+  dialogue drops a frame on this map (the whole frame runs about three times slower, game
+  step included); the cause isn't tracked down yet.
 - Background VRAM is nearly full too. All eight screenblocks are taken, so the pause menu
   borrows the dialogue box's unused rows, and while it is open the dialogue text lends it
   its tiles. The menu is drawn on an 8x8 grid so each glyph is one shared tile, and a page

@@ -284,6 +284,16 @@ pub fn paint_city(bg: &mut RegularBackground) {
             cache.paint(bg, (tx, ty), 0, &pixel);
         }
     }
+    // Below the screen the towers' dark feet carry on, for when a tall level scrolls
+    // the city up: one solid tile, set without painting it pixel by pixel.
+    if let Some(id) = cache.intern([sky_ix::TOWER_DARK; 64]) {
+        let effect = agb::display::tiled::TileEffect::new(false, false, 0);
+        for ty in 20..32 {
+            for tx in 0..MAP_TILES {
+                bg.set_tile_dynamic16((tx, ty), &cache.tiles[id], effect);
+            }
+        }
+    }
 }
 
 /// Number of distinct [`terrain_key`] values.
@@ -295,8 +305,13 @@ pub const TERRAIN_KEYS: usize = 8 * 3 * 16 * 4 * 3;
 /// builds each distinct tile once: the GBA has no divide instruction, and per-pixel
 /// patterns are too slow to redo for every streamed cell.
 pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
-    let kind = match level.char_at(tx, ty) {
-        b'#' => 1,
+    let mut c = level.char_at(tx, ty);
+    // A false wall looks like rock, and so do pickups hidden in one: the wall stays whole.
+    if c != b'.' && hidden_in_false_wall(level, tx, ty) {
+        c = b'%';
+    }
+    let kind = match c {
+        b'#' | b'%' => 1,
         b'=' => 2,
         b'^' => 3,
         b'r' => 4,
@@ -306,7 +321,18 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
         _ => return 0,
     };
     // Below the map counts as rock, so the screen's bottom edge gets no outline.
-    let solid = |dx: i32, dy: i32| ty + dy >= level.height() || level.tile(tx + dx, ty + dy) == Tile::Solid;
+    let solid = |dx: i32, dy: i32| {
+        let (x, y) = (tx + dx, ty + dy);
+        if y >= level.height() {
+            return true;
+        }
+        match level.char_at(x, y) {
+            // The common cases first: this runs for every cell that scrolls in.
+            b'.' => x < 0 || x >= level.width(),
+            b'#' | b'%' | b'r' => true,
+            _ => level.tile(x, y) == Tile::Solid || hidden_in_false_wall(level, x, y),
+        }
+    };
     let depth = if !solid(0, -1) {
         0
     } else if !solid(0, -2) {
@@ -317,6 +343,12 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
     let open = |dx, dy| !solid(dx, dy) as usize;
     let sides = open(0, -1) | open(-1, 0) << 1 | open(1, 0) << 2 | open(0, 1) << 3;
     ((((kind * 3 + depth) * 16 + sides) * 4 + (tx & 3) as usize) * 3) + ty.rem_euclid(3) as usize
+}
+
+/// Whether cell `(tx, ty)` is a pickup tucked into a false wall, drawn as the wall.
+fn hidden_in_false_wall(level: &Level, tx: i32, ty: i32) -> bool {
+    let c = level.char_at(tx, ty);
+    c != b'#' && c != b'%' && level.char_at(tx, ty - 1) == b'%' && level.char_at(tx, ty + 1) != b'.'
 }
 
 /// Scenery and props, drawn from 8x8 character grids.

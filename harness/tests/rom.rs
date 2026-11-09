@@ -58,7 +58,17 @@ fn boot_to_title(runner: &mut Runner) -> Probe {
 fn boot_to_files_from_prompt(runner: &mut Runner) -> Probe {
     runner.tap(keys::START);
     let entered = runner.run_until(5, 0, |p| scene(p) == Scene::Files);
-    let files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
+    let mut files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
+    // Building the renderer and its first frames run long, by an amount that shifts
+    // with what they load: wait until the ROM keeps pace, a game frame per video frame.
+    let mut steady = 0;
+    while steady < 3 {
+        runner.frame(0);
+        let p = runner.expect_probe();
+        steady = if p.frame == files.frame + 1 { steady + 1 } else { 0 };
+        files = p;
+        assert!(files.frame < entered.frame + 60, "the ROM never kept pace");
+    }
     screenshot(runner, "files");
     files
 }
@@ -134,12 +144,12 @@ fn the_wassie_runs_and_jumps() {
 }
 
 #[test]
-fn holding_a_hovers_and_the_blaster_aims_diagonally() {
+fn the_badlands_jetpack_is_lost_and_the_blaster_aims_diagonally() {
     let mut runner = Runner::new(&read_rom());
     let start = start_level(&mut runner);
     screenshot(&runner, "level-start");
 
-    // A held jump climbs past a plain jump's apex on the jetpack.
+    // The Badlands hide the jetpack in the deep: a held jump is only a jump.
     let mut highest = start.player_y;
     let mut hovered = false;
     for i in 0..70 {
@@ -151,9 +161,9 @@ fn holding_a_hovers_and_the_blaster_aims_diagonally() {
             screenshot(&runner, "hover");
         }
     }
-    assert!(hovered, "never lit the jetpack");
+    assert!(!hovered, "hovered without the jetpack");
     let rise = start.player_y - highest;
-    assert!(rise > JUMP_APEX + 16, "rose {rise}px");
+    assert!(rise <= JUMP_APEX + 1, "rose {rise}px");
 
     // Planted with R, Up+Right fires up and to the right without walking.
     runner.frames(60, 0);
@@ -282,6 +292,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
     let mut runner = Runner::new(&rom);
     start_level(&mut runner);
     let mut previous = 0;
+    let mut bot = bot::Bot::default();
     let mut world = Game::new(0).world;
     let lit = loop {
         // The route bot only reads the level and the wassie, which the probe can't
@@ -290,7 +301,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
         if p.checkpoints > 0 {
             break p;
         }
-        let keys = bot::keys_for(&world, previous);
+        let keys = bot.keys(&world, previous);
         runner.frame(keys);
         world.step(&Input::from_keys(keys, previous));
         previous = keys;
@@ -312,7 +323,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
     assert_eq!(resumed.checkpoints, lit.checkpoints);
     assert_eq!(resumed.diamonds, lit.diamonds);
     assert!(
-        (resumed.player_x - lit.player_x).abs() < 32,
+        (resumed.player_x - lit.player_x).abs() < 32 && (resumed.player_y - lit.player_y).abs() < 32,
         "should stand at the beacon: {lit:?} → {resumed:?}"
     );
 }
@@ -392,16 +403,19 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
     assert_eq!(Probe::from_game(&model), files, "out of sync at the file menu");
 
     let mut previous = 0u16;
+    let mut bot = bot::Bot::default();
     let mut saw_hit = false;
     let mut saw_dialog = false;
     let mut dialog_frames = 0;
     let mut arrival_frames = 0;
     let mut beats_seen = 0;
-    for i in 0..(100 * SECOND) {
+    let mut waypoint = 0;
+    // The explorable Badlands are a long way round, with a knockout or two on the way.
+    for i in 0..(240 * SECOND) {
         let keys = match model.scene {
             Scene::Files => keys::A,
             Scene::Title if i == 20 => keys::START,
-            Scene::Play => bot::keys_for(&model.world, previous),
+            Scene::Play => bot.keys(&model.world, previous),
             // Read each line for a moment, then press on.
             Scene::Dialog | Scene::Arrival if model.talking() => {
                 dialog_frames += 1;
@@ -409,13 +423,15 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
             }
             _ => 0,
         };
-        runner.frame(keys);
-        model.step(&Input::from_keys(keys, previous));
+        step_in_sync(runner, &mut model, keys, previous, &format!("step {i}"));
         previous = keys;
+        // Each stop on the way round: the pit, the caves, the deep, the jetpack, the
+        // shaft's girders and the plateau.
+        if bot.step() != waypoint {
+            waypoint = bot.step();
+            screenshot(runner, &format!("b1-{waypoint:02}"));
+        }
         saw_hit |= model.world.player.hp < diamond_hands_logic::player::MAX_HP;
-
-        let probe = runner.expect_probe();
-        assert_eq!(probe, Probe::from_game(&model), "ROM diverged from the model at step {i}");
         saw_dialog |= model.scene == Scene::Dialog;
         let talk = if model.scene == Scene::Arrival { "arrival-talk" } else { "dialog" };
         if model.talking() && dialog_frames % 50 == 49 {
@@ -452,12 +468,16 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
 
 /// Steps the ROM and the model one game frame with `keys`. The ROM may take several
 /// video frames over one (entering a level repaints its backdrop), so the keys are held
-/// until it has read them. Panics if the two disagree.
+/// until it has read them; and after a frame that ran long it may catch up with two
+/// game frames in one video frame, both reading the same keys, so the model steps as
+/// often. Panics if the two disagree.
 fn step_in_sync(runner: &mut Runner, model: &mut Game, keys: u16, previous: u16, what: &str) {
     let next = model.frame + 1;
-    runner.run_until(10 * SECOND, keys, |p| p.frame >= next);
+    let probe = runner.run_until(10 * SECOND, keys, |p| p.frame >= next);
     model.step(&Input::from_keys(keys, previous));
-    let probe = runner.expect_probe();
+    while model.frame < probe.frame {
+        model.step(&Input::from_keys(keys, keys));
+    }
     assert_eq!(probe, Probe::from_game(model), "ROM diverged from the model: {what}");
 }
 
@@ -470,6 +490,7 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
     use diamond_hands_logic::{boss::BossState, game::Deal, world::LiftState};
     let mut runner = Runner::new(&read_rom());
     let (mut model, mut previous) = clear_badlands_with_keys(&mut runner);
+    let mut bot = bot::Bot::default();
     let mut seen = std::collections::BTreeSet::new();
     let mut shot = |runner: &Runner, name: &str| {
         if seen.insert(name.to_string()) {
@@ -490,7 +511,7 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             Scene::Map if model.scene_frames() > MAP_WALK_FRAMES + 8 && model.cleared == 0b1 => {
                 if i % 2 == 0 { keys::A } else { 0 }
             }
-            Scene::Play => bot::keys_for(&model.world, previous),
+            Scene::Play => bot.keys(&model.world, previous),
             Scene::Dialog | Scene::Exchange if model.talking() => {
                 talk_frames += 1;
                 if talk_frames % 40 == 0 { keys::A } else { 0 }
@@ -665,3 +686,5 @@ fn clearing_the_badlands_opens_the_map_and_unlocks_the_trenches_for_good() {
     let intro = press(&mut rebooted, keys::A);
     assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
 }
+
+

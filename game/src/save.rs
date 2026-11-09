@@ -2,8 +2,9 @@
 //!
 //! The data is postcard-encoded. Version 5 added the levels each file has cleared;
 //! version 6 the wallet of banked diamonds, the purse of kept gold coins, the coins
-//! picked up in the level so far, and CL207's shield parts. Each starts with a tag, and
-//! an older cartridge is read in its own layout and moved over rather than wiped.
+//! picked up in the level so far, and CL207's shield parts; version 7 what a run had
+//! taken at its beacon, for the explorable Badlands. Each starts with a tag, and an
+//! older cartridge is read in its own layout and moved over rather than wiped.
 //!
 //! Version 5 kept no diamond balance (diamonds only ever went into the score), so a
 //! moved-over file starts with an empty wallet.
@@ -19,8 +20,9 @@ use serde::{Deserialize, Serialize};
 /// Changing this wipes existing saves, so bump the suffix only for incompatible formats.
 /// Formats that can be read and moved over keep it and change [`TAG`] instead.
 const MAGIC: [u8; 32] = *b"diamond-hands-save-v4___________";
-/// Leads every version 6 save.
-const TAG: [u8; 4] = *b"DHv6";
+/// Leads every version 7 save.
+const TAG: [u8; 4] = *b"DHv7";
+const TAG_V6: [u8; 4] = *b"DHv6";
 const TAG_V5: [u8; 4] = *b"DHv5";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -48,6 +50,80 @@ struct FileData {
     wallet: u32,
     purse: u32,
     parts: u16,
+    taken: u128,
+}
+
+impl FileData {
+    /// A run saved part-way through the Badlands before they were rebuilt as an
+    /// explorable map starts the level again: its beacon may now be inside rock.
+    fn restart_rebuilt_badlands(self) -> Self {
+        if self.level != 0 || self.checkpoint.is_none() {
+            return self;
+        }
+        Self { checkpoint: None, beacons: 0, diamonds: 0, kills: 0, frames: 0, coins: 0, ..self }
+    }
+}
+
+/// The version 6 layout, from before the explorable Badlands.
+#[derive(Clone, Serialize, Deserialize)]
+struct SaveDataV6 {
+    tag: [u8; 4],
+    best: u32,
+    difficulty: u8,
+    files: [Option<FileDataV6>; FILES],
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct FileDataV6 {
+    level: u8,
+    checkpoint: Option<(i32, i32)>,
+    beacons: u8,
+    banked: u32,
+    diamonds: u32,
+    kills: u32,
+    frames: u32,
+    complete: bool,
+    cleared: Cleared,
+    coins: u32,
+    wallet: u32,
+    purse: u32,
+    parts: u16,
+}
+
+impl From<FileDataV6> for FileData {
+    /// A version 6 run keeps where it was, except part-way through the Badlands: they
+    /// were rebuilt as an explorable map since, so such a run starts the level again
+    /// rather than at a beacon that may now be inside rock.
+    fn from(f: FileDataV6) -> Self {
+        Self {
+            level: f.level,
+            checkpoint: f.checkpoint,
+            beacons: f.beacons,
+            banked: f.banked,
+            diamonds: f.diamonds,
+            kills: f.kills,
+            frames: f.frames,
+            complete: f.complete,
+            cleared: f.cleared,
+            coins: f.coins,
+            wallet: f.wallet,
+            purse: f.purse,
+            parts: f.parts,
+            taken: 0,
+        }
+        .restart_rebuilt_badlands()
+    }
+}
+
+impl From<SaveDataV6> for SaveData {
+    fn from(v6: SaveDataV6) -> Self {
+        Self {
+            tag: TAG,
+            best: v6.best,
+            difficulty: v6.difficulty,
+            files: v6.files.map(|f| f.map(FileData::from)),
+        }
+    }
 }
 
 /// The version 5 layout, from before the casino's coins.
@@ -92,7 +168,9 @@ impl From<FileDataV5> for FileData {
             wallet: 0,
             purse: 0,
             parts: 0,
+            taken: 0,
         }
+        .restart_rebuilt_badlands()
     }
 }
 
@@ -149,7 +227,9 @@ impl From<FileDataV4> for FileData {
             wallet: 0,
             purse: 0,
             parts: 0,
+            taken: 0,
         }
+        .restart_rebuilt_badlands()
     }
 }
 
@@ -180,6 +260,7 @@ impl From<Progress> for FileData {
             wallet: p.wallet,
             purse: p.purse,
             parts: p.parts,
+            taken: p.taken,
         }
     }
 }
@@ -200,6 +281,7 @@ impl From<FileData> for Progress {
             wallet: f.wallet,
             purse: f.purse,
             parts: f.parts,
+            taken: f.taken,
         }
     }
 }
@@ -228,6 +310,13 @@ impl Store {
                     .read::<SaveData>(0)
                     .ok()
                     .filter(|data| data.tag == TAG)
+                    .or_else(|| {
+                        slots
+                            .read::<SaveDataV6>(0)
+                            .ok()
+                            .filter(|data| data.tag == TAG_V6)
+                            .map(SaveData::from)
+                    })
                     .or_else(|| {
                         slots
                             .read::<SaveDataV5>(0)

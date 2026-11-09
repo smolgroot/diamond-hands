@@ -6,6 +6,7 @@ use crate::{
     arrival::Beat,
     game::{Game, Scene},
     player::HOVER_FRAMES,
+    world::cells,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,12 +88,15 @@ pub static ITEMS: [ItemInfo; 4] = [
 
 impl Item {
     /// Whether the wassie has it on now. CL207 hands over the blaster and the jetpack
-    /// during the arrival; the scarf was always there.
+    /// during the arrival (only the blaster where the jetpack is hidden in the level);
+    /// the scarf was always there.
     pub fn equipped(self, game: &Game) -> bool {
         match self {
             Item::Scarf => true,
-            Item::Cells => (game.parts | game.world.parts) != 0,
-            Item::Blaster | Item::Jetpack => game.scene != Scene::Arrival || game.beat > Beat::Gift,
+            Item::Cells => cells(game.parts | game.world.parts) != 0,
+            Item::Blaster => game.scene != Scene::Arrival || game.beat > Beat::Gift,
+            // A level that hides the jetpack holds it back until it is found.
+            Item::Jetpack => game.world.player.jetpack && (game.scene != Scene::Arrival || game.beat > Beat::Gift),
         }
     }
 }
@@ -103,7 +107,7 @@ impl Gauge {
         match self {
             Gauge::None => None,
             Gauge::Fuel => Some((game.world.player.hover_fuel as u32, HOVER_FRAMES as u32)),
-            Gauge::Cells => Some(((game.parts | game.world.parts).count_ones().min(SHIELD_CELLS), SHIELD_CELLS)),
+            Gauge::Cells => Some((cells(game.parts | game.world.parts).count_ones().min(SHIELD_CELLS), SHIELD_CELLS)),
         }
     }
 }
@@ -129,7 +133,21 @@ mod tests {
     fn the_wassie_plays_with_everything_equipped() {
         let mut game = Game::new(0);
         game.scene = Scene::Play;
+        // In a level that doesn't hide the jetpack.
+        game.world = alloc::boxed::Box::new(crate::World::new(1, crate::Difficulty::Normal));
         assert!(ITEMS.iter().filter(|i| i.item != Item::Cells).all(|i| i.item.equipped(&game)));
         assert!(!Item::Cells.equipped(&game), "no cells until one is found");
+    }
+
+    #[test]
+    fn a_hidden_jetpack_shows_once_found_and_is_no_plasma_cell() {
+        let mut game = Game::new(0);
+        game.scene = Scene::Play;
+        game.world = alloc::boxed::Box::new(crate::World::new(0, crate::Difficulty::Normal));
+        assert!(game.world.jetpack_here, "the Badlands hide the jetpack");
+        assert!(!Item::Jetpack.equipped(&game));
+        game.world.own_parts(crate::world::GEAR_JETPACK);
+        assert!(Item::Jetpack.equipped(&game));
+        assert!(!Item::Cells.equipped(&game), "the jetpack is not a plasma cell");
     }
 }

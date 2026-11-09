@@ -10,7 +10,7 @@ use alloc::{vec, vec::Vec};
 
 use agb::{
     display::{
-        GraphicsFrame, Priority, WIDTH,
+        GraphicsFrame, HEIGHT, Priority, WIDTH,
         object::{Object, SpriteVram},
         tiled::{DynamicTile16, RegularBackground, RegularBackgroundSize, TileEffect, TileFormat},
     },
@@ -98,15 +98,31 @@ const MAX_TERRAIN_KEYS: usize = if badlands::TERRAIN_KEYS > trenches::TERRAIN_KE
     trenches::TERRAIN_KEYS
 };
 
-/// Terrain map width in tiles. Columns are written into slot `column % 64`.
+/// Terrain map size in tiles. Level cell `(col, row)` is written into slot
+/// `(col % 64, row % 32)`, so a level wraps around the map both ways as it scrolls.
 const TERRAIN_COLS: i32 = 64;
+const TERRAIN_ROWS: i32 = 32;
+/// Rows a screen can show at once, counting the part rows at its top and bottom.
+const VIEW_ROWS: i32 = HEIGHT / TILE + 1;
 /// Stage behind the menus: the Badlands at dusk.
 const MENU_STAGE: u8 = 0;
 /// Terrain uses background palette 1; the backdrop uses 0.
 const TERRAIN_PALETTE: u8 = 1;
-/// Most terrain columns written per frame. Scrolling needs at most one; after the
-/// camera jumps (a respawn) the screen refills over a few frames, so no frame runs long.
-const COLUMNS_PER_FRAME: usize = 8;
+/// Most terrain cells written per frame. Scrolling needs at most a column and a row;
+/// after the camera jumps (a respawn) the screen refills over a few frames, about three
+/// columns a frame: each cell costs the VRAM manager a few thousand cycles, so a whole
+/// screen at once would run a frame long.
+const CELLS_PER_FRAME: i32 = 64;
+/// Columns and rows loaded ahead off each edge of the screen, and how many cells a
+/// frame may load there.
+const LOOKAHEAD: i32 = 2;
+const LOOKAHEAD_CELLS_PER_FRAME: i32 = 12;
+/// How far the city and the sky drift up as the camera goes down a tall level, as a
+/// fraction of its depth: they're far off, so they move less than the rock does. Both
+/// layers are 256 pixels tall, so neither may scroll more than 96 without wrapping.
+const CITY_DEPTH: i32 = 3;
+const SKY_DEPTH: i32 = 6;
+const MAX_BACKDROP_Y: i32 = 256 - HEIGHT;
 /// Falling at least this fast draws wind streaks over the wassie.
 const SPEED_LINES_FX: i32 = 4 * diamond_hands_logic::FX;
 const KEY_UNSET: u16 = u16::MAX;
@@ -149,8 +165,13 @@ pub struct Renderer {
     /// then, [`KEY_BLANK`] for transparent cells. On the heap, as it is a few KB.
     terrain_by_key: Vec<u16>,
     blank: DynamicTile16,
-    /// Level column held by each terrain map slot.
-    columns: [i32; TERRAIN_COLS as usize],
+    /// The level whose terrain tiles are being made ahead of time, and the next cell
+    /// (row-major) to look at.
+    warm_level: Option<&'static Level>,
+    warm_next: i32,
+    /// Level column held by each terrain map slot, and the rows of it loaded there
+    /// (first, and the one after the last).
+    columns: [(i32, i32, i32); TERRAIN_COLS as usize],
     level: Option<&'static Level>,
     /// The theme and stage whose palettes are loaded.
     theme: Theme,
@@ -166,6 +187,12 @@ pub struct Renderer {
     notice_until: u32,
     /// This frame's camera, including screen shake.
     view_x: i32,
+    /// The top of the screen in level pixels: world objects are drawn this much higher.
+    view_y: i32,
+    /// Whether the file owned the jetpack last frame, to announce finding it, and until
+    /// when.
+    jetpack_seen: bool,
+    gear_until: u32,
     /// Priority for the world's objects: below the dialogue box while it is up.
     world_layer: Priority,
 }
@@ -212,7 +239,7 @@ impl Renderer {
             terrain_tiles: TileCache::new(),
             terrain_by_key: vec![KEY_UNSET; MAX_TERRAIN_KEYS],
             blank: DynamicTile16::new().fill_with(0),
-            columns: [i32::MIN; TERRAIN_COLS as usize],
+            columns: [(i32::MIN, 0, 0); TERRAIN_COLS as usize],
             level: None,
             theme: Theme::Badlands,
             stage: 0,
@@ -221,11 +248,16 @@ impl Renderer {
             cells_seen: 0,
             notice_until: 0,
             view_x: 0,
+            view_y: 0,
+            warm_level: None,
+            warm_next: 0,
+            jetpack_seen: true,
+            gear_until: 0,
             world_layer: Priority::P0,
         };
         // Fill the first screen now, while booting, rather than in the first frame.
         let level = diamond_hands_logic::levels::get(0);
-        while !renderer.stream_terrain(level, 0) {}
+        while !renderer.stream_terrain(level, 0..=WIDTH / TILE, 0, HEIGHT / TILE, CELLS_PER_FRAME) {}
         renderer
     }
 
@@ -262,6 +294,9 @@ impl Renderer {
         self.world_layer = if game.talking() { Priority::P1 } else { Priority::P0 };
         let in_menu =
             matches!(game.scene, Scene::Title | Scene::Options | Scene::Files | Scene::FileChoice);
+        // The menus show the top of the first level, as a backdrop.
+        let cam_y = if in_menu { 0 } else { world.camera_y };
+        self.view_y = cam_y;
 
         // Each level's stretches have their own light: the Badlands go from dusk to a
         // burning night; the Trenches from the strip to the casino to the suites.
@@ -298,10 +333,38 @@ impl Renderer {
             self.fence = fence;
         }
 
-        let terrain_ready = self.stream_terrain(world.level, cam);
+        let level = world.level;
+        let (left, top) = (cam.div_euclid(TILE), cam_y.div_euclid(TILE));
+        let terrain_ready = self.stream_terrain(level, left..=left + WIDTH / TILE, top, top + VIEW_ROWS, CELLS_PER_FRAME);
+        if terrain_ready && in_menu {
+            // Off screen, a little at a time, load the rows the level starts on, so the
+            // first frame of play has nothing new to draw.
+            let start = diamond_hands_logic::World::start_camera_y(level).div_euclid(TILE);
+            let rows = (start + VIEW_ROWS).min(TERRAIN_ROWS);
+            self.stream_terrain(level, left..=left + WIDTH / TILE, 0, rows, LOOKAHEAD_CELLS_PER_FRAME);
+        } else if terrain_ready && game.scene == Scene::Play {
+            // And a margin round the screen, so a column or row scrolling in is usually
+            // there already: no frame has to write a whole one.
+            let (cols, rows) = (left - LOOKAHEAD..=left + WIDTH / TILE + LOOKAHEAD, top - LOOKAHEAD..top + VIEW_ROWS + LOOKAHEAD);
+            self.stream_terrain(level, cols, rows.start, rows.end, LOOKAHEAD_CELLS_PER_FRAME);
+        }
+        // Play keeps the CPU busy and the menus and the level card don't; the frames that
+        // paint dialogue are dear enough already.
+        let warm = match game.scene {
+            Scene::Play => Some((12, 1)),
+            Scene::Intro | Scene::Title | Scene::Files | Scene::FileChoice | Scene::Options => Some((64, 4)),
+            _ => None,
+        };
+        if let Some((cells, new)) = warm.filter(|_| terrain_ready) {
+            self.warm_terrain(level, cells, new);
+        }
         self.terrain
-            .set_scroll_pos(vec2(cam.rem_euclid(TERRAIN_COLS * TILE), 0));
-        self.city.set_scroll_pos(vec2((cam / 3).rem_euclid(256), 0));
+            .set_scroll_pos(vec2(cam.rem_euclid(TERRAIN_COLS * TILE), cam_y.rem_euclid(TERRAIN_ROWS * TILE)));
+        // Going down a tall level, the far-off city and sky drift up a little.
+        let city_y = (cam_y / CITY_DEPTH).min(MAX_BACKDROP_Y);
+        let sky_y = (cam_y / SKY_DEPTH).min(MAX_BACKDROP_Y);
+        self.city.set_scroll_pos(vec2((cam / 3).rem_euclid(256), city_y));
+        self.sky.set_scroll_pos(vec2(0, sky_y));
         if game.talking() {
             // Everyone but the wassie talks from the right: scroll to the copy of the box
             // with its frame there.
@@ -323,6 +386,8 @@ impl Renderer {
             let half = LIFT_RIDE_FRAMES as i32 / 2;
             (16 - (l.timer as i32 - half).abs() * 16 / half).clamp(0, 16) as u8
         });
+        // Underground, the city and the sky fade out behind the rock.
+        let underground = if in_menu { 0 } else { world.level.underground(cam_y) };
         if game.talking() || game.ringing() || ride.is_some() || matches!(game.scene, Scene::Intro | Scene::LevelClear | Scene::Exchange) {
             let amount = match game.scene {
                 _ if ride.is_some() => Num::from_raw(ride.unwrap_or(0).min(15)),
@@ -334,15 +399,31 @@ impl Renderer {
             if let Some(id) = terrain_id {
                 dim.enable_background(id);
             }
+        } else if underground > 0 || (!terrain_ready && !in_menu) {
+            // A screen still filling in after the camera jumped (a respawn) goes dark
+            // behind the sprites until the rock is all there, rather than flashing an
+            // empty sky.
+            let amount = if terrain_ready { underground } else { 16 };
+            frame
+                .blend()
+                .darken(Num::from_raw(amount))
+                .enable_background(city_id)
+                .enable_background(sky_id)
+                .enable_backdrop();
         }
 
-        let cells = game.parts | world.parts;
+        let cells = diamond_hands_logic::world::cells(game.parts | world.parts);
         if game.scene == Scene::Play && cells.count_ones() > self.cells_seen.count_ones() {
             self.notice_until = game.frame + 150;
         }
         if game.scene != Scene::Paused {
             self.cells_seen = cells;
         }
+        let jetpack = world.player.jetpack;
+        if game.scene == Scene::Play && jetpack && !self.jetpack_seen {
+            self.gear_until = game.frame + 180;
+        }
+        self.jetpack_seen = jetpack;
         self.draw_overlay(game, frame);
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             self.draw_hud(game, frame);
@@ -425,14 +506,15 @@ impl Renderer {
         match step {
             0 => {
                 for slot in 0..TERRAIN_COLS {
-                    for ty in 0..20 {
+                    for ty in 0..TERRAIN_ROWS {
                         let effect = TileEffect::new(false, false, TERRAIN_PALETTE);
                         self.terrain.set_tile_dynamic16((slot, ty), &self.blank, effect);
                     }
                 }
                 self.terrain_tiles = TileCache::new();
                 self.terrain_by_key.fill(KEY_UNSET);
-                self.columns = [i32::MIN; TERRAIN_COLS as usize];
+                self.warm_level = None;
+                self.columns = [(i32::MIN, 0, 0); TERRAIN_COLS as usize];
             }
             1 if theme == Theme::Trenches => trenches::paint_sky(&mut self.sky),
             1 => badlands::paint_sky(&mut self.sky),
@@ -449,45 +531,110 @@ impl Renderer {
         true
     }
 
-    /// Writes up to [`COLUMNS_PER_FRAME`] newly visible terrain columns into the map.
-    /// Returns whether the whole screen is now loaded.
-    fn stream_terrain(&mut self, level: &'static Level, cam: i32) -> bool {
+    /// Writes up to `budget` terrain cells into the map, for rows `top..bottom` of
+    /// columns `cols`: whole columns coming in from the side, and the rows coming in at
+    /// the top or bottom of the columns already there. At most [`TERRAIN_COLS`] columns
+    /// and [`TERRAIN_ROWS`] rows. Returns whether they are all loaded.
+    fn stream_terrain(
+        &mut self,
+        level: &'static Level,
+        cols: core::ops::RangeInclusive<i32>,
+        top: i32,
+        bottom: i32,
+        budget: i32,
+    ) -> bool {
         if !self.level.is_some_and(|l| core::ptr::eq(l, level)) {
-            self.columns = [i32::MIN; TERRAIN_COLS as usize];
+            self.columns = [(i32::MIN, 0, 0); TERRAIN_COLS as usize];
             self.level = Some(level);
         }
-        let first = cam.div_euclid(TILE);
-        let mut written = 0;
-        for col in first..=first + WIDTH / TILE {
-            let slot = col.rem_euclid(TERRAIN_COLS);
-            if self.columns[slot as usize] == col {
+        let (top, bottom) = (top.max(0), bottom.min(level.height()));
+        let mut budget = budget;
+        for col in cols {
+            if col < 0 || col >= level.width() {
                 continue;
             }
-            if written == COLUMNS_PER_FRAME {
+            let slot = col.rem_euclid(TERRAIN_COLS) as usize;
+            let (held, lo, hi) = self.columns[slot];
+            // The rows of the column already in the map, clipped to those wanted.
+            let (lo, hi) = if held == col { (lo.max(top), hi.min(bottom)) } else { (top, top) };
+            let (lo, hi) = if lo < hi { (lo, hi) } else { (top, top) };
+            let count = (lo - top) + (bottom - hi);
+            if count == 0 {
+                continue;
+            }
+            if count > budget {
+                // Grow the column's run by what fits, keeping it one run.
+                if budget > 0 && hi > lo {
+                    let (from, to) = if hi < bottom { (hi, (hi + budget).min(bottom)) } else { ((lo - budget).max(top), lo) };
+                    for ty in from..to {
+                        self.write_terrain(level, col, ty);
+                    }
+                    self.columns[slot] = (col, lo.min(from), hi.max(to));
+                }
                 return false;
             }
-            written += 1;
-            self.columns[slot as usize] = col;
-            let trenches = level.theme == Theme::Trenches;
-            for ty in 0..level.height() {
-                let key = if trenches { trenches::terrain_key(level, col, ty) } else { badlands::terrain_key(level, col, ty) };
-                if self.terrain_by_key[key] == KEY_UNSET {
-                    let pixels = if trenches { trenches::terrain_pixels(key) } else { badlands::terrain_pixels(key) };
-                    let id = self.terrain_tiles.intern(pixels);
-                    self.terrain_by_key[key] = id.map_or(KEY_BLANK, |id| id as u16);
-                }
-                let tile = match self.terrain_by_key[key] {
-                    KEY_BLANK => &self.blank,
-                    id => &self.terrain_tiles.tiles[id as usize],
-                };
-                self.terrain.set_tile_dynamic16(
-                    (slot, ty),
-                    tile,
-                    TileEffect::new(false, false, TERRAIN_PALETTE),
-                );
+            budget -= count;
+            for ty in (top..lo).chain(hi..bottom) {
+                self.write_terrain(level, col, ty);
             }
+            self.columns[slot] = (col, top, bottom);
         }
         true
+    }
+
+    fn terrain_key(level: &Level, col: i32, ty: i32) -> usize {
+        match level.theme {
+            Theme::Trenches => trenches::terrain_key(level, col, ty),
+            Theme::Badlands => badlands::terrain_key(level, col, ty),
+        }
+    }
+
+    /// Makes the tile for terrain `key` if it isn't made yet.
+    fn make_terrain_tile(&mut self, theme: Theme, key: usize) {
+        if self.terrain_by_key[key] == KEY_UNSET {
+            let pixels = if theme == Theme::Trenches { trenches::terrain_pixels(key) } else { badlands::terrain_pixels(key) };
+            let id = self.terrain_tiles.intern(pixels);
+            self.terrain_by_key[key] = id.map_or(KEY_BLANK, |id| id as u16);
+        }
+    }
+
+    /// Makes terrain tiles ahead of time, at most `new` of them, looking at up to
+    /// `cells` cells of the level. Making a tile is the dear part of drawing a cell, so
+    /// this runs while there is time to spare, and scrolling into new ground later
+    /// only has to place tiles that already exist.
+    fn warm_terrain(&mut self, level: &'static Level, cells: i32, new: i32) {
+        if !self.warm_level.is_some_and(|l| core::ptr::eq(l, level)) {
+            self.warm_level = Some(level);
+            self.warm_next = 0;
+        }
+        let (w, total) = (level.width(), level.width() * level.height());
+        let mut made = 0;
+        for _ in 0..cells {
+            if self.warm_next >= total {
+                return;
+            }
+            let key = Self::terrain_key(level, self.warm_next % w, self.warm_next / w);
+            if self.terrain_by_key[key] == KEY_UNSET {
+                if made == new {
+                    return;
+                }
+                made += 1;
+                self.make_terrain_tile(level.theme, key);
+            }
+            self.warm_next += 1;
+        }
+    }
+
+    /// Writes the level's cell `(col, ty)` into its terrain map slot.
+    fn write_terrain(&mut self, level: &'static Level, col: i32, ty: i32) {
+        let key = Self::terrain_key(level, col, ty);
+        self.make_terrain_tile(level.theme, key);
+        let tile = match self.terrain_by_key[key] {
+            KEY_BLANK => &self.blank,
+            id => &self.terrain_tiles.tiles[id as usize],
+        };
+        let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
+        self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, TERRAIN_PALETTE));
     }
 
     fn draw_overlay(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -516,7 +663,7 @@ impl Renderer {
             Scene::Exchange => self.draw_exchange(game, frame),
         }
         if game.scene == Scene::Play && game.frame < self.notice_until {
-            let n = (game.parts | game.world.parts).count_ones().min(SHIELD_CELLS);
+            let n = diamond_hands_logic::world::cells(game.parts | game.world.parts).count_ones().min(SHIELD_CELLS);
             let mut text = *b"PLASMA CELL 0/3";
             text[12] = b'0' + n as u8;
             text[14] = b'0' + SHIELD_CELLS as u8;
@@ -524,6 +671,10 @@ impl Renderer {
             if n == SHIELD_CELLS {
                 self.font.draw_centred(frame, "CL207 CAN BUILD THE SHIELD!", 36, false);
             }
+        }
+        if game.scene == Scene::Play && game.frame < self.gear_until {
+            self.font.draw_centred(frame, "JETPACK FOUND!", 26, false);
+            self.font.draw_centred(frame, "HOLD A IN THE AIR TO HOVER", 36, false);
         }
     }
 
@@ -670,7 +821,7 @@ impl Renderer {
 
         // The burst: a spinning ring off the wassie, flying out and away.
         let r = world.player.body.rect();
-        let (cx, cy) = (r.centre_x() - self.view_x, r.centre_y());
+        let (cx, cy) = (r.centre_x() - self.view_x, r.centre_y() - self.view_y);
         if t < 48 {
             let radius = t * 5 / 2;
             for i in 0..BURST {
@@ -1010,6 +1161,12 @@ impl Renderer {
         self.dialog_box.show(frame);
     }
 
+    /// Whether something spanning level pixel rows `top..bottom` shows on screen. Sprites
+    /// far above or below must be skipped, not drawn: object positions wrap at 256.
+    fn on_screen_y(&self, top: i32, bottom: i32) -> bool {
+        bottom > self.view_y - 16 && top < self.view_y + HEIGHT + 16
+    }
+
     /// Shows a sprite of the world (not text or HUD) at screen position (x, y).
     fn put(&self, frame: &mut GraphicsFrame, sprite: &SpriteVram, x: i32, y: i32) {
         Object::new(sprite.clone())
@@ -1095,7 +1252,7 @@ impl Renderer {
         // until CL207 hands over the blaster and the jetpack.
         let arrival = game.arrival_view();
         let in_lift = world.lift.is_some_and(|l| l.riding());
-        if blinking || in_lift || r.y > 160 || arrival.is_some_and(|v| !v.wassie_out) {
+        if blinking || in_lift || !self.on_screen_y(r.y, r.bottom()) || arrival.is_some_and(|v| !v.wassie_out) {
             return;
         }
         let (armed, strapped) = arrival.map_or((true, false), |v| (v.blaster, v.jetpack));
@@ -1108,7 +1265,7 @@ impl Renderer {
         let part = |(ox, oy): (i32, i32), w: i32| (x + if left { 32 - ox - w } else { ox }, y + oy);
         let flipped = |sprite: &SpriteVram, (px, py): (i32, i32), frame: &mut GraphicsFrame| {
             Object::new(sprite.clone())
-                .set_pos(vec2(px, py))
+                .set_pos(vec2(px, py - self.view_y))
                 .set_hflip(left)
                 .set_priority(self.world_layer)
                 .show(frame);
@@ -1121,14 +1278,14 @@ impl Renderer {
             flipped(&self.common.muzzle[late], (mx - 4 - cam, my - 4), frame);
             // A forward shot also throws a ring of light round the barrel's tip.
             if p.aim == Aim::Forward {
-                self.put(frame, &self.common.muzzle_ring[late], mx - 4 + p.facing * 2 - cam, my - 8);
+                self.put(frame, &self.common.muzzle_ring[late], mx - 4 + p.facing * 2 - cam, my - 8 - self.view_y);
             }
         } else if p.charge >= CHARGE_FRAMES {
             let pulse = (game.frame / 4 % 2) as usize;
             let glow = &self.common.charge[if pulse == 0 { 1 } else { 0 }];
-            self.put(frame, glow, mx - 4 - cam, my - 4);
+            self.put(frame, glow, mx - 4 - cam, my - 4 - self.view_y);
         } else if p.charge > 12 && (game.frame / 2).is_multiple_of(2) {
-            self.put(frame, &self.common.charge[0], mx - 4 - cam, my - 4);
+            self.put(frame, &self.common.charge[0], mx - 4 - cam, my - 4 - self.view_y);
         }
 
         // Objects shown first sit on top. Pointing straight up, the cannon would hide
@@ -1163,10 +1320,10 @@ impl Renderer {
                 let a = (game.frame as i32 / 3 + i * 6) % 18;
                 let sx = r.centre_x() - 4 - cam + (a - 9).abs() * 2 - 9;
                 let sy = r.y - 12 + (a % 9) / 3;
-                self.put(frame, &self.villains.star, sx, sy);
+                self.put(frame, &self.villains.star, sx, sy - self.view_y);
             }
         } else if p.state == PlayerState::Fall && p.body.vy_fx >= SPEED_LINES_FX {
-            self.put(frame, &self.common.speed_lines, r.centre_x() - 4 - cam, r.y - 14);
+            self.put(frame, &self.common.speed_lines, r.centre_x() - 4 - cam, r.y - 14 - self.view_y);
         }
 
         let (body, recoil) = self.wassie.sprite(p, anim, game.frame);
@@ -1184,7 +1341,7 @@ impl Renderer {
         let cam = self.view_x;
         let show_at = |frame: &mut GraphicsFrame, sprite: &SpriteVram, (x, y): (i32, i32), flip: bool| {
             Object::new(sprite.clone())
-                .set_pos(vec2(x - cam, y))
+                .set_pos(vec2(x - cam, y - self.view_y))
                 .set_hflip(flip)
                 .set_priority(self.world_layer)
                 .show(frame);
@@ -1227,7 +1384,7 @@ impl Renderer {
         let (c, v) = (&self.common, &self.villains);
         for s in game.world.shots.iter().filter(|s| s.active) {
             let r = s.rect();
-            if r.right() < cam - 32 || r.x > cam + WIDTH + 32 {
+            if r.right() < cam - 32 || r.x > cam + WIDTH + 32 || !self.on_screen_y(r.y, r.bottom()) {
                 continue;
             }
             let left = s.vx_fx < 0;
@@ -1257,7 +1414,7 @@ impl Renderer {
             };
             let flip_v = down && s.kind.from_player();
             Object::new(sprite.clone())
-                .set_pos(vec2(x - cam, y))
+                .set_pos(vec2(x - cam, y - self.view_y))
                 .set_hflip(left)
                 .set_vflip(flip_v)
                 .set_priority(self.world_layer)
@@ -1292,7 +1449,7 @@ impl Renderer {
             }
         };
         Object::new(sprite.clone())
-            .set_pos(vec2(x, y))
+            .set_pos(vec2(x, y - self.view_y))
             .set_hflip(hflip)
             .set_vflip(vflip)
             .set_priority(self.world_layer)
@@ -1315,8 +1472,11 @@ impl Renderer {
             let h = (a as u32).wrapping_mul(73_856_093) ^ (b as u32).wrapping_mul(19_349_663) ^ tick.wrapping_mul(83_492_791);
             h ^ (h >> 13)
         };
+        // Emitters from the top of the screen to a little below it, whose lightning
+        // can reach up into view.
+        let rows = self.view_y.div_euclid(TILE).max(0)..level.height().min((self.view_y + HEIGHT).div_euclid(TILE) + 8);
         for tx in cam.div_euclid(TILE)..=(cam + WIDTH).div_euclid(TILE) {
-            for ty in 0..level.height() {
+            for ty in rows.clone() {
                 if level.tile(tx, ty) != diamond_hands_logic::level::Tile::Spike {
                     continue;
                 }
@@ -1325,7 +1485,7 @@ impl Renderer {
                 if state == 1 {
                     let h = mix(tx, ty);
                     Object::new(c.fence_spark.clone())
-                        .set_pos(vec2(x, base - 7))
+                        .set_pos(vec2(x, base - 7 - self.view_y))
                         .set_hflip(h & 1 != 0)
                         .set_priority(self.world_layer)
                         .show(frame);
@@ -1347,7 +1507,7 @@ impl Renderer {
                     // Each piece's ends sit on the centre line: flipping either way
                     // still joins up, and doubles the crackles.
                     Object::new(sprite.clone())
-                        .set_pos(vec2(x, y))
+                        .set_pos(vec2(x, y - self.view_y))
                         .set_hflip(h & 16 != 0)
                         .set_vflip(h & 32 != 0)
                         .set_priority(self.world_layer)
@@ -1362,6 +1522,9 @@ impl Renderer {
         let cam = self.view_x;
         let c = &self.common;
         for f in game.world.fx.active() {
+            if !self.on_screen_y(f.y - 48, f.y + 16) {
+                continue;
+            }
             let (sprite, half) = match f.kind {
                 FxKind::Impact => (&c.impact[f.frame(3)], 4),
                 FxKind::Explosion => (&c.explosion[f.frame(3)], 8),
@@ -1371,7 +1534,7 @@ impl Renderer {
                 FxKind::Dust => {
                     // Sits on the ground and drifts up a little as it thins.
                     let y = f.y + 3 - 8 - f.age as i32 / 5;
-                    self.put(frame, &c.dust[f.frame(3)], f.x - 4 - cam, y);
+                    self.put(frame, &c.dust[f.frame(3)], f.x - 4 - cam, y - self.view_y);
                     continue;
                 }
                 FxKind::Wreck | FxKind::NinjaWreck => {
@@ -1399,10 +1562,10 @@ impl Renderer {
                         // A wisp of smoke curling up off the wreck.
                         let rise = (t - 18) % 24;
                         let sway = [0, 1, 1, 0, -1, -1][(rise / 4) as usize];
-                        self.put(frame, &c.dust[(rise / 8) as usize], f.x - 4 + sway - cam, f.y - 14 - rise / 2);
+                        self.put(frame, &c.dust[(rise / 8) as usize], f.x - 4 + sway - cam, f.y - 14 - rise / 2 - self.view_y);
                     }
                     Object::new(sprite)
-                        .set_pos(vec2(pose_left(f.x, anchor, f.flip) - cam, f.y - 32))
+                        .set_pos(vec2(pose_left(f.x, anchor, f.flip) - cam, f.y - 32 - self.view_y))
                         .set_hflip(f.flip)
                         .set_priority(self.world_layer)
                         .show(frame);
@@ -1414,14 +1577,14 @@ impl Renderer {
                     };
                     if f.kind == FxKind::Splat {
                         if let Some(arena) = &casino.arena {
-                            self.put(frame, &arena.sam_fx.splat[f.frame(2)], f.x - 8 - cam, f.y - 8);
+                            self.put(frame, &arena.sam_fx.splat[f.frame(2)], f.x - 8 - cam, f.y - 8 - self.view_y);
                         }
                     } else {
                         // Flips up and falls back, spinning.
                         let t = f.age as i32;
                         let y = f.y - 4 - (t * (22 - t)) / 6;
                         let spin = &casino.coin[(t / 3 % 3) as usize];
-                        self.put(frame, spin, f.x - 4 - cam, y);
+                        self.put(frame, spin, f.x - 4 - cam, y - self.view_y);
                     }
                     continue;
                 }
@@ -1431,7 +1594,7 @@ impl Renderer {
                     for left in [false, true] {
                         let x = if left { f.x - 16 } else { f.x };
                         Object::new(sprite.clone())
-                            .set_pos(vec2(x - cam, f.y + 3 - 8))
+                            .set_pos(vec2(x - cam, f.y + 3 - 8 - self.view_y))
                             .set_hflip(left)
                             .set_priority(self.world_layer)
                             .show(frame);
@@ -1445,7 +1608,7 @@ impl Renderer {
                 FxKind::Puff => -(f.age as i32) / 3,
                 _ => 0,
             };
-            self.put(frame, sprite, f.x - half - cam, f.y - half - rise);
+            self.put(frame, sprite, f.x - half - cam, f.y - half - rise - self.view_y);
         }
     }
 
@@ -1457,7 +1620,7 @@ impl Renderer {
         }
         let cam = self.view_x;
         let r = boss.rect();
-        if r.right() < cam - 32 || r.x > cam + WIDTH + 32 {
+        if r.right() < cam - 32 || r.x > cam + WIDTH + 32 || !self.on_screen_y(r.bottom() - 64, r.bottom()) {
             return;
         }
         let bera = match self.level_art.as_ref() {
@@ -1481,7 +1644,7 @@ impl Renderer {
         let x = r.centre_x() - 32 - cam + shake;
         let part = |sprite: &SpriteVram, (px, py): (i32, i32), w: i32, top: i32, frame: &mut GraphicsFrame| {
             Object::new(sprite.clone())
-                .set_pos(vec2(x + badlands::flip_x(px, w, flip), top + py))
+                .set_pos(vec2(x + badlands::flip_x(px, w, flip), top + py - self.view_y))
                 .set_hflip(flip)
                 .set_priority(self.world_layer)
                 .show(frame);
@@ -1516,7 +1679,7 @@ impl Renderer {
                 let a = (game.frame as i32 / 4 + i * 8) % 24;
                 let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
                 let sy = top + head.1 - 6 + (a % 12) / 3;
-                self.put(frame, &self.villains.star, sx, sy);
+                self.put(frame, &self.villains.star, sx, sy - self.view_y);
             }
         }
         if stalled {
@@ -1572,7 +1735,7 @@ impl Renderer {
         let shake = if shaking { (t % 2) as i32 * 2 - 1 } else { 0 };
         // The sheet draws him facing right.
         Object::new(arena.sam.sprite(pose))
-            .set_pos(vec2(r.centre_x() - 32 - cam + shake, r.bottom() - 64))
+            .set_pos(vec2(r.centre_x() - 32 - cam + shake, r.bottom() - 64 - self.view_y))
             .set_hflip(boss.facing < 0)
             .set_priority(self.world_layer)
             .show(frame);
@@ -1583,14 +1746,14 @@ impl Renderer {
                 let a = (t as i32 / 2 + i * 4) % 16;
                 let (ax, ay) = (SIN16[(a as usize + 4) % 16] * 22 / 64, SIN16[a as usize] * 22 / 64);
                 let spark = &arena.sam_fx.aura[((t / 2 + i as u32) % 2) as usize];
-                self.put(frame, spark, r.centre_x() - 4 - cam + ax, r.centre_y() - 8 + ay);
+                self.put(frame, spark, r.centre_x() - 4 - cam + ax, r.centre_y() - 8 + ay - self.view_y);
             }
         }
         if boss.dazed() {
             for i in 0..3 {
                 let a = (t as i32 / 4 + i * 8) % 24;
                 let sx = r.centre_x() - 4 - cam + (a - 12).abs() * 2 - 12;
-                self.put(frame, &self.villains.star, sx, r.y - 4 + (a % 12) / 3);
+                self.put(frame, &self.villains.star, sx, r.y - 4 + (a % 12) / 3 - self.view_y);
             }
         }
     }
@@ -1617,22 +1780,22 @@ impl Renderer {
             };
             for &(panel, right_edge) in panels {
                 let door = &casino.lift_door[panel];
-                self.put(frame, door, sx + 4 + right_edge - 8, sy + 7);
+                self.put(frame, door, sx + 4 + right_edge - 8, sy + 7 - self.view_y);
                 Object::new(door.clone())
-                    .set_pos(vec2(sx + 28 - right_edge, sy + 7))
+                    .set_pos(vec2(sx + 28 - right_edge, sy + 7 - self.view_y))
                     .set_hflip(true)
                     .set_priority(self.world_layer)
                     .show(frame);
             }
             let powering = lift.state == LiftState::Powering && !upstairs;
             if powering && (game.frame / 4).is_multiple_of(2) {
-                self.put(frame, &self.common.glint[0], sx + 12, sy - 2);
+                self.put(frame, &self.common.glint[0], sx + 12, sy - 2 - self.view_y);
             }
-            self.put(frame, &casino.lift, sx, sy);
+            self.put(frame, &casino.lift, sx, sy - self.view_y);
         }
         if let Some((px, py)) = game.world.up_prompt() {
             let bob = (game.frame / 10 % 2) as i32;
-            self.put(frame, &casino.up_prompt, px - 8 - cam, py - 16 - bob);
+            self.put(frame, &casino.up_prompt, px - 8 - cam, py - 16 - bob - self.view_y);
         }
     }
 
@@ -1644,7 +1807,7 @@ impl Renderer {
         let floor = self.level_art.as_ref().and_then(LevelArt::floor);
         for a in world.actors.iter().filter(|a| a.alive) {
             let r = a.rect();
-            if r.right() < cam - 16 || r.x > cam + WIDTH + 16 {
+            if r.right() < cam - 16 || r.x > cam + WIDTH + 16 || !self.on_screen_y(r.bottom() - 32, r.bottom() + 8) {
                 continue;
             }
             if a.flash > 0 && (game.frame / 2).is_multiple_of(2) {
@@ -1659,6 +1822,14 @@ impl Renderer {
                     (&c.diamond[glint as usize], x - 4, r.y - 4, false)
                 }
                 ActorKind::Heal => (&c.heal, x - 3, r.y - 3, false),
+                ActorKind::Jetpack => {
+                    // Bobbing where it fell, glinting now and then.
+                    let bob = (game.frame / 16 % 2) as i32;
+                    if (game.frame + r.x as u32) % 40 < 6 {
+                        self.put(frame, &c.glint[0], x - 2, r.y - 6 - self.view_y);
+                    }
+                    (&self.wassie.jetpack, x + 2, r.y - bob, false)
+                }
                 ActorKind::Checkpoint => {
                     let lit = (a.state == state::LIT) as usize;
                     (&c.flag[lit], x - 2, r.bottom() - 32, false)
@@ -1679,7 +1850,7 @@ impl Renderer {
                     if recoil {
                         let (mx, my) = (r.centre_x() + a.facing * (SENTRY_MUZZLE.0 + 2), r.bottom() - SENTRY_MUZZLE.1);
                         Object::new(c.muzzle[(a.timer % 2) as usize].clone())
-                            .set_pos(vec2(mx - 4 - cam, my - 4))
+                            .set_pos(vec2(mx - 4 - cam, my - 4 - self.view_y))
                             .set_hflip(flip)
                             .set_priority(self.world_layer)
                             .show(frame);
@@ -1729,7 +1900,7 @@ impl Renderer {
                     if fired {
                         let x = if flip { left - NINJA_FLAME_X } else { left + NINJA_FLAME_X };
                         Object::new(floor.ninja.sprite(NinjaPose::Flame as usize))
-                            .set_pos(vec2(x, r.bottom() - 32))
+                            .set_pos(vec2(x, r.bottom() - 32 - self.view_y))
                             .set_hflip(flip)
                             .set_priority(self.world_layer)
                             .show(frame);
@@ -1752,7 +1923,7 @@ impl Renderer {
                         let w = if a.kind == ActorKind::Terminal { 16 } else { 8 };
                         let ox = if flip { 16 - ox - w } else { ox };
                         Object::new(sprite.clone())
-                            .set_pos(vec2(left + ox, top + oy))
+                            .set_pos(vec2(left + ox, top + oy - self.view_y))
                             .set_hflip(flip && a.kind != ActorKind::Terminal)
                             .set_priority(self.world_layer)
                             .show(frame);
@@ -1761,7 +1932,7 @@ impl Renderer {
                         ActorKind::Part => {
                             let bob = (game.frame / 16 % 2) as i32;
                             if (game.frame + r.x as u32) % 40 < 6 {
-                                self.put(frame, &c.glint[0], x - 1, r.y - 4);
+                                self.put(frame, &c.glint[0], x - 1, r.y - 4 - self.view_y);
                             }
                             (&floor.cell, x - 3, r.y - 2 - bob, false)
                         }
@@ -1775,12 +1946,12 @@ impl Renderer {
                 matches!(a.kind, ActorKind::Sentry | ActorKind::Crawler | ActorKind::Dealer | ActorKind::Guard)
                     && a.state == state::AIM;
             if winding_up {
-                self.put(frame, &c.alert, r.centre_x() - 4 - cam, r.y - 14);
+                self.put(frame, &c.alert, r.centre_x() - 4 - cam, r.y - 14 - self.view_y);
             }
             // Pickups in a secret passage sit behind its false wall until walked into.
             let hidden = trenches::behind_false_wall(world.level, r.centre_x().div_euclid(TILE), (r.bottom() - 1).div_euclid(TILE));
             let mut obj = Object::new(sprite.clone());
-            obj.set_pos(vec2(sx, sy))
+            obj.set_pos(vec2(sx, sy - self.view_y))
                 .set_hflip(flip)
                 .set_priority(if hidden { Priority::P2 } else { self.world_layer });
             if a.kind == ActorKind::Mine {
