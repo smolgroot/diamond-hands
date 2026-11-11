@@ -141,6 +141,10 @@ Art direction follows `cover.png` and the project skill in `.claude/skills/diamo
 The backdrops (sky and city) are muted, and the scenery pictures on the terrain less so
 (`BACKDROP_MUTE` and `SCENERY_MUTE` in `game/src/art/mod.rs`). The wassie, the bots and
 the ground they stand on keep their full colour, so they stand out.
+The Badlands' ground follows the tiles mockup in `.claude/mockup/` (`level1-tiles.png`):
+lime moss hanging over the edges in leafy lobes, two courses of rounded purple bricks
+under it, then big slanted flagstones with blue crystals glinting in them, pillars of
+stacked blocks up the cliff faces, a brick trim under ceilings and grey steel girders.
 The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
 - the wassie has a gold rim light, a broad bill and a red neck scarf
 - it squashes on a hard landing and leans back when it skids
@@ -273,6 +277,17 @@ Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of th
 aiming, each line of dialogue, each waypoint on the Badlands' route (`b1-*`), the
 level-clear sequence, each pause-menu page, and the Trenches' storeys (street, back room,
 sewers, the shaft, the tower), SAM's attacks and the exchange (`t2-*`).
+
+Set `DIAMOND_HANDS_PROFILE=<file>` to profile the ROM through Level 2 in
+`the_trenches_play_through_to_the_exchange_in_step_with_the_model` (profiled frames aren't
+drawn, so take screenshots in a separate run). Each video frame gets an `F` line: busy
+CPU cycles out of 280,896, scene, camera x and y, bots and shots on screen, objects in
+OAM, fence state, game frame, and whether the wassie's sprite is in OAM (`1`, `0`, or `-`
+while it shouldn't show). Then `P <pc> <cycles>` lines give cycles by program counter, to
+look up with `nm -C --numeric-sort` or `addr2line` on
+`game/target/thumbv4t-none-eabi/release/diamond-hands`.
+`DIAMOND_HANDS_PROFILE_WATCH=<hex start>-<hex end>,...` also logs who calls the leaf
+functions in those address ranges (`C <range> <lr> <cycles>`).
 
 ## Known limitations
 

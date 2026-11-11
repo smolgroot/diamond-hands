@@ -1,5 +1,5 @@
-//! Level 1, the Badlands: a dystopian dusk over a ruined city, mossy cliffs with
-//! crystal veins, steel girders and energy spikes; the cyber bots that guard it, and
+//! Level 1, the Badlands: a dystopian dusk over a ruined city, mossy cliffs of
+//! purple brick and crystal-set flagstone, steel girders and energy spikes; the cyber bots that guard it, and
 //! BERA 3000. The bots go on to guard the Solana Trenches too.
 
 use agb::display::{
@@ -125,26 +125,27 @@ mod ground_ix {
     pub const CRYSTAL_LIGHT: u8 = 11;
     pub const CRYSTAL: u8 = 12;
     pub const CRYSTAL_DARK: u8 = 13;
-    pub const SCRAP: u8 = 14;
+    /// The deep flagstones' face, a shade under the bricks'.
+    pub const ROCK_DEEP: u8 = 14;
     pub const ENERGY: u8 = 15;
 }
 
 const GROUND_COLOURS: [(u16, u16, u16); 16] = [
     (0, 0, 0),
-    (3, 2, 7),
-    (16, 28, 10),
-    (8, 20, 8),
-    (4, 11, 6),
-    (16, 11, 22),
-    (10, 6, 16),
-    (5, 3, 9),
-    (18, 26, 24),
-    (8, 17, 16),
-    (3, 8, 9),
-    (22, 29, 31),
+    (2, 1, 5),
+    (24, 31, 10),
+    (15, 27, 5),
+    (6, 15, 3),
+    (20, 9, 20),
+    (15, 6, 16),
+    (8, 3, 11),
+    (24, 23, 27),
+    (15, 14, 19),
+    (7, 7, 11),
+    (24, 30, 31),
     (8, 17, 31),
-    (4, 7, 20),
-    (26, 24, 28),
+    (7, 5, 22),
+    (12, 4, 14),
     (31, 6, 22),
 ];
 
@@ -156,7 +157,7 @@ pub fn ground_palette(stage: u8, fence: u8) -> Palette16 {
     let mut colours = [rgb(0, 0, 0); 16];
     for (i, (out, &(r, g, b))) in colours.iter_mut().zip(base.iter()).enumerate() {
         // Energy spikes and crystals keep their glow.
-        let (num, den) = if matches!(i, 11 | 12 | 15) { (1, 1) } else { (num, den) };
+        let (num, den) = if matches!(i, 11..=13 | 15) { (1, 1) } else { (num, den) };
         *out = rgb((r * num / den + red).min(31), g * num / den, b * num / den);
     }
     // Fence nodes: dead and dark, a dim blink as a warning, or white-blue hot.
@@ -299,7 +300,9 @@ pub fn paint_city(bg: &mut RegularBackground) {
 }
 
 /// Number of distinct [`terrain_key`] values.
-pub const TERRAIN_KEYS: usize = 8 * 3 * 16 * 4 * 3;
+pub const TERRAIN_KEYS: usize = 9 * 3 * 16 * 4 * 3;
+/// The kind of a rock cell with a crystal set in it.
+const GEM_KIND: usize = 8;
 
 /// What a terrain cell looks like depends only on its kind, how deep it sits below the
 /// surface, which sides are open, and its column mod 4 and row mod 3 (for speckles,
@@ -344,6 +347,18 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
     };
     let open = |dx, dy| !solid(dx, dy) as usize;
     let sides = open(0, -1) | open(-1, 0) << 1 | open(1, 0) << 2 | open(0, 1) << 3;
+    // Deep rock holds a crystal at one of two spots in some 32x24 blocks, scattered
+    // by a hash of the block so they don't line up.
+    let (bx, by) = (tx >> 2, ty.div_euclid(3));
+    let kind = if kind == 1 && depth == 2 && sides == 0 {
+        let at = |i: usize| GEMS[i].0 == (tx & 3) && GEMS[i].1 == ty.rem_euclid(3);
+        let mut hash = (bx as u32).wrapping_mul(0x9E37_79B1) ^ (by as u32).wrapping_mul(0x85EB_CA77);
+        hash ^= hash >> 15;
+        let hash = hash.wrapping_mul(0x2C1B_3C6D) >> 28;
+        if (at(0) && hash < 5) || (at(1) && (6..10).contains(&hash)) { GEM_KIND } else { kind }
+    } else {
+        kind
+    };
     ((((kind * 3 + depth) * 16 + sides) * 4 + (tx & 3) as usize) * 3) + ty.rem_euclid(3) as usize
 }
 
@@ -411,107 +426,194 @@ fn stamp(px: &mut [u8; 64], art: &[&[u8; 8]; 8], flip: bool) {
                 b'g' => METAL_DARK,
                 b'c' => CRYSTAL,
                 b'e' => ENERGY,
-                b'w' => SCRAP,
                 _ => 0,
             };
         }
     }
 }
 
-/// Pixels for a [`terrain_key`]. Rock: moss on exposed tops with drips over the edge,
-/// purple strata and cracks that darken with depth, blue crystal veins, lit right faces,
-/// shaded left faces, shadowed undersides and rounded outer corners. Crystal-studded
-/// boulders, steel girders, energy spikes, and scenery.
+/// The moss on an exposed top, 32 px wide (`gx`), after the mockup. Its top row is
+/// the walking line, so feet rest right on the lit grass; everything else hangs below
+/// it: a lime band, then rounded leaves over the bricks, lit ones in front and dark
+/// ones peeking out from behind. `k` outline, `H` lit, `M` moss, `d` dark and `.` the
+/// rock showing through.
+const MOSS_STRIP: [&[u8; 32]; 8] = [
+    b"HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
+    b"MHMMHMMHMMMMMHMMMMMHMMHMMHMMMMMH",
+    b"MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
+    b"MMMMMMdddMMMMMMMMMMdddMMMMMMMMMM",
+    b"dHMMMdddddHMMddHMMdddddHMMMddHMd",
+    b"dMMMMddddkMMMkdMMMdkkkdMMMMdkMMk",
+    b"kMMMMkkkk.kkk.kMMMk...kMMMMk.kk.",
+    b".kkkk..........kkk.....kkkk.....",
+];
+
+/// Brick courses under the moss, after `.claude/mockup/level1-tiles.png`: each is the
+/// pixel row below the surface it starts on, four rows tall over a row of mortar, and
+/// the columns (mod 32) of its joints.
+const COURSES: [(i32, [i32; 4]); 2] = [(6, [5, 14, 22, 29]), (11, [1, 10, 18, 26])];
+/// The flagstones under the bricks: two rows of slabs every 24 px, eleven rows tall
+/// over a row of mortar, with joints (mod 32) that lean right as they go down.
+const SLAB_JOINTS: [[i32; 2]; 2] = [[0, 18], [9, 25]];
+/// Crystals set in the flagstones: (column mod 4, row mod 3, x, y in the cell, big).
+const GEMS: [(i32, i32, i32, i32, bool); 2] = [(1, 0, 4, 5, true), (3, 2, 6, 3, false)];
+
+/// A stone's shading from where a pixel sits in it: `top`, `bottom`, `first` and
+/// `last` say whether the pixel is on its top or bottom row or its first or last
+/// column. Lit from the upper left, with rounded corners.
+fn stone(top: bool, bottom: bool, first: bool, last: bool, light: u8, face: u8) -> u8 {
+    use ground_ix::*;
+    if (top || bottom) && (first || last) {
+        OUTLINE
+    } else if top || first {
+        light
+    } else if bottom || last {
+        ROCK_DARK
+    } else {
+        face
+    }
+}
+
+/// A pixel of the rock's interior at column `gx` (mod 32): two courses of rounded
+/// bricks `py` rows under the surface, then big slanted flagstones (`gy` is the row
+/// mod 24) studded with crystals.
+fn rock_pixel(gx: i32, py: i32, gy: i32) -> u8 {
+    use ground_ix::*;
+    let wrap = |x: i32| x.rem_euclid(32);
+    let speck = (gx * 7 + gy * 13 + gx * gy) % 29 == 0;
+    if py < 16 {
+        let Some(&(start, joints)) = COURSES.iter().find(|c| (c.0..c.0 + 4).contains(&py)) else {
+            return OUTLINE;
+        };
+        if joints.contains(&gx) {
+            return OUTLINE;
+        }
+        let r = py - start;
+        let px = stone(r == 0, r == 3, joints.contains(&wrap(gx - 1)), joints.contains(&wrap(gx + 1)), ROCK_LIGHT, ROCK);
+        return if px == ROCK && speck { ROCK_DARK } else { px };
+    }
+    let (row, yy) = (gy / 12, gy % 12);
+    if yy == 11 {
+        return OUTLINE;
+    }
+    let joints = SLAB_JOINTS[row as usize];
+    let x = wrap(gx - yy / 3);
+    if joints.contains(&x) {
+        return OUTLINE;
+    }
+    let px = stone(yy == 0, yy == 10, joints.contains(&wrap(x - 1)), joints.contains(&wrap(x + 1)), ROCK, ROCK_DEEP);
+    if px == ROCK_DEEP && speck { ROCK } else { px }
+}
+
+/// A pixel of a pillar of stacked blocks up an exposed side, `x` 0..3 across it and
+/// `gy` the row mod 24.
+fn pillar_pixel(x: i32, w: i32, gy: i32) -> u8 {
+    use ground_ix::*;
+    let s = gy % 6;
+    if s == 5 {
+        OUTLINE
+    } else {
+        stone(s == 0, s == 4, x == 0, x == w - 1, ROCK_LIGHT, ROCK)
+    }
+}
+
+/// Pixels for a [`terrain_key`], after the tiles mockup in `.claude/mockup/`. Rock:
+/// bright lime moss on exposed tops, hanging over the edge in leafy lobes; two
+/// courses of rounded purple bricks under it, then big slanted flagstones set with
+/// glowing blue crystals; pillars of stacked blocks up exposed sides, shadowed
+/// undersides and rounded outer corners. Crystal-studded boulders, steel girders,
+/// energy spikes, and scenery.
 pub fn terrain_pixels(key: usize) -> [u8; 64] {
     use ground_ix::*;
     let row3 = (key % 3) as i32;
     let col4 = (key / 3 % 4) as i32;
     let sides = key / 12 % 16;
-    let depth = key / 192 % 3;
+    let depth = (key / 192 % 3) as i32;
     let kind = key / 576;
     let (up, left, right, down) = (sides & 1 != 0, sides & 2 != 0, sides & 4 != 0, sides & 8 != 0);
     let mut px = [0u8; 64];
     match kind {
-        1 | 4 => {
-            let boulder = kind == 4;
+        1 | GEM_KIND => {
             for (i, p) in px.iter_mut().enumerate() {
                 let (x, y) = ((i % 8) as i32, (i / 8) as i32);
-                // Row within the 24px strata cycle, and a sparse speckle pattern.
-                let gy = row3 * 8 + y;
-                let speck = ((col4 * 8 + x) * 7 + gy * 13 + x * y) % 23 == 0;
-                let crack = col4 == 1 && row3 == 2 && matches!((x, y), (2, 1) | (3, 2) | (3, 3) | (4, 4) | (4, 5) | (5, 6));
-                let vein = depth > 0 && col4 == 3 && row3 == 1;
-                let edge = (up && y == 0) || (left && x == 0) || (right && x == 7) || (down && y == 7);
-                *p = if boulder {
-                    // A rock studded with crystal facets catching the light.
-                    if edge {
-                        OUTLINE
-                    } else if (1..=3).contains(&x) && (1..=3).contains(&y) {
-                        if x + y <= 3 { CRYSTAL_LIGHT } else { CRYSTAL }
-                    } else if (5..=6).contains(&x) && y == 5 {
-                        CRYSTAL_DARK
-                    } else if (x + y) > 9 || speck {
-                        ROCK
-                    } else {
-                        ROCK_LIGHT
+                let (gx, gy) = (col4 * 8 + x, row3 * 8 + y);
+                let py = if depth < 2 { depth * 8 + y } else { 16 + y };
+                let moss = if !up {
+                    None
+                } else {
+                    match MOSS_STRIP[y as usize][gx as usize] {
+                        b'.' => None,
+                        b'k' => Some(OUTLINE),
+                        b'H' => Some(MOSS_LIGHT),
+                        b'M' => Some(MOSS),
+                        _ => Some(MOSS_DARK),
                     }
-                } else if up && y == 0 {
-                    OUTLINE
-                } else if up && y == 1 {
-                    MOSS_LIGHT
-                } else if up && y <= 3 {
-                    if speck { MOSS_LIGHT } else { MOSS }
-                } else if up && y == 4 && (x + col4) % 3 != 0 {
-                    MOSS_DARK
-                } else if up && y == 5 && (x + col4) % 3 == 1 {
-                    // Moss dripping over the rock.
-                    MOSS_DARK
-                } else if left && x == 0 {
-                    OUTLINE
-                } else if left && x == 1 {
-                    ROCK_DARK
-                } else if right && x == 7 {
-                    OUTLINE
-                } else if right && x == 6 {
-                    ROCK_LIGHT
+                };
+                *p = if let Some(m) = moss {
+                    if (left && x == 0) || (right && x == 7) { OUTLINE } else { m }
                 } else if down && y == 7 {
                     OUTLINE
+                } else if (left && x == 0) || (right && x == 7) {
+                    OUTLINE
+                } else if left && right {
+                    pillar_pixel(x - 1, 6, gy)
+                } else if left && x <= 3 {
+                    pillar_pixel(x - 1, 3, gy)
+                } else if right && x >= 4 {
+                    pillar_pixel(x - 4, 3, gy)
+                } else if (left && x == 4) || (right && x == 3) {
+                    OUTLINE
+                } else if down && !up && y >= 2 {
+                    // Ceilings and overhangs end in a course of bricks.
+                    if y == 2 { OUTLINE } else { rock_pixel(gx, COURSES[0].0 + y - 3, gy) }
                 } else if down && y == 6 {
                     ROCK_DARK
-                } else if crack {
-                    OUTLINE
-                } else if vein && matches!((x, y), (3, 3) | (4, 3) | (4, 4) | (5, 4)) {
-                    if (x, y) == (3, 3) { CRYSTAL_LIGHT } else { CRYSTAL }
-                } else if vein && matches!((x, y), (3, 4) | (5, 5)) {
-                    CRYSTAL_DARK
-                } else if depth == 2 {
-                    // Deep rock: dark, with faint veins.
-                    if (gy + x) % 7 == 0 || speck { ROCK } else { ROCK_DARK }
-                } else if gy % 6 == 0 || speck {
-                    ROCK_DARK
-                } else if (gy + 3) % 6 == 0 && (col4 + x / 4) % 2 == 0 {
-                    ROCK_LIGHT
                 } else {
-                    ROCK
+                    rock_pixel(gx, py, gy)
                 };
             }
-            // Round off outer corners.
-            for (open_a, open_b, corner, inner) in [
-                (up, left, [(0, 0), (1, 0), (0, 1)], (1, 1)),
-                (up, right, [(7, 0), (6, 0), (7, 1)], (6, 1)),
-                (down, left, [(0, 7), (1, 7), (0, 6)], (1, 6)),
-                (down, right, [(7, 7), (6, 7), (7, 6)], (6, 6)),
-            ] {
-                if open_a && open_b {
-                    for (x, y) in corner {
-                        px[y * 8 + x] = 0;
+            // A crystal glinting in the flagstones.
+            if kind == GEM_KIND {
+                for &(c, r, gx, gy, big) in &GEMS {
+                    if (c, r) != (col4, row3) {
+                        continue;
                     }
-                    px[inner.1 * 8 + inner.0] = OUTLINE;
+                    for (dx, dy) in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                        let d = (dx as i32).abs() + (dy as i32).abs();
+                        let colour = match (big, d) {
+                            (true, 0) => CRYSTAL_LIGHT,
+                            (true, 1) => if dx + dy < 0 { CRYSTAL_LIGHT } else { CRYSTAL },
+                            (true, _) => CRYSTAL_DARK,
+                            (false, 0) => CRYSTAL_LIGHT,
+                            (false, 1) => CRYSTAL,
+                            (false, _) if d == 2 && dx != 0 && dy != 0 => CRYSTAL_DARK,
+                            _ => continue,
+                        };
+                        px[((gy + dy) * 8 + gx + dx) as usize] = colour;
+                    }
                 }
             }
+            round_corners(&mut px, up, left, right, down);
+        }
+        4 => {
+            // A loose flagstone studded with crystal facets catching the light.
+            for (i, p) in px.iter_mut().enumerate() {
+                let (x, y) = ((i % 8) as i32, (i / 8) as i32);
+                let edge = (up && y == 0) || (left && x == 0) || (right && x == 7) || (down && y == 7);
+                *p = if edge {
+                    OUTLINE
+                } else if (2..=4).contains(&x) && (2..=4).contains(&y) && (x - 3).abs() + (y - 3).abs() <= 1 {
+                    if (x, y) == (3, 3) || x + y < 6 { CRYSTAL_LIGHT } else { CRYSTAL }
+                } else if (x - 3).abs() + (y - 3).abs() == 2 {
+                    CRYSTAL_DARK
+                } else {
+                    stone((up && y == 1) || (!up && y == 0), (down && y == 6) || (!down && y == 7), (left && x == 1) || (!left && x == 0), (right && x == 6) || (!right && x == 7), ROCK_LIGHT, ROCK_DEEP)
+                };
+            }
+            round_corners(&mut px, up, left, right, down);
         }
         2 => {
-            // A steel girder: rivets on the face, a truss underneath.
+            // A steel girder: a lit top bar with bolted plates, a bracket underneath.
             for x in 0..8 {
                 px[x] = OUTLINE;
                 px[8 + x] = METAL_LIGHT;
@@ -519,11 +621,18 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
                 px[24 + x] = METAL_DARK;
                 px[32 + x] = OUTLINE;
             }
-            px[16 + 3] = METAL_LIGHT;
-            px[24 + 3] = OUTLINE;
+            if col4 % 2 == 1 {
+                // A plate joint and its bolt.
+                px[8 + 7] = METAL;
+                px[16 + 7] = OUTLINE;
+                px[24 + 7] = OUTLINE;
+                px[16 + 5] = METAL_LIGHT;
+            }
             for y in 5..8 {
                 let x = if col4 % 2 == 0 { y - 4 } else { 11 - y };
-                px[y * 8 + x] = METAL_DARK;
+                let shadow = if col4 % 2 == 0 { x + 1 } else { x - 1 };
+                px[y * 8 + x] = METAL;
+                px[y * 8 + shadow] = OUTLINE;
             }
         }
         3 => stamp(&mut px, &SPIKES_ART, false),
@@ -533,6 +642,23 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
         _ => {}
     }
     px
+}
+
+/// Rounds off the outer corners between open sides.
+fn round_corners(px: &mut [u8; 64], up: bool, left: bool, right: bool, down: bool) {
+    for (open_a, open_b, corner, inner) in [
+        (up, left, [(0, 0), (1, 0), (0, 1)], (1, 1)),
+        (up, right, [(7, 0), (6, 0), (7, 1)], (6, 1)),
+        (down, left, [(0, 7), (1, 7), (0, 6)], (1, 6)),
+        (down, right, [(7, 7), (6, 7), (7, 6)], (6, 6)),
+    ] {
+        if open_a && open_b {
+            for (x, y) in corner {
+                px[y * 8 + x] = 0;
+            }
+            px[inner.1 * 8 + inner.0] = ground_ix::OUTLINE;
+        }
+    }
 }
 
 /// The Badlands bots, their shots, and the boss.

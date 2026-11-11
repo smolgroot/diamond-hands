@@ -357,6 +357,9 @@ pub struct World {
     pub player: Player,
     /// On the heap, filled there: see `new_actors`.
     pub actors: Box<[Actor; MAX_ACTORS]>,
+    /// Slots of `actors` the map filled, from the first; those after stay empty. The
+    /// per-frame loops stop there instead of walking all of them in slow EWRAM.
+    used: usize,
     pub shots: [Shot; MAX_SHOTS],
     pub boss: Boss,
     pub fx: FxPool,
@@ -454,6 +457,7 @@ impl World {
             difficulty,
             player: Player::new(Body::standing_on_tile(start.0, start.1, PLAYER_W, PLAYER_H)),
             actors,
+            used: count,
             shots: [Shot::EMPTY; MAX_SHOTS],
             boss: Boss::new(level),
             fx: FxPool::new(),
@@ -489,6 +493,11 @@ impl World {
         world
     }
 
+    /// The actors the map placed: every slot that can hold one.
+    pub fn placed_actors(&self) -> &[Actor] {
+        &self.actors[..self.used]
+    }
+
     fn max_camera_y(&self) -> i32 {
         (self.level.px_height() - SCREEN_H).max(0)
     }
@@ -502,7 +511,7 @@ impl World {
     /// beaten for good, beacons lit and terminals on. Saved with the run so an
     /// explorable level comes back exactly as it was left.
     pub fn taken(&self) -> u128 {
-        self.actors.iter().enumerate().fold(0, |mask, (i, a)| {
+        self.actors[..self.used].iter().enumerate().fold(0, |mask, (i, a)| {
             let done = a.killed || (matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) && a.state == enemy::state::LIT);
             if done { mask | 1 << i } else { mask }
         })
@@ -521,14 +530,14 @@ impl World {
     pub fn own_parts(&mut self, mask: u16) {
         self.parts |= mask;
         if mask & GEAR_JETPACK != 0 {
-            for a in self.actors.iter_mut().filter(|a| a.kind == ActorKind::Jetpack) {
+            for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Jetpack) {
                 a.alive = false;
                 a.killed = true;
             }
         }
         self.player.jetpack = self.has_jetpack();
         let base = self.level.parts_base;
-        for (n, a) in self.actors.iter_mut().filter(|a| a.kind == ActorKind::Part).enumerate() {
+        for (n, a) in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Part).enumerate() {
             if mask & (1 << (base as usize + n)) != 0 {
                 a.alive = false;
                 a.killed = true;
@@ -538,7 +547,7 @@ impl World {
 
     /// Shield parts this level holds, and how many of them the file owns.
     pub fn parts_here(&self) -> (u32, u32) {
-        let total = self.actors.iter().filter(|a| a.kind == ActorKind::Part).count() as u32;
+        let total = self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Part).count() as u32;
         let base = self.level.parts_base as u32;
         let mask = ((1u32 << total) - 1) << base;
         (total, (self.parts as u32 & mask).count_ones())
@@ -559,7 +568,7 @@ impl World {
         };
         let edge = if self.level.explore {
             // No left-to-right order to go by: put back exactly what was taken.
-            for (i, a) in self.actors.iter_mut().enumerate() {
+            for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
                 if progress.taken & (1 << i) == 0 {
                     continue;
                 }
@@ -574,7 +583,7 @@ impl World {
         } else {
             (tx + 1) * TILE
         };
-        for a in self.actors.iter_mut().filter(|a| a.alive) {
+        for a in self.actors[..self.used].iter_mut().filter(|a| a.alive) {
             if a.home.0 + a.kind.size().0 / 2 >= edge {
                 continue;
             }
@@ -592,7 +601,7 @@ impl World {
         self.kills = progress.kills;
         self.frames = progress.frames;
         if let Some(mut lift) = self.lift {
-            let powered = self.actors.iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
+            let powered = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
             if self.level.explore {
                 // Upstairs, it was ridden; downstairs with its power on, it waits open.
                 if self.upstairs(&lift, tx * TILE + TILE / 2, (ty + 1) * TILE) {
@@ -724,7 +733,7 @@ impl World {
         let r = self.player.body.rect();
         match lift.state {
             LiftState::Dark => {
-                let on = self.actors.iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
+                let on = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
                 if on {
                     next(&mut lift, LiftState::Powering);
                 }
@@ -824,7 +833,7 @@ impl World {
         let dark_car = self
             .lift
             .filter(|l| l.state == LiftState::Dark && self.player.grounded && l.at_door(&r));
-        for a in self.actors.iter_mut() {
+        for a in self.actors[..self.used].iter_mut() {
             let called = dark_car.is_some_and(|l| l.beside(&a.rect()));
             if a.kind == ActorKind::Terminal
                 && a.alive
@@ -844,13 +853,13 @@ impl World {
     pub fn up_prompt(&self) -> Option<(i32, i32)> {
         let r = self.player.body.rect();
         let dark = |a: &&Actor| a.kind == ActorKind::Terminal && a.alive && a.state != enemy::state::LIT;
-        if let Some(a) = self.actors.iter().filter(dark).find(|a| reaches_terminal(&r, &a.rect())) {
+        if let Some(a) = self.actors[..self.used].iter().filter(dark).find(|a| reaches_terminal(&r, &a.rect())) {
             let ar = a.rect();
             return Some((ar.centre_x(), ar.y - 4));
         }
         let lift = self.lift?;
         let callable = |a: &Actor| dark(&a) && lift.beside(&a.rect());
-        let ready = lift.state == LiftState::Open || (lift.state == LiftState::Dark && self.actors.iter().any(callable));
+        let ready = lift.state == LiftState::Open || (lift.state == LiftState::Dark && self.actors[..self.used].iter().any(callable));
         (ready && lift.at_door(&r)).then_some((lift.car.0 + LIFT_W / 2, lift.car.1 - LIFT_H - 4))
     }
 
@@ -863,7 +872,7 @@ impl World {
         let r = self.player.body.rect();
         let (x, feet) = lift.car;
         let near = (r.centre_x() - (x + LIFT_W / 2)).abs() <= 48 && (r.bottom() - feet).abs() <= 2 * TILE;
-        let terminal_here = self.actors.iter().any(|a| a.kind == ActorKind::Terminal && lift.beside(&a.rect()));
+        let terminal_here = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && lift.beside(&a.rect()));
         lift.state == LiftState::Dark && near && !terminal_here
     }
 
@@ -1056,7 +1065,7 @@ impl World {
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
         let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
-        for a in self.actors.iter_mut().filter(|a| a.alive) {
+        for a in self.actors[..self.used].iter_mut().filter(|a| a.alive) {
             let r = a.rect();
             let visible = r.right() > view.0 && r.x < view.1 && r.bottom() > view_y.0 && r.y < view_y.1;
             if !a.awake && visible {
@@ -1074,10 +1083,21 @@ impl World {
     }
 
     fn collide(&mut self, events: &mut Events) {
-        // The wassie's shots against villains and the boss.
+        // The wassie's shots against villains and the boss. Only the few villains awake
+        // can be hit: listed once, in slot order, rather than every shot walking every
+        // slot. A villain a shot downs is still listed, so each one is checked again.
+        let mut threats = [0u8; MAX_ACTORS];
+        let mut count = 0;
+        for (i, a) in self.actors[..self.used].iter().enumerate() {
+            if a.is_threat() {
+                threats[count] = i as u8;
+                count += 1;
+            }
+        }
         for s in self.shots.iter_mut().filter(|s| s.active && s.kind.from_player()) {
             let r = s.rect();
-            for (i, a) in self.actors.iter_mut().enumerate() {
+            for &i in &threats[..count] {
+                let (a, i) = (&mut self.actors[i as usize], i as usize);
                 if !a.is_threat() || !r.overlaps(&a.rect()) || s.hits & (1u128 << i) != 0 {
                     continue;
                 }
@@ -1138,7 +1158,7 @@ impl World {
         // Touching villains, pickups and checkpoints.
         let mut checkpoint_reached = None;
         let mut part_taken = None;
-        for (i, a) in self.actors.iter_mut().enumerate() {
+        for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
             if !a.alive || !player.overlaps(&a.rect()) {
                 continue;
             }
@@ -1370,7 +1390,7 @@ impl World {
         let hp = if self.player.hp > 0 { self.player.hp } else { MAX_HP };
         self.place_player(hp);
         self.player.invuln = crate::player::INVULN_FRAMES;
-        for a in self.actors.iter_mut() {
+        for a in self.actors[..self.used].iter_mut() {
             a.reset();
         }
         self.shots = [Shot::EMPTY; MAX_SHOTS];

@@ -529,8 +529,22 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
     let (mut rode, mut swung, mut crashed, mut overloaded) = (false, false, false, false);
     let mut talk_frames = 0u32;
     let mut paused = false;
+    // With DIAMOND_HANDS_PROFILE naming a file, level 2 is profiled (and not drawn):
+    // each video frame's busy cycles with where the camera was, then cycles by PC.
+    let profile_to = std::env::var_os("DIAMOND_HANDS_PROFILE");
+    let mut profiled = String::new();
     for i in 0..(400 * SECOND) {
         let level2 = model.world.level_index == 1;
+        if profile_to.is_some() && level2 && runner.profile.is_none() {
+            // DIAMOND_HANDS_PROFILE_WATCH: hex ranges "start-end,..." whose callers to log.
+            let watch = std::env::var("DIAMOND_HANDS_PROFILE_WATCH").unwrap_or_default();
+            let watch = watch
+                .split(',')
+                .filter_map(|r| r.split_once('-'))
+                .map(|(a, b)| u32::from_str_radix(a, 16).unwrap()..u32::from_str_radix(b, 16).unwrap())
+                .collect();
+            runner.profile = Some(diamond_hands_harness::Profile { watch, ..Default::default() });
+        }
         let keys = match model.scene {
             Scene::LevelClear if model.scene_frames() > diamond_hands_logic::game::CLEAR_LOCK_FRAMES + 4 => {
                 if i % 2 == 0 { keys::A } else { 0 }
@@ -571,6 +585,41 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
         let what = format!("step {i}, {:?}", model.scene);
         step_in_sync(&mut runner, &mut model, keys, previous, &what);
         previous = keys;
+        if runner.profile.is_some() {
+            let w = &model.world;
+            let near = |r: diamond_hands_logic::physics::Rect| {
+                r.right() > w.camera_x && r.x < w.camera_x + 240 && r.bottom() > w.camera_y && r.y < w.camera_y + 160
+            };
+            let bots = w.actors.iter().filter(|a| a.alive && a.kind.is_enemy() && near(a.rect())).count();
+            let shots = w.shots.iter().filter(|s| s.active).count();
+            let fence = diamond_hands_logic::world::fence_state(w.frames);
+            // Whether the wassie should be on screen, and whether an object is there:
+            // 1 shown, 0 missing, - not expected (blinking, riding, off screen).
+            let p = w.player.body.rect();
+            let expected = model.scene == Scene::Play
+                && w.player.invuln == 0
+                && !w.lift.is_some_and(|l| l.riding())
+                && p.bottom() > w.camera_y
+                && p.y < w.camera_y + 160;
+            let (px, py) = (p.centre_x() - w.camera_x, p.centre_y() - w.camera_y);
+            let wassie = match expected {
+                false => "-",
+                _ if runner.object_covers(px, py) => "1",
+                _ => "0",
+            };
+            let profile = runner.profile.as_mut().unwrap();
+            for (busy, objects) in profile.frames.drain(..).zip(profile.objects.drain(..)) {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    profiled,
+                    "F {busy} {:?} {} {} {bots} {shots} {objects} {fence} {} {wassie}",
+                    model.scene,
+                    w.camera_x,
+                    w.camera_y,
+                    model.frame
+                );
+            }
+        }
         if model.scene == Scene::Map && model.cleared == 0b11 {
             if model.scene_frames() == MAP_WALK_FRAMES / 2 {
                 shot(&runner, "t2-map-walk");
@@ -699,6 +748,16 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             Scene::LevelClear if model.scene_frames() == 60 => shot(&runner, "t2-level-clear"),
             _ => {}
         }
+    }
+    if let (Some(path), Some(profile)) = (&profile_to, &runner.profile) {
+        use std::fmt::Write;
+        for (pc, cycles) in &profile.by_pc {
+            let _ = writeln!(profiled, "P {pc:08x} {cycles}");
+        }
+        for ((range, lr), cycles) in &profile.callers {
+            let _ = writeln!(profiled, "C {range} {lr:08x} {cycles}");
+        }
+        std::fs::write(path, &profiled).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
     let end = runner.expect_probe();
     assert!(paused, "the pause menu opened up the tower");

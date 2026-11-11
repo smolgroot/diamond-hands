@@ -35,7 +35,29 @@ pub struct Runner {
     keys: u16,
     probe_addr: Option<u32>,
     framebuffer: Vec<u8>,
+    /// While set, frames are stepped instruction by instruction and their cycles charged
+    /// to the program counter (see [`Profile`]).
+    pub profile: Option<Profile>,
 }
+
+/// Where the ROM's CPU time goes: cycles by program counter, and each profiled video
+/// frame's busy cycles. A step that leaves the PC where it was is the CPU halted
+/// (waiting for vblank) and counts as idle. Profiled frames aren't drawn.
+#[derive(Default)]
+pub struct Profile {
+    pub by_pc: std::collections::HashMap<u32, u64>,
+    /// Busy cycles of each profiled video frame, out of [`CYCLES_PER_FRAME`].
+    pub frames: Vec<u32>,
+    /// Objects in OAM at the end of each profiled frame (128 means some were dropped).
+    pub objects: Vec<usize>,
+    /// Address ranges whose callers to find: cycles in each range by the link register.
+    /// Only right for leaf functions, which keep LR as the return address.
+    pub watch: Vec<std::ops::Range<u32>>,
+    pub callers: std::collections::HashMap<(usize, u32), u64>,
+}
+
+/// One video frame: 228 lines of 1232 cycles.
+pub const CYCLES_PER_FRAME: u32 = 280_896;
 
 impl Runner {
     pub fn new(rom: &[u8]) -> Self {
@@ -57,6 +79,7 @@ impl Runner {
             keys: 0,
             probe_addr: None,
             framebuffer: Vec::new(),
+            profile: None,
         }
     }
 
@@ -64,6 +87,32 @@ impl Runner {
     pub fn frame(&mut self, keys: u16) {
         self.keys = keys;
         self.core.set_pressed_keys(keys);
+        if let Some(profile) = &mut self.profile {
+            let start = self.core.memory.vblanks_started();
+            let mut busy = 0;
+            while self.core.memory.vblanks_started() == start {
+                let pc = self.core.cpu.registers[15];
+                let cycles = self
+                    .core
+                    .cpu
+                    .step_with_cycles(&mut self.core.memory)
+                    .unwrap_or_else(|error| panic!("emulation failed: {error}"));
+                if self.core.cpu.registers[15] != pc {
+                    busy += cycles;
+                    *profile.by_pc.entry(pc).or_default() += u64::from(cycles);
+                    if let Some(i) = profile.watch.iter().position(|r| r.contains(&pc)) {
+                        let lr = self.core.cpu.registers[14];
+                        *profile.callers.entry((i, lr)).or_default() += u64::from(cycles);
+                    }
+                }
+            }
+            profile.frames.push(busy);
+            let objects = self.objects_shown();
+            if let Some(profile) = &mut self.profile {
+                profile.objects.push(objects);
+            }
+            return;
+        }
         self.framebuffer = self
             .core
             .step_frame()
@@ -80,6 +129,54 @@ impl Runner {
     pub fn tap(&mut self, keys: u16) {
         self.frame(keys);
         self.frame(0);
+    }
+
+    /// Screen boxes `(x, y, w, h)` of the objects in OAM, in OAM order. Double-size
+    /// affine objects give their doubled box; y is in 0..256 as the hardware has it.
+    pub fn object_boxes(&self) -> Vec<(i32, i32, i32, i32)> {
+        const SIZES: [[(i32, i32); 4]; 3] = [
+            [(8, 8), (16, 16), (32, 32), (64, 64)],
+            [(16, 8), (32, 8), (32, 16), (64, 32)],
+            [(8, 16), (8, 32), (16, 32), (32, 64)],
+        ];
+        self.core
+            .memory
+            .oam
+            .chunks(8)
+            .filter_map(|attrs| {
+                let attr0 = u16::from_le_bytes([attrs[0], attrs[1]]);
+                let attr1 = u16::from_le_bytes([attrs[2], attrs[3]]);
+                let (affine, double) = (attr0 & 0x100 != 0, attr0 & 0x200 != 0);
+                let shape = usize::from(attr0 >> 14);
+                if (!affine && double) || shape == 3 {
+                    return None;
+                }
+                let (w, h) = SIZES[shape][usize::from(attr1 >> 14)];
+                let scale = if affine && double { 2 } else { 1 };
+                let x = (i32::from(attr1 & 0x1FF) << 23) >> 23;
+                Some((x, i32::from(attr0 & 0xFF), w * scale, h * scale))
+            })
+            .collect()
+    }
+
+    /// Whether an object covers screen pixel `(x, y)` (y taken modulo 256).
+    pub fn object_covers(&self, x: i32, y: i32) -> bool {
+        self.object_boxes()
+            .iter()
+            .any(|&(ox, oy, w, h)| (ox..ox + w).contains(&x) && (y - oy).rem_euclid(256) < h)
+    }
+
+    /// How many of the 128 OAM entries are showing an object (not disabled).
+    pub fn objects_shown(&self) -> usize {
+        self.core
+            .memory
+            .oam
+            .chunks(8)
+            .filter(|attrs| {
+                let attr0 = u16::from_le_bytes([attrs[0], attrs[1]]);
+                attr0 & 0x300 != 0x200
+            })
+            .count()
     }
 
     pub fn keys(&self) -> u16 {

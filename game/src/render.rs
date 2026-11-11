@@ -24,7 +24,7 @@ use diamond_hands_logic::{
     fx::FxKind,
     game::{CLEAR_LOCK_FRAMES, Deal, FILES, MAP_WALK_FRAMES, PAYOUT_FRAMES, PENGUIN_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
     inventory::SHIELD_CELLS,
-    level::Theme,
+    level::{Theme, Tile},
     levels::{MAP, PlaceStatus},
     player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
     shot::ShotKind,
@@ -173,6 +173,10 @@ pub struct Renderer {
     /// (first, and the one after the last).
     columns: [(i32, i32, i32); TERRAIN_COLS as usize],
     level: Option<&'static Level>,
+    /// The fence emitters of `fences.0`, by column: tile position and the top row of
+    /// each one's lightning. Found once per level: looking for them on screen every
+    /// frame took a fifth of the CPU.
+    fences: (Option<&'static Level>, Vec<(i32, i32, i32)>),
     /// The theme and stage whose palettes are loaded.
     theme: Theme,
     stage: u8,
@@ -241,6 +245,7 @@ impl Renderer {
             blank: DynamicTile16::new().fill_with(0),
             columns: [(i32::MIN, 0, 0); TERRAIN_COLS as usize],
             level: None,
+            fences: (None, Vec::new()),
             theme: Theme::Badlands,
             stage: 0,
             fence: (0, false, false),
@@ -446,6 +451,7 @@ impl Renderer {
             floor.ninja.sweep();
         }
         if !in_menu {
+            self.find_fences(level);
             self.draw_fences(game, frame);
         }
         self.draw_fx(game, frame);
@@ -1486,56 +1492,82 @@ impl Renderer {
         if state == 0 {
             return;
         }
-        let (cam, level, c) = (self.view_x, world.level, &self.common);
+        let (cam, c) = (self.view_x, &self.common);
         let tick = game.frame / 2;
         let mix = |a: i32, b: i32| {
             let h = (a as u32).wrapping_mul(73_856_093) ^ (b as u32).wrapping_mul(19_349_663) ^ tick.wrapping_mul(83_492_791);
             h ^ (h >> 13)
         };
+        let (left, right) = (cam.div_euclid(TILE), (cam + WIDTH).div_euclid(TILE));
         // Emitters from the top of the screen to a little below it, whose lightning
         // can reach up into view.
-        let rows = self.view_y.div_euclid(TILE).max(0)..level.height().min((self.view_y + HEIGHT).div_euclid(TILE) + 8);
-        for tx in cam.div_euclid(TILE)..=(cam + WIDTH).div_euclid(TILE) {
-            for ty in rows.clone() {
-                if level.tile(tx, ty) != diamond_hands_logic::level::Tile::Spike {
+        let rows = self.view_y.div_euclid(TILE)..(self.view_y + HEIGHT).div_euclid(TILE) + 8;
+        let first = self.fences.1.partition_point(|&(tx, _, _)| tx < left);
+        for &(tx, ty, top) in self.fences.1[first..].iter().take_while(|&&(tx, _, _)| tx <= right) {
+            if !rows.contains(&ty) {
+                continue;
+            }
+            let x = tx * TILE - cam;
+            let base = ty * TILE;
+            if state == 1 {
+                let h = mix(tx, ty);
+                Object::new(c.fence_spark.clone())
+                    .set_pos(vec2(x, base - 7 - self.view_y))
+                    .set_hflip(h & 1 != 0)
+                    .set_priority(self.world_layer)
+                    .show(frame);
+                continue;
+            }
+            // Stack pieces up from the emitter: 32px ones, then 8px to the top. Only
+            // those on screen are shown: a curtain up a tall shaft would otherwise use
+            // up the objects the wassie and the bots need, and wrap round onto the
+            // screen from far above.
+            let top = top * TILE;
+            let mut y = base;
+            let mut piece = 0;
+            while y > top {
+                let h = mix(tx, piece);
+                let tall = y - top >= 32;
+                let (sprite, step) = if tall {
+                    (&c.lightning[(h % 4) as usize], 32)
+                } else {
+                    (&c.lightning_short[(h % 4) as usize], 8)
+                };
+                y -= step;
+                piece += 1;
+                if y >= self.view_y + HEIGHT {
                     continue;
                 }
-                let x = tx * TILE - cam;
-                let base = ty * TILE;
-                if state == 1 {
-                    let h = mix(tx, ty);
-                    Object::new(c.fence_spark.clone())
-                        .set_pos(vec2(x, base - 7 - self.view_y))
-                        .set_hflip(h & 1 != 0)
-                        .set_priority(self.world_layer)
-                        .show(frame);
-                    continue;
+                if y + step <= self.view_y {
+                    break;
                 }
-                // Stack pieces up from the emitter: 32px ones, then 8px to the top.
-                let top = level.fence_top(tx, ty) * TILE;
-                let mut y = base;
-                let mut piece = 0;
-                while y > top {
-                    let h = mix(tx, piece);
-                    let tall = y - top >= 32;
-                    let (sprite, step) = if tall {
-                        (&c.lightning[(h % 4) as usize], 32)
-                    } else {
-                        (&c.lightning_short[(h % 4) as usize], 8)
-                    };
-                    y -= step;
-                    // Each piece's ends sit on the centre line: flipping either way
-                    // still joins up, and doubles the crackles.
-                    Object::new(sprite.clone())
-                        .set_pos(vec2(x, y - self.view_y))
-                        .set_hflip(h & 16 != 0)
-                        .set_vflip(h & 32 != 0)
-                        .set_priority(self.world_layer)
-                        .show(frame);
-                    piece += 1;
-                }
+                // Each piece's ends sit on the centre line: flipping either way
+                // still joins up, and doubles the crackles.
+                Object::new(sprite.clone())
+                    .set_pos(vec2(x, y - self.view_y))
+                    .set_hflip(h & 16 != 0)
+                    .set_vflip(h & 32 != 0)
+                    .set_priority(self.world_layer)
+                    .show(frame);
             }
         }
+    }
+
+    /// Lists `level`'s fence emitters for [`Renderer::draw_fences`], if it isn't the
+    /// level listed already.
+    fn find_fences(&mut self, level: &'static Level) {
+        if self.fences.0.is_some_and(|l| core::ptr::eq(l, level)) {
+            return;
+        }
+        let mut emitters = Vec::new();
+        for (ty, row) in level.rows.iter().enumerate() {
+            for (tx, _) in row.bytes().enumerate().filter(|&(_, c)| Tile::from_char(c) == Tile::Spike) {
+                let (tx, ty) = (tx as i32, ty as i32);
+                emitters.push((tx, ty, level.fence_top(tx, ty)));
+            }
+        }
+        emitters.sort_unstable();
+        self.fences = (Some(level), emitters);
     }
 
     fn draw_fx(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -1832,7 +1864,7 @@ impl Renderer {
         let (c, v) = (&self.common, &self.villains);
         let casino = self.level_art.as_ref().and_then(LevelArt::casino);
         let floor = self.level_art.as_ref().and_then(LevelArt::floor);
-        for a in world.actors.iter().filter(|a| a.alive) {
+        for a in world.placed_actors().iter().filter(|a| a.alive) {
             let r = a.rect();
             if r.right() < cam - 16 || r.x > cam + WIDTH + 16 || !self.on_screen_y(r.bottom() - 32, r.bottom() + 8) {
                 continue;
