@@ -143,6 +143,9 @@ fn bot_clears_every_level_in_god_mode() {
         assert!(world.diamonds > 0 && world.kills > 0);
         let limit = if level.explore { 12_000 } else { 6_000 };
         assert!(arena < limit, "{}: took {arena} frames to reach the arena", level.name);
+        if std::env::var_os("DIAMOND_HANDS_VERBOSE").is_some() {
+            println!("{}: arena at frame {arena}, cleared at {}", level.name, world.frames);
+        }
     }
 }
 
@@ -271,4 +274,73 @@ fn a_resumed_badlands_run_keeps_the_jetpack_and_what_was_taken() {
     let r = again.player.body.rect();
     assert_eq!((r.centre_x().div_euclid(8), r.bottom().div_euclid(8) - 1), (bx, by), "back at the deep's beacon");
     assert!(again.camera_y > 0, "the camera went down with it");
+}
+
+/// In a map built in storeys, everywhere the wassie can stand shows whole on screen
+/// with the camera kept to the storey it is in.
+#[test]
+fn every_floor_shows_whole_in_its_storey() {
+    for level in levels::ALL.iter().filter(|l| !l.bands.is_empty()) {
+        for tx in 0..level.width() {
+            for ty in 0..level.height() - 1 {
+                let standable = level.tile(tx, ty) == Tile::Empty
+                    && level.is_floor(tx, ty + 1)
+                    && !matches!(level.tile(tx, ty + 1), Tile::Slope(_));
+                if !standable {
+                    continue;
+                }
+                let feet = (ty + 1) * TILE;
+                let (lo, hi) = World::camera_y_range(level, feet - PLAYER_H / 2);
+                assert!(
+                    feet - PLAYER_H >= lo && feet <= hi + SCREEN_H,
+                    "{}: standing at ({tx},{ty}) is cut off by its storey's camera {lo}..{hi}",
+                    level.name
+                );
+            }
+        }
+    }
+}
+
+/// A slope is cut from rock: there is rock under every slope cell, so nothing walks
+/// under one.
+#[test]
+fn slopes_have_rock_under_them() {
+    for level in levels::ALL {
+        for tx in 0..level.width() {
+            for ty in 0..level.height() {
+                if matches!(level.tile(tx, ty), Tile::Slope(_)) {
+                    assert_eq!(level.tile(tx, ty + 1), Tile::Solid, "{}: nothing under the slope at ({tx},{ty})", level.name);
+                }
+            }
+        }
+    }
+}
+
+/// The Trenches keep CL207's plasma cells below ground: in the underground casino and
+/// in the sewers.
+#[test]
+fn the_trenches_hide_the_plasma_cells_below_ground() {
+    let level = levels::get(1);
+    let strata: Vec<usize> = level.markers().filter(|m| m.0 == b'p').map(|(_, _, ty)| level.stratum(ty)).collect();
+    assert_eq!(strata.len(), 3);
+    assert!(strata.contains(&1) && strata.contains(&2), "both below-ground strata hold one: {strata:?}");
+    assert!(!strata.contains(&0));
+}
+
+/// The hatch at the top of the shaft from the sewers opens only from below: standing on
+/// it holds, so the lobby is no way down.
+#[test]
+fn the_trenches_hatch_holds_from_above() {
+    let level = levels::get(1);
+    let (tx, ty) = (199, 42);
+    assert_eq!(level.tile(tx, ty + 1), Tile::OneWay, "the hatch");
+    let mut world = World::new(1, Difficulty::Normal);
+    world.god = true;
+    world.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+    for keys in [0, keys::DOWN, keys::DOWN | keys::A, 0] {
+        for _ in 0..30 {
+            world.step(&Input::from_keys(keys, keys));
+        }
+    }
+    assert!(world.player.body.bottom() <= (ty + 1) * TILE, "fell through the hatch");
 }

@@ -70,7 +70,7 @@ pub static SKY_PALETTES: [Palette16; 3] = [
 ];
 
 /// The backdrop palettes for a level's theme, one per stage.
-pub fn sky_palettes(theme: Theme) -> &'static [Palette16; 3] {
+pub fn sky_palettes(theme: Theme) -> &'static [Palette16] {
     match theme {
         Theme::Badlands => &SKY_PALETTES,
         Theme::Trenches => &super::trenches::SKY_PALETTES,
@@ -82,13 +82,15 @@ const fn col(c: Colour) -> Rgb15 {
 }
 
 /// `moon` is lit, mid and shadow; `city` is tower, dark, edge, window, hot window.
+/// Muted ([`super::BACKDROP_MUTE`]), backdrop colour and all, so the action stands
+/// out.
 const fn sky_palette(
     stops: [Colour; 3],
     moon: [Colour; 3],
     star: Colour,
     city: [Colour; 5],
 ) -> Palette16 {
-    Palette16::new([
+    super::mute_palette(Palette16::new([
         grad(stops, 0, sky_ix::SKY_BANDS as u16),
         grad(stops, 0, sky_ix::SKY_BANDS as u16),
         grad(stops, 1, sky_ix::SKY_BANDS as u16),
@@ -105,7 +107,7 @@ const fn sky_palette(
         col(city[2]),
         col(city[3]),
         col(city[4]),
-    ])
+    ]), super::BACKDROP_MUTE, 0)
 }
 
 /// Terrain (BG palette 1) indices.

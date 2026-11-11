@@ -211,6 +211,10 @@ pub static BADLANDS: Level = Level {
     explore: true,
     sky_rows: 24,
     route: &ROUTE,
+    bands: &[],
+    strata: &[],
+    areas: &[],
+    backdrop_y: 0,
     rows: ROWS,
     markers: Some(&MARKERS),
 };

@@ -71,9 +71,11 @@ const POCKET: (i32, i32, i32, i32) = (6, 20, 82, 88);
 pub const WASSIE_FEET: (i32, i32) = (47, 96);
 
 /// The bag's item list: first row of text, the step between rows, and where the
-/// icons, names and equipped badges go.
-const LIST_Y: i32 = 32;
-const LIST_STEP: i32 = 20;
+/// icons, names and equipped badges go. Five rows of a name over a slot fill the body
+/// panel at one 16-pixel row each, all on the 8x8 grid. The badge sits on the slot's
+/// line, so a long name (PLASMA CELLS) can run past it.
+const LIST_Y: i32 = 24;
+const LIST_STEP: i32 = 16;
 const LIST_ICON_X: i32 = 104;
 const LIST_NAME_X: i32 = 128;
 const LIST_BADGE_X: i32 = 216;
@@ -383,7 +385,7 @@ const CELLS_PER_FRAME: usize = 160;
 /// The cell rows the bag repaints when only the selected item changes: the item
 /// names, and the description box's text.
 const BAG_ROWS: [core::ops::RangeInclusive<usize>; 2] = [
-    (LIST_Y / 8) as usize..=((LIST_Y + 2 * LIST_STEP) / 8) as usize,
+    (LIST_Y / 8) as usize..=((LIST_Y + (ITEMS.len() as i32 - 1) * LIST_STEP) / 8) as usize,
     (DESC_HEAD_Y / 8) as usize..=(DESC_ROWS_Y[1] / 8) as usize,
 ];
 
@@ -609,7 +611,7 @@ fn bag_page(p: &mut Pixels, game: &Game) {
         p.art(icon(info.item), LIST_ICON_X, y, 1);
         p.text(info.kind, LIST_NAME_X, y + 8, ix::STEEL);
         if info.item.equipped(game) {
-            p.art(&EQUIPPED_BADGE, LIST_BADGE_X, y, 1);
+            p.art(&EQUIPPED_BADGE, LIST_BADGE_X, y + CELL, 1);
         }
     }
 }
@@ -635,7 +637,7 @@ fn item_card(p: &mut Pixels, game: &Game, selected: usize) {
     p.art(icon(info.item), 24, 32, 3);
     pedestal(p, WASSIE_FEET.0, WASSIE_FEET.1 - 8);
 
-    p.text_with(info.name, CARD_X, 24, ix::WHITE, 2, 14);
+    p.text_with(info.name, CARD_X, 24, ix::WHITE, 2, card_title_advance(info.name));
     let state = if info.item.equipped(game) { "EQUIPPED" } else { "NOT HELD" };
     let after = p.text(info.kind, CARD_X, 48, ix::GOLD);
     p.text(state, after + CELL, 48, ix::CYAN);
@@ -654,6 +656,13 @@ fn item_card(p: &mut Pixels, game: &Game, selected: usize) {
         p.fill(bx + 1, y + 1, lit, 1, ix::WHITE);
     }
     describe(p, icon(info.item), info.name, "B: BACK", info.about);
+}
+
+/// The step between the letters of the card's name, drawn at 2x: 14 pixels, or closer
+/// for a long name (PLASMA CELLS) so its last 10-pixel letter still ends by [`RIGHT`].
+fn card_title_advance(name: &str) -> i32 {
+    let gaps = (name.len() as i32 - 1).max(1);
+    14.min((RIGHT - CARD_X - 10) / gaps)
 }
 
 /// The wallet: a big cut diamond, the balance in large digits, and where it stands.
@@ -752,94 +761,120 @@ pub fn item_cursor(i: u8) -> (i32, i32) {
     (LIST_ICON_X, LIST_Y + i as i32 * LIST_STEP + 4)
 }
 
-/// The bag's icon for each item: 16x16 drawings in [`SPRITE_KEY`] characters.
+/// The bag's icon for each item: 16x16 drawings in [`SPRITE_KEY`] characters, after
+/// the inventory mockup in the project skill (`inventory-mockup.png`): violet housings,
+/// steel trim, gold caps, cyan and magenta lights.
 fn icon(item: Item) -> &'static [&'static str] {
     match item {
         Item::Blaster => &BLASTER_ICON,
         Item::Jetpack => &JETPACK_ICON,
+        Item::Shield => &SHIELD_ICON,
         Item::Scarf => &SCARF_ICON,
         Item::Cells => &CELL_ICON,
     }
 }
 
-/// A plasma cell: steel caps on a glass tube of glowing cyan plasma.
-const CELL_ICON: [&str; 16] = [
+/// The blaster side on: a violet slide with a cyan sight, a magenta energy strip
+/// running to a cyan muzzle, steel trim and a grip raked back.
+const BLASTER_ICON: [&str; 16] = [
     "................",
-    ".....kkkkkk.....",
-    "....kSSSSSgk....",
-    "....kgggggGk....",
-    ".....kkkkkk.....",
-    ".....kbiibk.....",
-    ".....kbiwbk..i..",
-    ".....kiwwik.....",
-    "..i..kiwwik.....",
-    ".....kbwwbk.....",
-    ".....kbiibk...i.",
-    ".....kkkkkk.....",
-    "....kSSSSSgk....",
-    "....kgggggGk....",
-    ".....kkkkkk.....",
+    "................",
+    "...kkkk.........",
+    "..kiiibkkkkkkkk.",
+    ".kSvvvvvvCCCCCik",
+    ".kgvvvvvvcccccik",
+    ".kgVVVVVVVVVVVk.",
+    ".kSgVGGGGGGGGVk.",
+    "..kSgvVkkkkkkk..",
+    "..kSgvVkyk......",
+    ".kSgvVkkkk......",
+    ".kSgvVk.........",
+    "kSgvVk..........",
+    "kgGGVk..........",
+    "kkkkkk..........",
     "................",
 ];
 
-/// The oversized cannon: steel housing, magenta vents, a diamond insignia and a hot
-/// pink muzzle.
-const BLASTER_ICON: [&str; 16] = [
+/// Twin steel tanks with gold caps and rings either side of a violet housing, its
+/// screen showing a cyan S, and cyan-hot nozzles.
+const JETPACK_ICON: [&str; 16] = [
+    "................",
+    "................",
+    ".kkkk......kkkk.",
+    "kyyyokkkkkkoyyyk",
+    "kgwSgkvvvvkgSwgk",
+    "kgwSgkviiikgSwgk",
+    "kvSgVkivvvkVgSvk",
+    "kvSgVkviivkVgSvk",
+    "kvSgVkVVVikVgSvk",
+    "kVggVkiiiVkVggVk",
+    "kyyyokVVVVkoyyyk",
+    ".kVVkkGGGGkkVVk.",
+    ".kiik.kkkk.kiik.",
+    ".cwwc......cwwc.",
+    "..ii........ii..",
+    "................",
+];
+
+/// CL207's plasma shield, a steel belt seen from a little above: violet inside,
+/// magenta lights either side of a buckle with a cyan shield on it.
+const SHIELD_ICON: [&str; 16] = [
     "................",
     "................",
     "................",
     "....kkkkkkkk....",
-    "...kSSSSSSSSkkk.",
-    "..kSggggggggkCck",
-    "kkkgcgcgcgibkwCk",
-    "kSSgggggggggkCck",
-    "kgGGGGGGGGGGkkk.",
-    ".kkkkGGkkkkkk...",
-    "....kGGk........",
-    "....kGGk........",
-    "....kGGk........",
-    "....kkkk........",
+    "..kkgSSSSSSgkk..",
+    ".kSgVVVvvVVVgSk.",
+    "kSgVkkkkkkkkVgSk",
+    "kgSSkkkkkkkkSSGk",
+    "kgCgSSSSSSSggCGk",
+    "kgcgSkiiiikGgcGk",
+    ".kggSkibbikGGGk.",
+    "..kkSkkiikkGkk..",
+    "....kgggggGk....",
+    "....kkkkkkkk....",
     "................",
     "................",
 ];
 
-/// Twin steel fuel tanks with red bands and gold nozzles, firing.
-const JETPACK_ICON: [&str; 16] = [
-    "................",
-    "...kkkk..kkkk...",
-    "..kSSgGkkSSgGk..",
-    "..kSggGkkSggGk..",
-    "..krrrRkkrrrRk..",
-    "..kSggGkkSggGk..",
-    "..kSggGggSggGk..",
-    "..kSggGkkSggGk..",
-    "..kSggGkkSggGk..",
-    "..kgGGGkkgGGGk..",
-    "...kGGk..kGGk...",
-    "...kyyk..kyyk...",
-    "...owwo..owwo...",
-    "....oo....oo....",
-    "....o......o....",
-    "................",
+/// A plasma cell, a part for the shield: steel caps with gold ends on a glass tube
+/// of cyan plasma, a white swirl through it.
+const CELL_ICON: [&str; 16] = [
+    "......kkkk......",
+    "...kkkyyyokkk...",
+    "...kSSSSSSSgk...",
+    "...kgggggggGk...",
+    "....kkkkkkkk....",
+    "....kbiwwibk....",
+    "....kbwiiibk....",
+    "....kbiwiibk....",
+    "....kbiiwibk....",
+    "....kbiiiwbk....",
+    "....kbiwwibk....",
+    "....kkkkkkkk....",
+    "...kSSSSSSSgk...",
+    "...kgggggggGk...",
+    "...kkkyyyokkk...",
+    "......kkkk......",
 ];
 
-/// The wassie's red scarf: a loop and two tails blowing back.
+/// The wassie's red scarf: a twisted loop and two tails blowing out behind it.
 const SCARF_ICON: [&str; 16] = [
     "................",
-    "....kkkkkkk.....",
-    "...krrrrrrrk....",
-    "..krrRRRRRrrk...",
-    "..krRk...kRrk...",
-    "..krrkkkkkrrk...",
-    "...krrrrrrrkk...",
-    "....kRrrrRrrrk..",
-    "....krRkkrRrrrk.",
-    "...krrk..krRrrk.",
-    "...krRk...krRrk.",
-    "..krrk.....kRrk.",
-    "..krRk......krk.",
-    "..kRk........k..",
-    "...k............",
+    ".......kkkkkkk..",
+    "....kkrrrrrrRRk.",
+    "..kkrrRRRRRRRRrk",
+    "..krRkkkkkRRrrRk",
+    ".krrRRRRrrrrrRRk",
+    ".krrrrrrrrrrRRRk",
+    "..kRrrrrrrRRRRk.",
+    "...kRrRRkkRRRk..",
+    "..kkkkkkRRRk....",
+    ".krrrrrrrrRk....",
+    "kRrrrrrrrrk.....",
+    "kkkRrrrrrRk.....",
+    "..kRkkkRrk......",
+    "..kk...kk.......",
     "................",
 ];
 

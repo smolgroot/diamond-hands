@@ -3,8 +3,10 @@
 //! The data is postcard-encoded. Version 5 added the levels each file has cleared;
 //! version 6 the wallet of banked diamonds, the purse of kept gold coins, the coins
 //! picked up in the level so far, and CL207's shield parts; version 7 what a run had
-//! taken at its beacon, for the explorable Badlands. Each starts with a tag, and an
-//! older cartridge is read in its own layout and moved over rather than wiped.
+//! taken at its beacon, for the explorable Badlands. Version 8 is laid out as version
+//! 7: it marks saves made since the Trenches were rebuilt as an explorable map too.
+//! Each starts with a tag, and an older cartridge is read in its own layout and moved
+//! over rather than wiped.
 //!
 //! Version 5 kept no diamond balance (diamonds only ever went into the score), so a
 //! moved-over file starts with an empty wallet.
@@ -20,8 +22,9 @@ use serde::{Deserialize, Serialize};
 /// Changing this wipes existing saves, so bump the suffix only for incompatible formats.
 /// Formats that can be read and moved over keep it and change [`TAG`] instead.
 const MAGIC: [u8; 32] = *b"diamond-hands-save-v4___________";
-/// Leads every version 7 save.
-const TAG: [u8; 4] = *b"DHv7";
+/// Leads every version 8 save.
+const TAG: [u8; 4] = *b"DHv8";
+const TAG_V7: [u8; 4] = *b"DHv7";
 const TAG_V6: [u8; 4] = *b"DHv6";
 const TAG_V5: [u8; 4] = *b"DHv5";
 
@@ -54,13 +57,25 @@ struct FileData {
 }
 
 impl FileData {
-    /// A run saved part-way through the Badlands before they were rebuilt as an
+    /// A run saved part-way through level `level` before it was rebuilt as an
     /// explorable map starts the level again: its beacon may now be inside rock.
-    fn restart_rebuilt_badlands(self) -> Self {
-        if self.level != 0 || self.checkpoint.is_none() {
+    fn restart_rebuilt(self, level: u8) -> Self {
+        if self.level != level || self.checkpoint.is_none() {
             return self;
         }
-        Self { checkpoint: None, beacons: 0, diamonds: 0, kills: 0, frames: 0, coins: 0, ..self }
+        Self { checkpoint: None, beacons: 0, diamonds: 0, kills: 0, frames: 0, coins: 0, taken: 0, ..self }
+    }
+
+    /// From before version 7, both the Badlands and the Trenches were rebuilt since.
+    fn restart_rebuilt_levels(self) -> Self {
+        self.restart_rebuilt(0).restart_rebuilt(1)
+    }
+}
+
+impl SaveData {
+    /// A version 7 save: only the Trenches were rebuilt since.
+    fn from_v7(v7: SaveData) -> Self {
+        Self { tag: TAG, files: v7.files.map(|f| f.map(|f| f.restart_rebuilt(1))), ..v7 }
     }
 }
 
@@ -91,9 +106,9 @@ struct FileDataV6 {
 }
 
 impl From<FileDataV6> for FileData {
-    /// A version 6 run keeps where it was, except part-way through the Badlands: they
-    /// were rebuilt as an explorable map since, so such a run starts the level again
-    /// rather than at a beacon that may now be inside rock.
+    /// A version 6 run keeps where it was, except part-way through the Badlands or the
+    /// Trenches: they were rebuilt as explorable maps since, so such a run starts the
+    /// level again rather than at a beacon that may now be inside rock.
     fn from(f: FileDataV6) -> Self {
         Self {
             level: f.level,
@@ -111,7 +126,7 @@ impl From<FileDataV6> for FileData {
             parts: f.parts,
             taken: 0,
         }
-        .restart_rebuilt_badlands()
+        .restart_rebuilt_levels()
     }
 }
 
@@ -170,7 +185,7 @@ impl From<FileDataV5> for FileData {
             parts: 0,
             taken: 0,
         }
-        .restart_rebuilt_badlands()
+        .restart_rebuilt_levels()
     }
 }
 
@@ -229,7 +244,7 @@ impl From<FileDataV4> for FileData {
             parts: 0,
             taken: 0,
         }
-        .restart_rebuilt_badlands()
+        .restart_rebuilt_levels()
     }
 }
 
@@ -310,6 +325,9 @@ impl Store {
                     .read::<SaveData>(0)
                     .ok()
                     .filter(|data| data.tag == TAG)
+                    .or_else(|| {
+                        slots.read::<SaveData>(0).ok().filter(|data| data.tag == TAG_V7).map(SaveData::from_v7)
+                    })
                     .or_else(|| {
                         slots
                             .read::<SaveDataV6>(0)

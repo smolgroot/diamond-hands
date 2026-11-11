@@ -1,6 +1,14 @@
 //! Level 2, the Solana Trenches: the memecoin casino. A neon Vegas strip under a giant
-//! gold coin, the gaming floor (felt tables, slot banks, trading screens), and the
-//! exchange suites upstairs (server racks, the vault, red-lit screens).
+//! gold coin, the gaming floor (felt tables, slot banks, trading screens), the exchange
+//! suites and SAM's rooftop up the tower, and below ground the back room (slot banks and
+//! crypto ATMs) and the sewers (brickwork, outflow pipes, graffiti).
+//!
+//! Each stratum of the map (see `Level::strata`) has its own terrain palette, chosen
+//! per cell, so a shaft between two shows both in their own light: the street storey
+//! in [`TERRAIN_SLOTS`]`[0]` (switched with the stage), the back room in `[1]` and the
+//! sewers in `[2]`. Scenery pictures use a muted copy of their stratum's palette
+//! ([`SCENERY_SLOTS`]), so they sit back behind the wassie and the bots. The sewers
+//! draw rock as brick and girders as rusty catwalks.
 //!
 //! Like the Badlands, the terrain is built from 8x8 cells keyed by what a cell is and
 //! what is around it ([`terrain_key`]), so each distinct cell is drawn once. Pictures
@@ -10,9 +18,12 @@
 //! crashes.
 
 use agb::display::{Palette16, Rgb15, tiled::RegularBackground};
-use diamond_hands_logic::{Level, Tile, level};
+use diamond_hands_logic::{
+    Level, TILE, Tile,
+    level::{self, Slope},
+};
 
-use super::{TileCache, rgb};
+use super::{SCENERY_MUTE, TileCache, mute_palette, rgb};
 use crate::font;
 
 /// Terrain (BG palette 1) indices for the casino.
@@ -38,23 +49,47 @@ mod gx {
 
 type Colour = (u16, u16, u16);
 
-/// Each area's terrain colours, indices 1..=12: the street, the casino floor, upstairs.
-const GROUND: [[Colour; 12]; 3] = [
+/// Background palette slots for each stratum's terrain, and for its scenery.
+pub const TERRAIN_SLOTS: [u8; 3] = [1, 4, 5];
+pub const SCENERY_SLOTS: [u8; 3] = [6, 7, 8];
+
+/// Each area's terrain colours, indices 1..=12: the street, the casino floor, the
+/// exchange's lobby, and the tower top.
+const GROUND: [[Colour; 12]; 4] = [
     // Outline, gold (light, mid, dark), steel light, slate, slate dark, pipe light,
     // pipe, pink, cyan, screen.
     [(3, 1, 7), (31, 30, 18), (29, 22, 6), (17, 10, 3), (24, 22, 28), (7, 9, 16), (3, 4, 9), (6, 22, 16), (3, 12, 11), (31, 6, 22), (6, 28, 31), (4, 2, 10)],
     [(3, 1, 6), (31, 30, 20), (30, 23, 7), (18, 11, 3), (25, 22, 29), (8, 8, 17), (3, 3, 9), (6, 22, 15), (2, 12, 10), (31, 7, 22), (8, 26, 31), (5, 2, 11)],
     [(3, 0, 3), (31, 27, 16), (28, 18, 5), (15, 8, 3), (24, 18, 24), (9, 4, 10), (4, 1, 5), (8, 20, 13), (3, 10, 8), (31, 4, 12), (10, 22, 31), (4, 1, 6)],
+    [(3, 0, 4), (31, 28, 17), (29, 19, 6), (15, 8, 3), (26, 21, 28), (10, 6, 13), (4, 2, 6), (8, 22, 15), (3, 11, 9), (31, 5, 15), (10, 25, 31), (4, 1, 7)],
 ];
 
-/// The casino's terrain palette for an area (`stage`), the fence cycle, the marquee's
-/// chase step and whether the market is crashing (the screens flash red).
-pub fn ground_palette(stage: u8, fence: u8, chase: bool, crash: bool) -> Palette16 {
+/// The back room under the casino: plum walls, old gold, green felt, hot pink.
+const BACK_ROOM: [Colour; 12] = [
+    (2, 0, 4), (30, 26, 14), (26, 18, 5), (14, 7, 2), (21, 15, 25), (9, 4, 13), (3, 1, 6), (5, 21, 12), (2, 10, 7), (31, 4, 18), (6, 24, 28), (4, 1, 8),
+];
+
+/// The sewers: the same slots as rust (the golds), grimy brick and concrete (the
+/// steels), sludge (the pipes), hazard orange (pink) and murky teal (cyan).
+const SEWERS: [Colour; 12] = [
+    (1, 2, 2), (27, 19, 9), (19, 10, 4), (10, 5, 2), (18, 20, 16), (9, 11, 9), (4, 5, 4), (13, 28, 6), (5, 16, 3), (31, 14, 4), (6, 18, 17), (2, 4, 4),
+];
+
+/// The terrain palette for stratum `stratum` (0 the street storey, then the back room
+/// and the sewers): its area's light (`stage`, on the street storey), the fence cycle,
+/// the marquee's chase step and whether the market is crashing (the screens flash red).
+pub fn stratum_palette(stratum: usize, stage: u8, fence: u8, chase: bool, crash: bool) -> Palette16 {
     let mut colours = [rgb(0, 0, 0); 16];
-    for (out, &(r, g, b)) in colours[1..13].iter_mut().zip(GROUND[stage.min(2) as usize].iter()) {
+    let area = match stratum {
+        0 => &GROUND[(stage as usize).min(GROUND.len() - 1)],
+        1 => &BACK_ROOM,
+        _ => &SEWERS,
+    };
+    for (out, &(r, g, b)) in colours[1..13].iter_mut().zip(area.iter()) {
         *out = rgb(r, g, b);
     }
-    let (on, off) = (rgb(31, 29, 14), rgb(14, 7, 4));
+    // Marquee bulbs up top; amber warning lamps in the sewers.
+    let (on, off) = if stratum >= 2 { (rgb(31, 21, 5), rgb(9, 5, 2)) } else { (rgb(31, 29, 14), rgb(14, 7, 4)) };
     colours[gx::BULB_A as usize] = if chase { on } else { off };
     colours[gx::BULB_B as usize] = if chase { off } else { on };
     colours[gx::ENERGY as usize] = match fence {
@@ -62,11 +97,23 @@ pub fn ground_palette(stage: u8, fence: u8, chase: bool, crash: bool) -> Palette
         1 => rgb(8, 14, 24),
         _ => rgb(22, 30, 31),
     };
-    if crash {
+    if crash && stratum == 0 {
         colours[gx::SCREEN as usize] = rgb(18, 1, 4);
         colours[gx::FELT_LIGHT as usize] = rgb(31, 6, 8);
     }
     Palette16::new(colours)
+}
+
+/// The muted copy of a stratum's palette that its scenery is drawn in.
+pub fn scenery_palette(terrain: &Palette16) -> Palette16 {
+    mute_palette(terrain.clone(), SCENERY_MUTE, 1)
+}
+
+/// The palette slot for terrain cell `key` in row `ty`: its stratum's, muted for
+/// scenery.
+pub fn palette_slot(level: &Level, ty: i32, key: usize) -> u8 {
+    let stratum = level.stratum(ty).min(TERRAIN_SLOTS.len() - 1);
+    if key >= DECOR_BASE { SCENERY_SLOTS[stratum] } else { TERRAIN_SLOTS[stratum] }
 }
 
 /// Backdrop (BG palette 0): the same slots as the Badlands' sky (bands 1-6, the "moon"
@@ -89,8 +136,9 @@ const fn lerp(a: Colour, b: Colour, t: u16, n: u16) -> Rgb15 {
     rgb((a.0 * (n - t) + b.0 * t) / n, (a.1 * (n - t) + b.1 * t) / n, (a.2 * (n - t) + b.2 * t) / n)
 }
 
+/// Muted ([`super::BACKDROP_MUTE`]), so the action stands out from it.
 const fn sky(top: Colour, bottom: Colour, coin: [Colour; 3], star: Colour, city: [Colour; 5]) -> Palette16 {
-    Palette16::new([
+    mute_palette(Palette16::new([
         lerp(top, bottom, 0, 5),
         lerp(top, bottom, 0, 5),
         lerp(top, bottom, 1, 5),
@@ -107,13 +155,14 @@ const fn sky(top: Colour, bottom: Colour, coin: [Colour; 3], star: Colour, city:
         rgb(city[2].0, city[2].1, city[2].2),
         rgb(city[3].0, city[3].1, city[3].2),
         rgb(city[4].0, city[4].1, city[4].2),
-    ])
+    ]), super::BACKDROP_MUTE, 0)
 }
 
-/// The strip at night under a giant gold coin. Indoors, on the casino floor and up in
-/// the suites, there is no sky: the coin and the stars take the back wall's colour, and
-/// the skyline becomes dim columns and lit panels on the wall.
-pub static SKY_PALETTES: [Palette16; 3] = [
+/// The strip at night under a giant gold coin. Indoors, on the casino floor and in the
+/// exchange's lobby, there is no sky: the coin and the stars take the back wall's
+/// colour, and the skyline becomes dim columns and lit panels on the wall. Up the tower
+/// the night is back, deeper, over the suites' windows and the rooftop.
+pub static SKY_PALETTES: [Palette16; 4] = [
     sky((2, 0, 8), (24, 4, 20), [(31, 30, 16), (29, 22, 6), (18, 11, 3)], (28, 24, 31), [
         (8, 3, 16),
         (4, 1, 9),
@@ -134,6 +183,13 @@ pub static SKY_PALETTES: [Palette16; 3] = [
         (16, 3, 8),
         (28, 8, 9),
         (31, 20, 10),
+    ]),
+    sky((1, 0, 6), (17, 3, 16), [(31, 30, 16), (29, 22, 6), (18, 11, 3)], (26, 22, 31), [
+        (6, 2, 13),
+        (3, 1, 7),
+        (20, 5, 22),
+        (8, 26, 26),
+        (31, 10, 22),
     ]),
 ];
 
@@ -182,6 +238,21 @@ pub fn paint_sky(bg: &mut RegularBackground) {
     for ty in 0..20 {
         for tx in 0..MAP_TILES {
             cache.paint(bg, (tx, ty), 0, &pixel);
+        }
+    }
+    fill_below(bg, &mut cache);
+}
+
+/// Below the painted screen, the dark at the towers' feet carries on, for when the
+/// camera goes down below the street and the backdrop drifts up: one tile, set without
+/// painting it pixel by pixel.
+fn fill_below(bg: &mut RegularBackground, cache: &mut TileCache) {
+    if let Some(id) = cache.intern([sky_ix::TOWER_DARK; 64]) {
+        let effect = agb::display::tiled::TileEffect::new(false, false, 0);
+        for ty in 20..32 {
+            for tx in 0..MAP_TILES {
+                bg.set_tile_dynamic16((tx, ty), &cache.tiles[id], effect);
+            }
         }
     }
 }
@@ -257,10 +328,27 @@ pub fn paint_city(bg: &mut RegularBackground) {
             cache.paint(bg, (tx, ty), 0, &pixel);
         }
     }
+    fill_below(bg, &mut cache);
 }
 
-/// Plain terrain kinds take keys below [`DECOR_BASE`]; pictures above it.
-const DECOR_BASE: usize = 8 * 3 * 16 * 4 * 3;
+// Terrain keys. 0 is an empty cell. Then each look (the casino's, the sewers') has its
+// own run of keys: walls by false or not, depth, open sides and variant; one girder;
+// one fence emitter; tables by open ends and column; pedestals; slopes by shape and
+// variant; and the rock under a slope, by the slope's shape and variant. Pictures come
+// last and look the same everywhere: their stratum's palette colours them.
+/// Variants of a cell by its place on the map: four columns by three rows.
+const VARIANTS: usize = 12;
+const WALL_KEYS: usize = 2 * 3 * 16 * VARIANTS;
+const LEDGE: usize = WALL_KEYS;
+const FENCE: usize = LEDGE + 1;
+const TABLE: usize = FENCE + 1;
+const PEDESTAL: usize = TABLE + 16;
+const SLOPES: usize = PEDESTAL + 4;
+const UNDER_SLOPE: usize = SLOPES + Slope::ALL.len() * VARIANTS;
+const LOOK_KEYS: usize = UNDER_SLOPE + Slope::ALL.len() * VARIANTS;
+/// The casino's look (on the street storey and in the back room) and the sewers'.
+const LOOKS: usize = 2;
+const DECOR_BASE: usize = 1 + LOOKS * LOOK_KEYS;
 /// Cells a picture may have: up to 8 across and 8 down.
 const DECOR_CELLS: usize = 64;
 /// Number of distinct [`terrain_key`] values.
@@ -269,6 +357,19 @@ pub const TERRAIN_KEYS: usize = DECOR_BASE + level::DECOR.len() * DECOR_CELLS;
 /// Map characters that look like the casino's walls.
 fn looks_solid(c: u8) -> bool {
     matches!(c, b'#' | b'%')
+}
+
+/// Whether map character `c` is a slope.
+fn is_slope(c: u8) -> bool {
+    matches!(c, b'/' | b'\\' | b'{' | b'}')
+}
+
+/// The shape of the slope at `(tx, ty)`, if it is one.
+fn slope_at(level: &Level, tx: i32, ty: i32) -> Option<Slope> {
+    match level.tile(tx, ty) {
+        Tile::Slope(shape) => Some(shape),
+        _ => None,
+    }
 }
 
 /// What a cell of the casino looks like: see the module docs.
@@ -291,38 +392,53 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
         let (cx, cy) = ((tx - x0) % w, (ty - y0) % h);
         return DECOR_BASE + i * DECOR_CELLS + (cy * 8 + cx) as usize;
     }
-    let kind = match c {
-        b'#' => 1,
-        b'=' => 2,
-        b'^' => 3,
-        b'T' => 4,
-        b'|' => 5,
-        b'%' => 6,
-        _ => return 0,
-    };
-    // Past the map's top and bottom counts as wall, so ceilings and the floor get no
-    // trim along the screen's edges.
-    let solid = |dx: i32, dy: i32| {
-        let (x, y) = (tx + dx, ty + dy);
-        y < 0 || y >= level.height() || x < 0 || x >= level.width() || looks_solid(level.char_at(x, y))
-    };
-    let (depth, sides) = match kind {
-        1 | 6 => {
+    let look = (level.stratum(ty) >= 2) as usize;
+    let base = 1 + look * LOOK_KEYS;
+    // Background VRAM is tight: the casino's walls keep their twelve variants, the
+    // sewers' bricks two (their courses repeat every cell anyway), slopes one.
+    let variant = if look == 1 { ((tx & 1) * 3) as usize } else { ((tx & 3) * 3 + ty.rem_euclid(3)) as usize };
+    match c {
+        b'#' | b'%' => {
+            if let Some(shape) = slope_at(level, tx, ty - 1) {
+                return base + UNDER_SLOPE + shape as usize * VARIANTS;
+            }
+            // Past the map's top and bottom counts as wall, so ceilings and the floor
+            // get no trim along the screen's edges; a slope is rock under its floor.
+            let solid = |dx: i32, dy: i32| {
+                let (x, y) = (tx + dx, ty + dy);
+                if y < 0 || y >= level.height() || x < 0 || x >= level.width() {
+                    return true;
+                }
+                let c = level.char_at(x, y);
+                looks_solid(c) || is_slope(c)
+            };
             let depth = if !solid(0, -1) { 0 } else if !solid(0, -2) { 1 } else { 2 };
             let open = |dx, dy| !solid(dx, dy) as usize;
-            (depth, open(0, -1) | open(-1, 0) << 1 | open(1, 0) << 2 | open(0, 1) << 3)
+            let sides = open(0, -1) | open(-1, 0) << 1 | open(1, 0) << 2 | open(0, 1) << 3;
+            base + (((c == b'%') as usize * 3 + depth) * 16 + sides) * VARIANTS + variant
         }
-        // Tables: which ends are open. Pedestals: which half, and whether it's the foot.
-        4 => (0, (level.char_at(tx - 1, ty) != b'T') as usize | ((level.char_at(tx + 1, ty) != b'T') as usize) << 1),
-        5 => (0, (level.char_at(tx - 1, ty) == b'|') as usize | (level.is_floor(tx, ty + 1) as usize) << 1),
-        _ => (0, 0),
-    };
-    ((((kind * 3 + depth) * 16 + sides) * 4 + (tx & 3) as usize) * 3) + ty.rem_euclid(3) as usize
+        b'=' => base + LEDGE,
+        b'^' => base + FENCE,
+        // Tables: which ends are open, and the column. Pedestals: which half, and
+        // whether it's the foot.
+        b'T' => {
+            let ends = (level.char_at(tx - 1, ty) != b'T') as usize | ((level.char_at(tx + 1, ty) != b'T') as usize) << 1;
+            base + TABLE + ends * 4 + (tx & 3) as usize
+        }
+        b'|' => base + PEDESTAL + ((level.char_at(tx - 1, ty) == b'|') as usize | (level.is_floor(tx, ty + 1) as usize) << 1),
+        _ => match slope_at(level, tx, ty) {
+            Some(shape) => base + SLOPES + shape as usize * VARIANTS,
+            None => 0,
+        },
+    }
 }
 
 /// Pixels for a [`terrain_key`].
 pub fn terrain_pixels(key: usize) -> [u8; 64] {
     let mut px = [0u8; 64];
+    if key == 0 {
+        return px;
+    }
     if key >= DECOR_BASE {
         let i = (key - DECOR_BASE) / DECOR_CELLS;
         let cell = (key - DECOR_BASE) % DECOR_CELLS;
@@ -334,23 +450,68 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
         }
         return px;
     }
-    let row3 = (key % 3) as i32;
-    let col4 = (key / 3 % 4) as i32;
-    let sides = key / 12 % 16;
-    let depth = key / 192 % 3;
-    let kind = key / 576;
+    let sewer = (key - 1) / LOOK_KEYS == 1;
+    let off = (key - 1) % LOOK_KEYS;
+    let variant = off % VARIANTS;
+    let (col4, row3) = ((variant / 3) as i32, (variant % 3) as i32);
     for (n, p) in px.iter_mut().enumerate() {
         let (x, y) = ((n % 8) as i32, (n / 8) as i32);
-        *p = match kind {
-            1 | 6 => wall(x, y, sides, depth, col4, row3, kind == 6),
-            2 => ledge(x, y),
-            3 => grid(x, y),
-            4 => table(x, y, sides & 1 != 0, sides & 2 != 0, col4),
-            5 => pedestal(x, y, sides & 1 != 0, sides & 2 != 0),
-            _ => 0,
+        *p = match off {
+            _ if off < WALL_KEYS => {
+                let sides = off / VARIANTS % 16;
+                let depth = off / (VARIANTS * 16) % 3;
+                let cracked = off / (VARIANTS * 16 * 3) == 1;
+                if sewer {
+                    sewer_wall(x, y, sides, depth, col4, row3, cracked)
+                } else {
+                    wall(x, y, sides, depth, col4, row3, cracked)
+                }
+            }
+            LEDGE if sewer => catwalk(x, y),
+            LEDGE => ledge(x, y),
+            FENCE => grid(x, y),
+            _ if off < PEDESTAL => {
+                let t = off - TABLE;
+                table(x, y, t / 4 & 1 != 0, t / 4 & 2 != 0, (t % 4) as i32)
+            }
+            _ if off < SLOPES => {
+                let t = off - PEDESTAL;
+                pedestal(x, y, t & 1 != 0, t & 2 != 0)
+            }
+            _ if off < UNDER_SLOPE => slope(x, y, 0, Slope::ALL[(off - SLOPES) / VARIANTS], sewer),
+            _ => slope(x, y, TILE, Slope::ALL[(off - UNDER_SLOPE) / VARIANTS], sewer),
         };
     }
     px
+}
+
+/// A slope cell (`below` 0), or the rock cell under one (`below` 8): the walkway's lit
+/// edge running along the floor line, with its neon inset all the way along, then rock
+/// as the wall's; in the sewers, a concrete wedge. One tile per shape: the fill doesn't
+/// follow the wall's variants.
+fn slope(x: i32, y: i32, below: i32, shape: Slope, sewer: bool) -> u8 {
+    use gx::*;
+    let d = y + below - (TILE - shape.height(x));
+    if d < 0 {
+        return 0;
+    }
+    if sewer {
+        return match d {
+            0 | 4 => OUTLINE,
+            1 | 2 => WALL_LIGHT,
+            3 => if (x + y).rem_euclid(4) < 2 { PINK } else { OUTLINE },
+            _ if (x * 5 + y * 3) % 11 == 0 => WALL_DARK,
+            _ => WALL,
+        };
+    }
+    match d {
+        0 | 5 => OUTLINE,
+        1 => GOLD_LIGHT,
+        2 => WALL_LIGHT,
+        3 => PINK,
+        4 => WALL,
+        _ => wall(x, y, 0, 1, 1, 0, false),
+    }
 }
 
 /// Casino architecture, after the level 2 casino mockup: a pale steel walkway with
@@ -436,6 +597,76 @@ fn ledge(x: i32, y: i32) -> u8 {
         3 => WALL,
         5 if x % 4 == 1 => BULB_A,
         5 if x % 4 == 3 => BULB_B,
+        _ => 0,
+    }
+}
+
+/// Sewer brickwork, after a storm drain: a concrete walkway with a hazard-striped lip
+/// over courses of grimy brick, moss in the mortar, rust weeping from the ceilings, a
+/// darker course deep down. The bricks line up across cells, as the variant gives each
+/// cell its place in a 32 by 24 pixel pattern.
+fn sewer_wall(x: i32, y: i32, sides: usize, depth: usize, col4: i32, row3: i32, cracked: bool) -> u8 {
+    use gx::*;
+    let (up, left, right, down) = (sides & 1 != 0, sides & 2 != 0, sides & 4 != 0, sides & 8 != 0);
+    let corner = |a: bool, b: bool, cx: i32, cy: i32| a && b && (x - cx).abs() + (y - cy).abs() <= 1;
+    if corner(up, left, 0, 0) || corner(up, right, 7, 0) || corner(down, left, 0, 7) || corner(down, right, 7, 7) {
+        return 0;
+    }
+    let (gx, gy) = (col4 * 8 + x, row3 * 8 + y);
+    if up {
+        match y {
+            0 | 4 => return OUTLINE,
+            1 => return WALL_LIGHT,
+            2 => return if (gx * 5 + gy) % 9 == 0 { WALL } else { WALL_LIGHT },
+            3 => return if gx.rem_euclid(4) < 2 { PINK } else { OUTLINE },
+            _ => {}
+        }
+    }
+    if down {
+        match y {
+            7 => return OUTLINE,
+            6 => return GOLD_DARK,
+            5 if gx % 5 == 2 => return GOLD,
+            _ => {}
+        }
+    }
+    if left && x == 0 || right && x == 7 {
+        return OUTLINE;
+    }
+    if left && x == 1 {
+        return WALL_LIGHT;
+    }
+    if right && x == 6 {
+        return WALL_DARK;
+    }
+    if cracked && col4 == 2 && row3 == 1 && matches!((x, y), (3, 2) | (4, 3) | (4, 4) | (3, 5)) {
+        return OUTLINE;
+    }
+    // Bricks 8 by 4, every other course offset by half a brick.
+    let course = gy / 4;
+    let mortar = gy % 4 == 3 || (gx + course % 2 * 4) % 8 == 0;
+    let brick = (gx + course % 2 * 4) / 8 + course * 3;
+    if depth == 2 {
+        return if mortar { OUTLINE } else if brick % 4 == 0 { WALL } else { WALL_DARK };
+    }
+    if mortar {
+        return if (gx * 7 + gy * 3) % 13 == 0 { FELT } else { WALL_DARK };
+    }
+    match brick % 5 {
+        0 => WALL_DARK,
+        3 if gy % 4 == 0 => WALL_LIGHT,
+        _ => WALL,
+    }
+}
+
+/// A rusty grated catwalk, the sewers' girder, slung from two hangers.
+fn catwalk(x: i32, y: i32) -> u8 {
+    use gx::*;
+    match y {
+        0 | 3 => OUTLINE,
+        1 => GOLD,
+        2 => if x % 2 == 0 { OUTLINE } else { GOLD_DARK },
+        4 | 5 if x == 1 || x == 6 => GOLD_DARK,
         _ => 0,
     }
 }
@@ -563,8 +794,93 @@ fn picture(letter: u8, x: i32, y: i32, w: i32, h: i32) -> u8 {
         b'V' => vault_door(x, y, w, h),
         b'R' => roulette(x, y, w),
         b'A' => card_sign(x, y, w, h),
+        b'Y' => atm(x, y),
+        b'H' => outflow(x, y),
+        b'G' => graffiti(x, y, w),
         _ => 0,
     }
+}
+
+/// A crypto ATM, 16x24: a cyan header with a gold coin, a lit screen, a keypad, and a
+/// banknote sticking out of the cash slot.
+fn atm(x: i32, y: i32) -> u8 {
+    use gx::*;
+    if !(1..=14).contains(&x) {
+        return 0;
+    }
+    if y == 0 || y == 23 || x == 1 || x == 14 {
+        return OUTLINE;
+    }
+    match y {
+        1..=5 => {
+            let (dx, dy) = (x * 2 - 15, (y - 3) * 2);
+            let d = dx * dx + dy * dy;
+            if d <= 12 {
+                if (dx == -1 || dx == 1) && dy.abs() <= 2 { GOLD_DARK } else { GOLD_LIGHT }
+            } else if d <= 20 {
+                GOLD_DARK
+            } else {
+                CYAN
+            }
+        }
+        6 | 13 => OUTLINE,
+        7..=12 => {
+            let line = (y == 8 && (4..=11).contains(&x)) || (y == 10 && (4..=8).contains(&x));
+            if x == 2 || x == 13 { WALL_DARK } else if line { CYAN } else { SCREEN }
+        }
+        14..=18 => {
+            if x == 2 { WALL_LIGHT } else if y % 2 == 1 && x % 2 == 0 && (4..=11).contains(&x) { WALL_LIGHT } else { WALL }
+        }
+        19 => if (4..=11).contains(&x) { OUTLINE } else { WALL },
+        20 | 21 if (5..=10).contains(&x) => if x == 5 || x == 10 || y == 21 { FELT } else { FELT_LIGHT },
+        22 => WALL_DARK,
+        _ => if x == 2 { WALL_LIGHT } else { WALL },
+    }
+}
+
+/// A sewer outflow, 24x24: a rusty pipe mouth in the wall, sludge pouring out of it.
+fn outflow(x: i32, y: i32) -> u8 {
+    use gx::*;
+    let (dx, dy) = (x - 12, y - 9);
+    let d2 = dx * dx + dy * dy;
+    if d2 <= 81 {
+        return match () {
+            _ if d2 > 72 => OUTLINE,
+            _ if d2 > 49 => if dx + dy < -3 { GOLD_LIGHT } else if dx + dy > 4 { GOLD_DARK } else { GOLD },
+            _ if d2 > 36 => OUTLINE,
+            _ if dy >= 3 => if dy == 3 { FELT_LIGHT } else { FELT },
+            _ => SCREEN,
+        };
+    }
+    // The stream off the lip, wavering as it falls.
+    let wobble = [0, 1, 1, 0, -1, -1][(y % 6) as usize];
+    let sx = x - 12 - wobble;
+    if y > 17 && sx.abs() <= 2 {
+        return if sx.abs() == 2 { FELT } else { FELT_LIGHT };
+    }
+    0
+}
+
+/// Graffiti, `w` by 16: NGMI sprayed in pink with a dark shadow and drips, over a cyan
+/// swoosh.
+fn graffiti(x: i32, y: i32, w: i32) -> u8 {
+    use gx::*;
+    let tx = (w - 4 * 6 + 1) / 2;
+    if text_at("NGMI", tx, 2, x, y) {
+        return PINK;
+    }
+    let drip = [tx + 1, tx + 9, tx + 20].contains(&x) && (9..9 + (x % 3) + 2).contains(&y);
+    if drip {
+        return PINK;
+    }
+    if text_at("NGMI", tx + 1, 3, x, y) {
+        return OUTLINE;
+    }
+    let wave = 13 + [0, 0, 1, 1, 1, 0, 0, -1, -1, -1][(x % 10) as usize];
+    if y == wave && (2..w - 2).contains(&x) {
+        return CYAN;
+    }
+    0
 }
 
 /// A slot machine, 16x24, after the mockup: a pink dome with a light, a slate cabinet

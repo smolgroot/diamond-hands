@@ -240,7 +240,17 @@ fn the_pause_menu_shows_the_controls_bag_and_wallet() {
     assert_eq!((scene(&probe), menu(&probe)), (Scene::Paused, (pause_menu::BAG, 1, false)), "B closes the card");
     for i in 0..ITEMS.len() {
         probe = press(&mut runner, keys::DOWN);
-        assert_eq!(probe.menu >> 8 & 0xFF, ((2 + i) % ITEMS.len()) as u32, "the list wraps");
+        let item = (2 + i) % ITEMS.len();
+        assert_eq!(probe.menu >> 8 & 0xFF, item as u32, "the list wraps");
+        runner.frames(6, 0);
+        assert_eq!(lit_names(&runner), [item], "only the selected name is lit");
+        screenshot(&runner, &format!("menu-bag-{item}"));
+        probe = press(&mut runner, keys::A);
+        assert_eq!(menu(&probe), (pause_menu::BAG, item as u8, true));
+        runner.frames(10, 0);
+        screenshot(&runner, &format!("menu-inspect-{item}"));
+        probe = press(&mut runner, keys::B);
+        assert!(!menu(&probe).2, "B closes the card");
     }
 
     probe = press(&mut runner, keys::RIGHT);
@@ -352,6 +362,21 @@ fn the_map_starts_the_badlands_and_keeps_the_trenches_locked() {
     press(&mut runner, keys::LEFT);
     press(&mut runner, keys::A);
     runner.run_until(10, 0, |p| scene(p) == Scene::Intro);
+}
+
+/// The bag rows whose name shows in white, the selection's colour (the others are
+/// steel). The rows are where `game/src/art/menu.rs` puts them: from y = `LIST_Y`
+/// every `LIST_STEP`, names from `LIST_NAME_X` to `RIGHT` (the badges are on the line
+/// below).
+fn lit_names(runner: &Runner) -> Vec<usize> {
+    let fb = runner.framebuffer();
+    let white = |x: usize, y: usize| fb[(y * 240 + x) * 4..][..3] == [255, 255, 255];
+    (0..ITEMS.len())
+        .filter(|i| {
+            let top = 24 + 16 * i;
+            (top..top + 8).any(|y| (128..232).any(|x| white(x, y)))
+        })
+        .collect()
 }
 
 /// Saves the screen as a binary PPM when `DIAMOND_HANDS_SHOTS` names a directory.
@@ -481,8 +506,9 @@ fn step_in_sync(runner: &mut Runner, model: &mut Game, keys: u16, previous: u16,
     assert_eq!(probe, Probe::from_game(model), "ROM diverged from the model: {what}");
 }
 
-/// Level 2 end to end on the ROM, in step with the model: CL207's call, the street,
-/// the casino floor, the elevator, the upper floors, SAM's fight, the penguin's
+/// Level 2 end to end on the ROM, in step with the model: CL207's call, the street, the
+/// casino floor, down to the back room and the sewers, the breaker, back up the shaft,
+/// the elevator, the pause menu up the tower, SAM's fight on the rooftop, the penguin's
 /// exchange (accepted) and the clear, which unlocks level 3 on the map. Screenshots
 /// each area with `DIAMOND_HANDS_SHOTS` set.
 #[test]
@@ -502,6 +528,7 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
     let mut coins_offered = 0;
     let (mut rode, mut swung, mut crashed, mut overloaded) = (false, false, false, false);
     let mut talk_frames = 0u32;
+    let mut paused = false;
     for i in 0..(400 * SECOND) {
         let level2 = model.world.level_index == 1;
         let keys = match model.scene {
@@ -511,6 +538,29 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             Scene::Map if model.scene_frames() > MAP_WALK_FRAMES + 8 && model.cleared == 0b1 => {
                 if i % 2 == 0 { keys::A } else { 0 }
             }
+            // Up the tower, with every storey's terrain made, the pause menu opens and
+            // closes: background VRAM is at its fullest here.
+            Scene::Play if level2 && !paused && model.world.camera_y < 100 && model.world.camera_x >= 1600 => {
+                paused = true;
+                keys::START
+            }
+            // Every page: the bag, an item's card, the wallet and the controls.
+            Scene::Paused => match model.scene_frames() {
+                20 => {
+                    shot(&runner, "t2-pause-tower");
+                    keys::A
+                }
+                40 => {
+                    shot(&runner, "t2-pause-tower-card");
+                    keys::B
+                }
+                60 | 80 => keys::RIGHT,
+                100 => {
+                    shot(&runner, "t2-pause-tower-controls");
+                    keys::START
+                }
+                _ => 0,
+            },
             Scene::Play => bot.keys(&model.world, previous),
             Scene::Dialog | Scene::Exchange if model.talking() => {
                 talk_frames += 1;
@@ -546,10 +596,43 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             }
             Scene::Play => {
                 let cam = w.camera_x;
-                for (x, name) in [(150, "t2-street"), (420, "t2-street-awning"), (640, "t2-casino-entrance"), (760, "t2-casino-tables"), (1000, "t2-casino-balcony"), (1120, "t2-secret-stage"), (1580, "t2-upper-servers"), (1700, "t2-upper-vault"), (1950, "t2-upper-guards")] {
-                    if cam >= x && cam < x + 4 {
+                // Which storey the camera is on: the tower, the street, the back room or
+                // the sewers.
+                let storey = match w.camera_y {
+                    0..=100 => 0,
+                    101..=300 => 1,
+                    301..=450 => 2,
+                    _ => 3,
+                };
+                let places = [
+                    (1, 150, "t2-street"),
+                    (1, 420, "t2-street-awning"),
+                    (1, 640, "t2-casino-entrance"),
+                    (1, 760, "t2-casino-tables"),
+                    (1, 860, "t2-casino-sunken-bar"),
+                    (1, 1000, "t2-casino-balcony"),
+                    (1, 1120, "t2-secret-stage"),
+                    (1, 1220, "t2-casino-hole"),
+                    (2, 1150, "t2-back-mezzanine"),
+                    (2, 1000, "t2-back-ramp"),
+                    (2, 850, "t2-back-stage"),
+                    (2, 700, "t2-back-slots"),
+                    (3, 640, "t2-sewer-drain"),
+                    (3, 800, "t2-sewer-channel"),
+                    (3, 1000, "t2-sewer-pipe"),
+                    (3, 1300, "t2-sewer-breaker"),
+                    (0, 1560, "t2-suites"),
+                    (0, 1700, "t2-suites-vault"),
+                ];
+                for (on, x, name) in places {
+                    if storey == on && cam >= x && cam < x + 4 {
                         shot(&runner, name);
                     }
+                }
+                let r = w.player.body.rect();
+                let in_shaft = (196 * 8..203 * 8).contains(&r.centre_x());
+                if in_shaft && w.player.grounded {
+                    shot(&runner, &format!("t2-shaft-{storey}"));
                 }
                 let r = w.player.body.rect();
                 if w.level.fence_hit(r.right(), r.y, 24, r.h).is_some() {
@@ -618,6 +701,7 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
         }
     }
     let end = runner.expect_probe();
+    assert!(paused, "the pause menu opened up the tower");
     assert!(rode, "the bot rode the elevator");
     assert!(swung && crashed && overloaded, "SAM used his attacks: hit {swung}, crash {crashed}, overload {overloaded}");
     assert!(coins_offered > 0, "the penguin had coins to change");

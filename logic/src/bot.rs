@@ -6,7 +6,8 @@
 //!
 //! An explorable level lists waypoints ([`crate::level::Level::route`]): [`Bot`] walks
 //! to each in turn, dropping down to those below and jumping (riding the jetpack once
-//! it has it) up to those above, then runs right as usual.
+//! it has it) up to those above, then runs right as usual. Wherever Up would do
+//! something on the way (a dark terminal, an open elevator) it presses it.
 
 use crate::{
     TILE, World,
@@ -17,6 +18,10 @@ use crate::{
     level::Tile,
     shot::ShotKind,
 };
+
+/// How near a beacon a waypoint must be, in tiles across plus down, to pick the route
+/// up from it after a knockout.
+const REROUTE_TILES: i32 = 20;
 
 /// The route bot, with its place along the level's waypoints.
 #[derive(Clone, Copy, Debug, Default)]
@@ -36,10 +41,12 @@ impl Bot {
         let route = world.level.route;
         let dead = world.player.is_dead();
         if self.down && !dead {
-            // Pick up from the waypoint nearest the beacon.
+            // Pick up from the waypoint nearest the beacon, if one is near: a beacon
+            // past the route's end (up the elevator, say) is far from them all.
             let r = world.player.body.rect();
             let (x, y) = (r.centre_x().div_euclid(TILE), r.bottom().div_euclid(TILE) - 1);
-            if let Some((i, _)) = route.iter().enumerate().min_by_key(|(_, w)| (w.0 - x).abs() + (w.1 - y).abs()) {
+            let distance = |w: &(i32, i32)| (w.0 - x).abs() + (w.1 - y).abs();
+            if let Some((i, _)) = route.iter().enumerate().filter(|(_, w)| distance(w) <= REROUTE_TILES).min_by_key(|(_, w)| distance(w)) {
                 self.step = i;
             }
         }
@@ -49,8 +56,13 @@ impl Bot {
         {
             self.step += 1;
         }
+        let p = &world.player;
+        if !world.arena && !dead && p.grounded && p.hurt == 0 && world.up_prompt().is_some() {
+            // Where Up does something on the way (a breaker), it presses it.
+            return if previous & keys::UP == 0 { keys::UP } else { 0 };
+        }
         match route.get(self.step) {
-            Some(&target) if !world.arena && !world.player.is_dead() => toward(world, previous, target),
+            Some(&target) if !world.arena && !dead => toward(world, previous, target),
             _ => keys_for(world, previous),
         }
     }

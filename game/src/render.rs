@@ -30,7 +30,7 @@ use diamond_hands_logic::{
     shot::ShotKind,
     arrival::{GUIDE_W, Gear},
     talk::{self, Speaker},
-    world::{CHARGE_FRAMES, LIFT_RIDE_FRAMES, LiftState},
+    world::{CHARGE_FRAMES, LIFT_H, LIFT_RIDE_FRAMES, LIFT_W, LiftState},
 };
 
 use crate::{
@@ -299,8 +299,10 @@ impl Renderer {
         self.view_y = cam_y;
 
         // Each level's stretches have their own light: the Badlands go from dusk to a
-        // burning night; the Trenches from the strip to the casino to the suites.
-        let stage = if in_menu { MENU_STAGE } else { world.level.stage_at(cam + WIDTH / 2) };
+        // burning night; the Trenches from the strip to the casino and the exchange's
+        // lobby, and up the tower to the night again. Below ground, the Trenches'
+        // strata keep palettes of their own (see `trenches::TERRAIN_SLOTS`).
+        let stage = if in_menu { MENU_STAGE } else { world.level.stage_at(cam + WIDTH / 2, cam_y + HEIGHT / 2) };
         let theme = world.level.theme;
         if theme != self.theme && !self.switch_theme(theme) {
             // Mid-switch: show nothing of either level this frame.
@@ -320,16 +322,25 @@ impl Renderer {
             crashing && (game.frame / 6).is_multiple_of(2),
         );
         if stage != self.stage || self.fence.0 == u8::MAX {
-            frame.set_background_palette(0, &badlands::sky_palettes(theme)[stage as usize]);
+            let skies = badlands::sky_palettes(theme);
+            frame.set_background_palette(0, skies.get(stage as usize).unwrap_or(&skies[0]));
             self.stage = stage;
             self.fence.0 = u8::MAX;
         }
         if fence != self.fence {
-            let palette = match theme {
-                Theme::Badlands => badlands::ground_palette(stage, fence.0),
-                Theme::Trenches => trenches::ground_palette(stage, fence.0, fence.1, fence.2),
-            };
-            frame.set_background_palette(TERRAIN_PALETTE, &palette);
+            match theme {
+                Theme::Badlands => frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence.0)),
+                Theme::Trenches => {
+                    // Every stratum's light, and its scenery's muted copy.
+                    for (stratum, (&slot, &scenery)) in
+                        trenches::TERRAIN_SLOTS.iter().zip(trenches::SCENERY_SLOTS.iter()).enumerate()
+                    {
+                        let palette = trenches::stratum_palette(stratum, stage, fence.0, fence.1, fence.2);
+                        frame.set_background_palette(scenery, &trenches::scenery_palette(&palette));
+                        frame.set_background_palette(slot, &palette);
+                    }
+                }
+            }
             self.fence = fence;
         }
 
@@ -360,9 +371,11 @@ impl Renderer {
         }
         self.terrain
             .set_scroll_pos(vec2(cam.rem_euclid(TERRAIN_COLS * TILE), cam_y.rem_euclid(TERRAIN_ROWS * TILE)));
-        // Going down a tall level, the far-off city and sky drift up a little.
-        let city_y = (cam_y / CITY_DEPTH).min(MAX_BACKDROP_Y);
-        let sky_y = (cam_y / SKY_DEPTH).min(MAX_BACKDROP_Y);
+        // Going down a tall level, the far-off city and sky drift up a little, from the
+        // height they were painted for.
+        let drift = (cam_y - if in_menu { 0 } else { level.backdrop_y }).max(0);
+        let city_y = (drift / CITY_DEPTH).min(MAX_BACKDROP_Y);
+        let sky_y = (drift / SKY_DEPTH).min(MAX_BACKDROP_Y);
         self.city.set_scroll_pos(vec2((cam / 3).rem_euclid(256), city_y));
         self.sky.set_scroll_pos(vec2(0, sky_y));
         if game.talking() {
@@ -478,8 +491,11 @@ impl Renderer {
     /// SAM, and back if a respawn takes it away. One half is dropped a frame before the
     /// other is made: sprites the last frame showed are only freed once it is on screen.
     fn swap_casino_art(&mut self, world: &diamond_hands_logic::World) {
-        let near_sam = world.boss.present && world.camera_x + WIDTH >= world.boss.rect().x - 8;
-        let far = !world.boss.present || world.camera_x + WIDTH < world.boss.rect().x - 40;
+        // In a tall level, other storeys may run under the arena: only SAM's own counts.
+        let boss = world.boss.rect();
+        let level_with = world.camera_y < boss.bottom() + 8 && world.camera_y + HEIGHT > boss.y - 8;
+        let near_sam = world.boss.present && level_with && world.camera_x + WIDTH >= boss.x - 8;
+        let far = !world.boss.present || !level_with || world.camera_x + WIDTH < boss.x - 40;
         let Some(casino) = self.level_art.as_mut().and_then(LevelArt::casino_mut) else {
             return;
         };
@@ -634,7 +650,11 @@ impl Renderer {
             id => &self.terrain_tiles.tiles[id as usize],
         };
         let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
-        self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, TERRAIN_PALETTE));
+        let palette = match level.theme {
+            Theme::Trenches => trenches::palette_slot(level, ty, key),
+            Theme::Badlands => TERRAIN_PALETTE,
+        };
+        self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, palette));
     }
 
     fn draw_overlay(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -1766,7 +1786,7 @@ impl Renderer {
         };
         let cam = self.view_x;
         for (upstairs, (x, feet)) in [(false, lift.car), (true, lift.dest)] {
-            if x + 32 < cam || x > cam + WIDTH {
+            if x + 32 < cam || x > cam + WIDTH || !self.on_screen_y(feet - LIFT_H, feet) {
                 continue;
             }
             let (sx, sy) = (x - cam - 4, feet - 32);
@@ -1796,6 +1816,13 @@ impl Renderer {
         if let Some((px, py)) = game.world.up_prompt() {
             let bob = (game.frame / 10 % 2) as i32;
             self.put(frame, &casino.up_prompt, px - 8 - cam, py - 16 - bob - self.view_y);
+        }
+        // The dead car, its power cut somewhere else: a sign blinks over it.
+        if game.world.lift_unpowered() && !(game.frame / 20).is_multiple_of(3) {
+            let (x, feet) = lift.car;
+            let text = "NO POWER";
+            let left = x + LIFT_W / 2 - Font::width(text, false) / 2 - cam;
+            self.font.draw(frame, text, left, feet - LIFT_H - 12 - self.view_y, false);
         }
     }
 

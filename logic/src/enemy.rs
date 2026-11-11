@@ -10,10 +10,9 @@ use crate::{
     world::Difficulty,
 };
 
-/// At most 128, for the `u128` mask a piercing beam keeps of the actors it has hit.
-/// Every `World` holds this many, and worlds are built on the GBA's small IWRAM stack,
-/// so keep it no bigger than the levels need.
-pub const MAX_ACTORS: usize = 96;
+/// At most 128, for the `u128` masks a piercing beam keeps of the actors it has hit
+/// and a save keeps of those taken. Every `World` holds this many, on the heap.
+pub const MAX_ACTORS: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -375,8 +374,7 @@ impl Actor {
                 let contacts = self.fall(ctx.level);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground
-                    && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -478,8 +476,7 @@ impl Actor {
                 let contacts = self.fall(ctx.level);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground
-                    && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -546,7 +543,7 @@ impl Actor {
         let contacts = self.fall(ctx.level);
         let r = self.rect();
         let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-        let ledge = contacts.ground && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+        let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
         if ledge {
             // Never walk off the floor it guards.
             self.body.x_fx -= self.facing * FX;
