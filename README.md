@@ -150,6 +150,14 @@ Below ground, open cells show a dim back wall instead of black, after
 standing on the cavern's and the deep's floors, with brick above it. It is drawn in the
 terrain layer (no background layer is free) in its own muted palette, BG slot 4, and
 girders, fences and scenery underground are drawn over it in the same tile.
+The Trenches' sewers follow `level2-sewers-tiles-sprites-sheet.png` and
+`level2-sewers-background-tiles-sprites-sheet.png`: mossy green-grey brick under a steel
+rail with hazard orange dashes (its lit top is the walking line), the same rail up the
+ramps and along the catwalks, and behind the corridor a dark teal back wall of vaults on
+pillars with a round grate in each bay, a ledge and water at the foot. The corridor has
+outflow pipes with slime glowing in them, vines, pipework, barriers, a ladder up to the
+breaker's catwalk and graffiti on the brick under the ledge. Every copy of a
+picture sits at the same place in the back wall's 64 px bay, so the copies share tiles.
 The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
 - the wassie has a gold rim light, a broad bill and a red neck scarf
 - it squashes on a hard landing and leans back when it skids
@@ -317,8 +325,12 @@ functions in those address ranges (`C <range> <lr> <cycles>`).
   kept no diamond balance. A run saved part-way through the old Trenches starts the
   rebuilt level from the top, and one part-way through the Badlands from before they became
   explorable (version 6 and older) starts them from the top too.
-- The caves, the back room and the sewers have no backdrop of their own yet: underground,
-  the sky and the city fade to black behind the rock.
+- Background VRAM can't hold all of the Trenches' terrain at once. The sewers and the
+  floors above them each keep their tiles only while the camera is there (`region` in
+  `game/src/render.rs`): once the camera is wholly in one, the other's tiles are dropped
+  and the map is cleared of them off screen, half a column a frame.
+- The back room has no backdrop of its own yet: there the sky and the city fade to black
+  behind the rock. The caves and the sewers draw a back wall instead.
 - Slopes are drawn only in the Trenches' tilesets; the Badlands have none.
 - A file that found plasma cells in the old Trenches keeps them: the cells are numbered in
   map order, so they count as the new map's first cells.

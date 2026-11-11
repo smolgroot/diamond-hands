@@ -65,6 +65,10 @@ const RECOIL_BODY: i32 = 1;
 /// to 32x32 and 15 colours by `scripts/make-portrait.py`. Colour indices, row by row.
 static PORTRAIT: &[u8; 1024] = include_bytes!("../../gfx/wassie-portrait.idx");
 
+/// The portrait with the lower bill dropped one pixel, then two: two 1024-index frames
+/// back to back, from the same script. Shown in turn while the wassie talks.
+static PORTRAIT_TALK: &[u8; 2048] = include_bytes!("../../gfx/wassie-portrait-talk.idx");
+
 /// The portrait's own palette, read from the script's little-endian BGR555 colours.
 static PORTRAIT_PALETTE: Palette16 = {
     let raw: &[u8; 32] = include_bytes!("../../gfx/wassie-portrait.pal");
@@ -762,6 +766,8 @@ pub struct Wassie {
     pub flames: [SpriteVram; 3],
     /// The portrait from the player sprite sheet, for the dialogue box.
     pub portrait: SpriteVram,
+    /// The portrait with the bill half open, then wide open.
+    pub portrait_talk: [SpriteVram; 2],
 }
 
 impl Wassie {
@@ -798,6 +804,13 @@ impl Wassie {
                 }
                 c.vram_with(&PORTRAIT_PALETTE)
             },
+            portrait_talk: core::array::from_fn(|f| {
+                let mut c = Canvas::new(Size::S32x32);
+                for (i, &colour) in PORTRAIT_TALK[f * 1024..][..1024].iter().enumerate() {
+                    c.px((i % 32) as i32, (i / 32) as i32, colour);
+                }
+                c.vram_with(&PORTRAIT_PALETTE)
+            }),
         }
     }
 
