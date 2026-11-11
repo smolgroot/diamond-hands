@@ -9,7 +9,7 @@ pub mod trenches;
 pub mod ui;
 pub mod wassie;
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::vec::Vec;
 
 use agb::{
     ExternalAllocator,
@@ -22,6 +22,37 @@ use agb::{
 
 pub const fn rgb(r: u16, g: u16, b: u16) -> Rgb15 {
     Rgb15::new(r | (g << 5) | (b << 10))
+}
+
+/// How far the backdrops (sky and city) are muted, saturation and brightness in
+/// percent, so the wassie, the bots and the ground they stand on stand out from them.
+pub const BACKDROP_MUTE: (u16, u16) = (50, 68);
+/// And the scenery drawn on the terrain layer (signs, slot machines, screens): less,
+/// as it is nearer and still has to read.
+pub const SCENERY_MUTE: (u16, u16) = (70, 78);
+
+/// `c` with its saturation cut to `sat` percent (towards its own grey) and its
+/// brightness to `bright` percent.
+pub const fn mute(c: Rgb15, sat: u16, bright: u16) -> Rgb15 {
+    const fn mix(x: u16, grey: u16, sat: u16, bright: u16) -> u16 {
+        (x * sat + grey * (100 - sat)) / 100 * bright / 100
+    }
+    let v = c.0;
+    let (r, g, b) = (v & 31, (v >> 5) & 31, (v >> 10) & 31);
+    let grey = (r * 77 + g * 150 + b * 29) / 256;
+    rgb(mix(r, grey, sat, bright), mix(g, grey, sat, bright), mix(b, grey, sat, bright))
+}
+
+/// Every colour of `palette` from index `first` on muted as [`mute`]. Index 0 is
+/// transparent, except in background palette 0, where it is the backdrop colour.
+pub const fn mute_palette(palette: Palette16, (sat, bright): (u16, u16), first: usize) -> Palette16 {
+    let mut out = palette;
+    let mut i = first;
+    while i < 16 {
+        out.update_colour(i, mute(out.colour(i), sat, bright));
+        i += 1;
+    }
+    out
 }
 
 /// Sprite palette indices for the bots, pickups, effects and HUD. The wassie has its
@@ -988,33 +1019,50 @@ fn cursor() -> SpriteVram {
 
 /// Interns 8x8 tiles by their pixels, so identical cells share VRAM.
 pub struct TileCache {
-    ids: BTreeMap<[u8; 64], usize>,
+    /// Each tile's place in `tiles`, sorted by a hash of its pixels; a hash match is
+    /// checked against the tile itself. Eight bytes a tile in one block: the heap is
+    /// tight. A level's terrain has hundreds of tiles, agb copies a background's tile
+    /// map whenever it changes, and the pause menu and the world map need large blocks
+    /// beside them, so a map keyed by the pixels left it too fragmented to give them.
+    ids: Vec<(u32, u16)>,
     pub tiles: Vec<DynamicTile16>,
+}
+
+/// FNV-1a over a tile's packed words.
+fn tile_hash(words: &[u32; 8]) -> u32 {
+    words.iter().fold(0x811c_9dc5, |h, &w| (h ^ w).wrapping_mul(0x0100_0193))
 }
 
 impl TileCache {
     pub fn new() -> Self {
         Self {
-            ids: BTreeMap::new(),
+            ids: Vec::new(),
             tiles: Vec::new(),
         }
     }
 
     /// The tile with these pixels, created on first use. `None` when fully transparent.
     pub fn intern(&mut self, pixels: [u8; 64]) -> Option<usize> {
-        if pixels.iter().all(|&p| p == 0) {
+        // A whole row of the tile per word, a nibble a pixel, leftmost lowest.
+        let mut packed = [0u32; 8];
+        for (word, row) in packed.iter_mut().zip(pixels.chunks_exact(8)) {
+            *word = row.iter().rev().fold(0, |acc, &p| acc << 4 | u32::from(p & 15));
+        }
+        if packed == [0; 8] {
             return None;
         }
-        let tiles = &mut self.tiles;
-        Some(*self.ids.entry(pixels).or_insert_with(|| {
-            let mut tile = DynamicTile16::new();
-            // A whole row of the tile per word, a nibble a pixel, leftmost lowest.
-            for (word, row) in tile.data_mut().iter_mut().zip(pixels.chunks_exact(8)) {
-                *word = row.iter().rev().fold(0, |acc, &p| acc << 4 | u32::from(p));
-            }
-            tiles.push(tile);
-            tiles.len() - 1
-        }))
+        let hash = tile_hash(&packed);
+        let first = self.ids.partition_point(|&(h, _)| h < hash);
+        let same = self.ids[first..].iter().take_while(|&&(h, _)| h == hash);
+        if let Some(&(_, id)) = same.clone().find(|&&(_, id)| self.tiles[id as usize].data() == packed) {
+            return Some(id as usize);
+        }
+        let mut tile = DynamicTile16::new();
+        tile.data_mut().copy_from_slice(&packed);
+        self.tiles.push(tile);
+        let id = (self.tiles.len() - 1) as u16;
+        self.ids.insert(first + same.count(), (hash, id));
+        Some(id as usize)
     }
 
     /// Fills cell `(tx, ty)` of `bg` with `pixel(x, y)` in screen coordinates, using

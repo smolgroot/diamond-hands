@@ -136,6 +136,9 @@ pub struct Player {
     /// Jetpack fuel left, in frames.
     pub hover_fuel: u8,
     pub hovering: bool,
+    /// Whether the wassie owns the jetpack. Most levels start with it; an explorable
+    /// one hides it somewhere and holding A only hovers once it is found.
+    pub jetpack: bool,
     /// Frames left in the knocked-out pose before respawning.
     pub dead_timer: u16,
     /// Frames left in the landing squash.
@@ -163,6 +166,7 @@ impl Player {
             aim: Aim::Forward,
             hover_fuel: HOVER_FRAMES,
             hovering: false,
+            jetpack: true,
             dead_timer: 0,
             land: 0,
             braking: false,
@@ -231,7 +235,7 @@ impl Player {
             0
         };
         let can_hover =
-            control && !self.grounded && self.jump_held_for > HOVER_DELAY && self.hover_fuel > 0;
+            control && self.jetpack && !self.grounded && self.jump_held_for > HOVER_DELAY && self.hover_fuel > 0;
         self.hovering = can_hover && (self.hovering || body.vy_fx >= 0);
         if self.hovering {
             self.hover_fuel -= 1;

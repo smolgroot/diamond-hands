@@ -226,9 +226,10 @@ impl Sfx {
 
     /// The casino's sounds on the chime's channel: a bright "ka-ching" for a gold coin
     /// (higher and snappier than the diamond chime), a rising power-up for the elevator
-    /// terminal, a "ding-dong" for its doors and ride, and a sparkle for a plasma cell.
+    /// terminal, a "ding-dong" for its doors and ride, and a sparkle for a plasma cell
+    /// or a piece of gear.
     fn casino(&mut self, events: Events) {
-        if events.contains(Events::PART) {
+        if events.contains(Events::PART) || events.contains(Events::GEAR) {
             Self::chime(LADDER[5], tone(0, 2, 2, 11));
             self.pending = Some((CHIME_GAP * 2, LADDER[9]));
         } else if events.contains(Events::POWER) {

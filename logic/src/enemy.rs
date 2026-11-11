@@ -10,10 +10,9 @@ use crate::{
     world::Difficulty,
 };
 
-/// At most 128, for the `u128` mask a piercing beam keeps of the actors it has hit.
-/// Every `World` holds this many, and worlds are built on the GBA's small IWRAM stack,
-/// so keep it no bigger than the levels need.
-pub const MAX_ACTORS: usize = 96;
+/// At most 128, for the `u128` masks a piercing beam keeps of the actors it has hit
+/// and a save keeps of those taken. Every `World` holds this many, on the heap.
+pub const MAX_ACTORS: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -33,6 +32,8 @@ pub enum ActorKind {
     Coin,
     /// A plasma cell for CL207's shield.
     Part,
+    /// The jetpack, lying where an explorable level hides it.
+    Jetpack,
     /// The elevator's access terminal: off until the wassie presses Up at it.
     Terminal,
     /// Casino croupier bot: deals a fan of three cards.
@@ -53,6 +54,7 @@ impl ActorKind {
             b't' => ActorKind::Mine,
             b'$' => ActorKind::Coin,
             b'p' => ActorKind::Part,
+            b'J' => ActorKind::Jetpack,
             b'E' => ActorKind::Terminal,
             b'd' => ActorKind::Dealer,
             b'g' => ActorKind::Guard,
@@ -71,6 +73,7 @@ impl ActorKind {
             ActorKind::Mine => (12, 12),
             ActorKind::Coin => (8, 8),
             ActorKind::Part => (10, 12),
+            ActorKind::Jetpack => (12, 16),
             ActorKind::Terminal => (12, 20),
             ActorKind::Dealer => (14, 22),
             ActorKind::Guard => (16, 26),
@@ -131,7 +134,7 @@ impl ActorKind {
 
     /// Picked up by touching it.
     pub fn is_pickup(self) -> bool {
-        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part)
+        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack)
     }
 
     /// Floats instead of falling.
@@ -144,6 +147,7 @@ impl ActorKind {
                 | ActorKind::Checkpoint
                 | ActorKind::Coin
                 | ActorKind::Part
+                | ActorKind::Jetpack
         )
     }
 }
@@ -317,6 +321,7 @@ impl Actor {
             | ActorKind::Checkpoint
             | ActorKind::Coin
             | ActorKind::Part
+            | ActorKind::Jetpack
             | ActorKind::Terminal => {}
         }
     }
@@ -369,8 +374,7 @@ impl Actor {
                 let contacts = self.fall(ctx.level);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground
-                    && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -472,8 +476,7 @@ impl Actor {
                 let contacts = self.fall(ctx.level);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground
-                    && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -540,7 +543,7 @@ impl Actor {
         let contacts = self.fall(ctx.level);
         let r = self.rect();
         let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-        let ledge = contacts.ground && !ctx.level.is_floor(front.div_euclid(TILE), r.bottom().div_euclid(TILE));
+        let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
         if ledge {
             // Never walk off the floor it guards.
             self.body.x_fx -= self.facing * FX;

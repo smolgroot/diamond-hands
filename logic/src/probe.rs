@@ -48,11 +48,13 @@ pub struct Probe {
     pub lift: u32,
     /// The penguin's [`crate::game::Deal`] while the exchange is open, else `u32::MAX`.
     pub deal: u32,
+    /// Top edge of the screen in level pixels: the camera's height in a tall level.
+    pub camera_y: i32,
 }
 
 impl Probe {
     pub const MAGIC: u32 = u32::from_le_bytes(*b"DHPR");
-    pub const VERSION: u32 = 6;
+    pub const VERSION: u32 = 7;
     pub const WORDS: usize = size_of::<Probe>() / 4;
 
     /// The value the ROM starts with, before the first frame runs.
@@ -85,6 +87,7 @@ impl Probe {
         parts: 0,
         lift: 0,
         deal: 0,
+        camera_y: 0,
     };
 
     pub fn from_game(game: &Game) -> Self {
@@ -116,6 +119,7 @@ impl Probe {
             parts: (game.parts | world.parts) as u32,
             lift: world.lift.map_or(u32::MAX, |l| l.state as u32),
             deal: if game.scene == crate::Scene::Exchange { game.exchange.deal as u32 } else { u32::MAX },
+            camera_y: world.camera_y,
             ..Self::BOOT
         }
     }
@@ -135,8 +139,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_is_twenty_eight_words() {
-        assert_eq!(Probe::WORDS, 28);
+    fn layout_is_twenty_nine_words() {
+        assert_eq!(Probe::WORDS, 29);
     }
 
     #[test]

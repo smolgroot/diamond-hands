@@ -58,7 +58,17 @@ fn boot_to_title(runner: &mut Runner) -> Probe {
 fn boot_to_files_from_prompt(runner: &mut Runner) -> Probe {
     runner.tap(keys::START);
     let entered = runner.run_until(5, 0, |p| scene(p) == Scene::Files);
-    let files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
+    let mut files = runner.run_until(5 * SECOND, 0, |p| p.frame > entered.frame + 1);
+    // Building the renderer and its first frames run long, by an amount that shifts
+    // with what they load: wait until the ROM keeps pace, a game frame per video frame.
+    let mut steady = 0;
+    while steady < 3 {
+        runner.frame(0);
+        let p = runner.expect_probe();
+        steady = if p.frame == files.frame + 1 { steady + 1 } else { 0 };
+        files = p;
+        assert!(files.frame < entered.frame + 60, "the ROM never kept pace");
+    }
     screenshot(runner, "files");
     files
 }
@@ -134,12 +144,12 @@ fn the_wassie_runs_and_jumps() {
 }
 
 #[test]
-fn holding_a_hovers_and_the_blaster_aims_diagonally() {
+fn the_badlands_jetpack_is_lost_and_the_blaster_aims_diagonally() {
     let mut runner = Runner::new(&read_rom());
     let start = start_level(&mut runner);
     screenshot(&runner, "level-start");
 
-    // A held jump climbs past a plain jump's apex on the jetpack.
+    // The Badlands hide the jetpack in the deep: a held jump is only a jump.
     let mut highest = start.player_y;
     let mut hovered = false;
     for i in 0..70 {
@@ -151,9 +161,9 @@ fn holding_a_hovers_and_the_blaster_aims_diagonally() {
             screenshot(&runner, "hover");
         }
     }
-    assert!(hovered, "never lit the jetpack");
+    assert!(!hovered, "hovered without the jetpack");
     let rise = start.player_y - highest;
-    assert!(rise > JUMP_APEX + 16, "rose {rise}px");
+    assert!(rise <= JUMP_APEX + 1, "rose {rise}px");
 
     // Planted with R, Up+Right fires up and to the right without walking.
     runner.frames(60, 0);
@@ -230,7 +240,17 @@ fn the_pause_menu_shows_the_controls_bag_and_wallet() {
     assert_eq!((scene(&probe), menu(&probe)), (Scene::Paused, (pause_menu::BAG, 1, false)), "B closes the card");
     for i in 0..ITEMS.len() {
         probe = press(&mut runner, keys::DOWN);
-        assert_eq!(probe.menu >> 8 & 0xFF, ((2 + i) % ITEMS.len()) as u32, "the list wraps");
+        let item = (2 + i) % ITEMS.len();
+        assert_eq!(probe.menu >> 8 & 0xFF, item as u32, "the list wraps");
+        runner.frames(6, 0);
+        assert_eq!(lit_names(&runner), [item], "only the selected name is lit");
+        screenshot(&runner, &format!("menu-bag-{item}"));
+        probe = press(&mut runner, keys::A);
+        assert_eq!(menu(&probe), (pause_menu::BAG, item as u8, true));
+        runner.frames(10, 0);
+        screenshot(&runner, &format!("menu-inspect-{item}"));
+        probe = press(&mut runner, keys::B);
+        assert!(!menu(&probe).2, "B closes the card");
     }
 
     probe = press(&mut runner, keys::RIGHT);
@@ -282,6 +302,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
     let mut runner = Runner::new(&rom);
     start_level(&mut runner);
     let mut previous = 0;
+    let mut bot = bot::Bot::default();
     let mut world = Game::new(0).world;
     let lit = loop {
         // The route bot only reads the level and the wassie, which the probe can't
@@ -290,7 +311,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
         if p.checkpoints > 0 {
             break p;
         }
-        let keys = bot::keys_for(&world, previous);
+        let keys = bot.keys(&world, previous);
         runner.frame(keys);
         world.step(&Input::from_keys(keys, previous));
         previous = keys;
@@ -312,7 +333,7 @@ fn a_file_continues_from_its_beacon_after_a_power_cycle() {
     assert_eq!(resumed.checkpoints, lit.checkpoints);
     assert_eq!(resumed.diamonds, lit.diamonds);
     assert!(
-        (resumed.player_x - lit.player_x).abs() < 32,
+        (resumed.player_x - lit.player_x).abs() < 32 && (resumed.player_y - lit.player_y).abs() < 32,
         "should stand at the beacon: {lit:?} → {resumed:?}"
     );
 }
@@ -341,6 +362,21 @@ fn the_map_starts_the_badlands_and_keeps_the_trenches_locked() {
     press(&mut runner, keys::LEFT);
     press(&mut runner, keys::A);
     runner.run_until(10, 0, |p| scene(p) == Scene::Intro);
+}
+
+/// The bag rows whose name shows in white, the selection's colour (the others are
+/// steel). The rows are where `game/src/art/menu.rs` puts them: from y = `LIST_Y`
+/// every `LIST_STEP`, names from `LIST_NAME_X` to `RIGHT` (the badges are on the line
+/// below).
+fn lit_names(runner: &Runner) -> Vec<usize> {
+    let fb = runner.framebuffer();
+    let white = |x: usize, y: usize| fb[(y * 240 + x) * 4..][..3] == [255, 255, 255];
+    (0..ITEMS.len())
+        .filter(|i| {
+            let top = 24 + 16 * i;
+            (top..top + 8).any(|y| (128..232).any(|x| white(x, y)))
+        })
+        .collect()
 }
 
 /// Saves the screen as a binary PPM when `DIAMOND_HANDS_SHOTS` names a directory.
@@ -392,16 +428,19 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
     assert_eq!(Probe::from_game(&model), files, "out of sync at the file menu");
 
     let mut previous = 0u16;
+    let mut bot = bot::Bot::default();
     let mut saw_hit = false;
     let mut saw_dialog = false;
     let mut dialog_frames = 0;
     let mut arrival_frames = 0;
     let mut beats_seen = 0;
-    for i in 0..(100 * SECOND) {
+    let mut waypoint = 0;
+    // The explorable Badlands are a long way round, with a knockout or two on the way.
+    for i in 0..(240 * SECOND) {
         let keys = match model.scene {
             Scene::Files => keys::A,
             Scene::Title if i == 20 => keys::START,
-            Scene::Play => bot::keys_for(&model.world, previous),
+            Scene::Play => bot.keys(&model.world, previous),
             // Read each line for a moment, then press on.
             Scene::Dialog | Scene::Arrival if model.talking() => {
                 dialog_frames += 1;
@@ -409,13 +448,15 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
             }
             _ => 0,
         };
-        runner.frame(keys);
-        model.step(&Input::from_keys(keys, previous));
+        step_in_sync(runner, &mut model, keys, previous, &format!("step {i}"));
         previous = keys;
+        // Each stop on the way round: the pit, the caves, the deep, the jetpack, the
+        // shaft's girders and the plateau.
+        if bot.step() != waypoint {
+            waypoint = bot.step();
+            screenshot(runner, &format!("b1-{waypoint:02}"));
+        }
         saw_hit |= model.world.player.hp < diamond_hands_logic::player::MAX_HP;
-
-        let probe = runner.expect_probe();
-        assert_eq!(probe, Probe::from_game(&model), "ROM diverged from the model at step {i}");
         saw_dialog |= model.scene == Scene::Dialog;
         let talk = if model.scene == Scene::Arrival { "arrival-talk" } else { "dialog" };
         if model.talking() && dialog_frames % 50 == 49 {
@@ -452,17 +493,22 @@ fn clear_badlands_with_keys(runner: &mut Runner) -> (Game, u16) {
 
 /// Steps the ROM and the model one game frame with `keys`. The ROM may take several
 /// video frames over one (entering a level repaints its backdrop), so the keys are held
-/// until it has read them. Panics if the two disagree.
+/// until it has read them; and after a frame that ran long it may catch up with two
+/// game frames in one video frame, both reading the same keys, so the model steps as
+/// often. Panics if the two disagree.
 fn step_in_sync(runner: &mut Runner, model: &mut Game, keys: u16, previous: u16, what: &str) {
     let next = model.frame + 1;
-    runner.run_until(10 * SECOND, keys, |p| p.frame >= next);
+    let probe = runner.run_until(10 * SECOND, keys, |p| p.frame >= next);
     model.step(&Input::from_keys(keys, previous));
-    let probe = runner.expect_probe();
+    while model.frame < probe.frame {
+        model.step(&Input::from_keys(keys, keys));
+    }
     assert_eq!(probe, Probe::from_game(model), "ROM diverged from the model: {what}");
 }
 
-/// Level 2 end to end on the ROM, in step with the model: CL207's call, the street,
-/// the casino floor, the elevator, the upper floors, SAM's fight, the penguin's
+/// Level 2 end to end on the ROM, in step with the model: CL207's call, the street, the
+/// casino floor, down to the back room and the sewers, the breaker, back up the shaft,
+/// the elevator, the pause menu up the tower, SAM's fight on the rooftop, the penguin's
 /// exchange (accepted) and the clear, which unlocks level 3 on the map. Screenshots
 /// each area with `DIAMOND_HANDS_SHOTS` set.
 #[test]
@@ -470,6 +516,7 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
     use diamond_hands_logic::{boss::BossState, game::Deal, world::LiftState};
     let mut runner = Runner::new(&read_rom());
     let (mut model, mut previous) = clear_badlands_with_keys(&mut runner);
+    let mut bot = bot::Bot::default();
     let mut seen = std::collections::BTreeSet::new();
     let mut shot = |runner: &Runner, name: &str| {
         if seen.insert(name.to_string()) {
@@ -481,8 +528,23 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
     let mut coins_offered = 0;
     let (mut rode, mut swung, mut crashed, mut overloaded) = (false, false, false, false);
     let mut talk_frames = 0u32;
+    let mut paused = false;
+    // With DIAMOND_HANDS_PROFILE naming a file, level 2 is profiled (and not drawn):
+    // each video frame's busy cycles with where the camera was, then cycles by PC.
+    let profile_to = std::env::var_os("DIAMOND_HANDS_PROFILE");
+    let mut profiled = String::new();
     for i in 0..(400 * SECOND) {
         let level2 = model.world.level_index == 1;
+        if profile_to.is_some() && level2 && runner.profile.is_none() {
+            // DIAMOND_HANDS_PROFILE_WATCH: hex ranges "start-end,..." whose callers to log.
+            let watch = std::env::var("DIAMOND_HANDS_PROFILE_WATCH").unwrap_or_default();
+            let watch = watch
+                .split(',')
+                .filter_map(|r| r.split_once('-'))
+                .map(|(a, b)| u32::from_str_radix(a, 16).unwrap()..u32::from_str_radix(b, 16).unwrap())
+                .collect();
+            runner.profile = Some(diamond_hands_harness::Profile { watch, ..Default::default() });
+        }
         let keys = match model.scene {
             Scene::LevelClear if model.scene_frames() > diamond_hands_logic::game::CLEAR_LOCK_FRAMES + 4 => {
                 if i % 2 == 0 { keys::A } else { 0 }
@@ -490,7 +552,30 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             Scene::Map if model.scene_frames() > MAP_WALK_FRAMES + 8 && model.cleared == 0b1 => {
                 if i % 2 == 0 { keys::A } else { 0 }
             }
-            Scene::Play => bot::keys_for(&model.world, previous),
+            // Up the tower, with every storey's terrain made, the pause menu opens and
+            // closes: background VRAM is at its fullest here.
+            Scene::Play if level2 && !paused && model.world.camera_y < 100 && model.world.camera_x >= 1600 => {
+                paused = true;
+                keys::START
+            }
+            // Every page: the bag, an item's card, the wallet and the controls.
+            Scene::Paused => match model.scene_frames() {
+                20 => {
+                    shot(&runner, "t2-pause-tower");
+                    keys::A
+                }
+                40 => {
+                    shot(&runner, "t2-pause-tower-card");
+                    keys::B
+                }
+                60 | 80 => keys::RIGHT,
+                100 => {
+                    shot(&runner, "t2-pause-tower-controls");
+                    keys::START
+                }
+                _ => 0,
+            },
+            Scene::Play => bot.keys(&model.world, previous),
             Scene::Dialog | Scene::Exchange if model.talking() => {
                 talk_frames += 1;
                 if talk_frames % 40 == 0 { keys::A } else { 0 }
@@ -500,6 +585,41 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
         let what = format!("step {i}, {:?}", model.scene);
         step_in_sync(&mut runner, &mut model, keys, previous, &what);
         previous = keys;
+        if runner.profile.is_some() {
+            let w = &model.world;
+            let near = |r: diamond_hands_logic::physics::Rect| {
+                r.right() > w.camera_x && r.x < w.camera_x + 240 && r.bottom() > w.camera_y && r.y < w.camera_y + 160
+            };
+            let bots = w.actors.iter().filter(|a| a.alive && a.kind.is_enemy() && near(a.rect())).count();
+            let shots = w.shots.iter().filter(|s| s.active).count();
+            let fence = diamond_hands_logic::world::fence_state(w.frames);
+            // Whether the wassie should be on screen, and whether an object is there:
+            // 1 shown, 0 missing, - not expected (blinking, riding, off screen).
+            let p = w.player.body.rect();
+            let expected = model.scene == Scene::Play
+                && w.player.invuln == 0
+                && !w.lift.is_some_and(|l| l.riding())
+                && p.bottom() > w.camera_y
+                && p.y < w.camera_y + 160;
+            let (px, py) = (p.centre_x() - w.camera_x, p.centre_y() - w.camera_y);
+            let wassie = match expected {
+                false => "-",
+                _ if runner.object_covers(px, py) => "1",
+                _ => "0",
+            };
+            let profile = runner.profile.as_mut().unwrap();
+            for (busy, objects) in profile.frames.drain(..).zip(profile.objects.drain(..)) {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    profiled,
+                    "F {busy} {:?} {} {} {bots} {shots} {objects} {fence} {} {wassie}",
+                    model.scene,
+                    w.camera_x,
+                    w.camera_y,
+                    model.frame
+                );
+            }
+        }
         if model.scene == Scene::Map && model.cleared == 0b11 {
             if model.scene_frames() == MAP_WALK_FRAMES / 2 {
                 shot(&runner, "t2-map-walk");
@@ -525,10 +645,43 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             }
             Scene::Play => {
                 let cam = w.camera_x;
-                for (x, name) in [(150, "t2-street"), (420, "t2-street-awning"), (640, "t2-casino-entrance"), (760, "t2-casino-tables"), (1000, "t2-casino-balcony"), (1120, "t2-secret-stage"), (1580, "t2-upper-servers"), (1700, "t2-upper-vault"), (1950, "t2-upper-guards")] {
-                    if cam >= x && cam < x + 4 {
+                // Which storey the camera is on: the tower, the street, the back room or
+                // the sewers.
+                let storey = match w.camera_y {
+                    0..=100 => 0,
+                    101..=300 => 1,
+                    301..=450 => 2,
+                    _ => 3,
+                };
+                let places = [
+                    (1, 150, "t2-street"),
+                    (1, 420, "t2-street-awning"),
+                    (1, 640, "t2-casino-entrance"),
+                    (1, 760, "t2-casino-tables"),
+                    (1, 860, "t2-casino-sunken-bar"),
+                    (1, 1000, "t2-casino-balcony"),
+                    (1, 1120, "t2-secret-stage"),
+                    (1, 1220, "t2-casino-hole"),
+                    (2, 1150, "t2-back-mezzanine"),
+                    (2, 1000, "t2-back-ramp"),
+                    (2, 850, "t2-back-stage"),
+                    (2, 700, "t2-back-slots"),
+                    (3, 640, "t2-sewer-drain"),
+                    (3, 800, "t2-sewer-channel"),
+                    (3, 1000, "t2-sewer-pipe"),
+                    (3, 1300, "t2-sewer-breaker"),
+                    (0, 1560, "t2-suites"),
+                    (0, 1700, "t2-suites-vault"),
+                ];
+                for (on, x, name) in places {
+                    if storey == on && cam >= x && cam < x + 4 {
                         shot(&runner, name);
                     }
+                }
+                let r = w.player.body.rect();
+                let in_shaft = (196 * 8..203 * 8).contains(&r.centre_x());
+                if in_shaft && w.player.grounded {
+                    shot(&runner, &format!("t2-shaft-{storey}"));
                 }
                 let r = w.player.body.rect();
                 if w.level.fence_hit(r.right(), r.y, 24, r.h).is_some() {
@@ -596,7 +749,18 @@ fn the_trenches_play_through_to_the_exchange_in_step_with_the_model() {
             _ => {}
         }
     }
+    if let (Some(path), Some(profile)) = (&profile_to, &runner.profile) {
+        use std::fmt::Write;
+        for (pc, cycles) in &profile.by_pc {
+            let _ = writeln!(profiled, "P {pc:08x} {cycles}");
+        }
+        for ((range, lr), cycles) in &profile.callers {
+            let _ = writeln!(profiled, "C {range} {lr:08x} {cycles}");
+        }
+        std::fs::write(path, &profiled).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
     let end = runner.expect_probe();
+    assert!(paused, "the pause menu opened up the tower");
     assert!(rode, "the bot rode the elevator");
     assert!(swung && crashed && overloaded, "SAM used his attacks: hit {swung}, crash {crashed}, overload {overloaded}");
     assert!(coins_offered > 0, "the penguin had coins to change");
@@ -665,3 +829,5 @@ fn clearing_the_badlands_opens_the_map_and_unlocks_the_trenches_for_good() {
     let intro = press(&mut rebooted, keys::A);
     assert_eq!((scene(&intro), intro.level), (Scene::Intro, 1));
 }
+
+

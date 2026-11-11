@@ -164,8 +164,12 @@ pub struct Progress {
     pub wallet: u32,
     /// Gold coins kept from earlier exchanges.
     pub purse: u32,
-    /// CL207's shield parts found, one bit each.
+    /// CL207's shield parts found, one bit each, and the gear found in levels that
+    /// hide it (see [`crate::world::GEAR_JETPACK`]).
     pub parts: u16,
+    /// What the run had taken at its beacon, one bit per actor slot (see
+    /// [`World::taken`]). Only an explorable level reads it back.
+    pub taken: u128,
 }
 
 impl Progress {
@@ -381,7 +385,17 @@ impl Game {
     /// What the arrival scene shows now, while it plays.
     pub fn arrival_view(&self) -> Option<arrival::View> {
         let start = self.world.start_feet();
-        (self.scene == Scene::Arrival).then(|| arrival::view(self.beat, self.timer, start, start.1))
+        (self.scene == Scene::Arrival).then(|| {
+            let mut v = arrival::view(self.beat, self.timer, start, start.1);
+            if self.world.jetpack_here {
+                // This level hides the jetpack: CL207 only has the blaster to give.
+                v.jetpack = false;
+                if matches!(v.thrown, Some((arrival::Gear::Jetpack, _, _))) {
+                    v.thrown = None;
+                }
+            }
+            v
+        })
     }
 
     fn arrival(&self) -> Option<&'static arrival::Arrival> {
@@ -516,6 +530,7 @@ impl Game {
                             wallet: self.wallet,
                             purse: self.purse,
                             parts: world.parts,
+                            taken: world.taken(),
                         },
                         &mut events,
                     );
@@ -530,7 +545,7 @@ impl Game {
                 }
                 // The boss speaks once the camera has settled on the arena.
                 let world = &mut self.world;
-                if world.talk_due && world.camera_x == world.boss.arena.0 {
+                if world.talk_due && world.camera_x == world.boss.arena.0 && world.camera_y == world.arena_y {
                     world.talk_due = false;
                     world.talked = true;
                     self.talk = Talk::Boss;
@@ -640,7 +655,8 @@ impl Game {
                 }
             }
             Beat::Gift => {
-                if arrival::caught(self.timer).is_some() {
+                let hidden = self.world.jetpack_here;
+                if arrival::caught(self.timer).is_some_and(|g| g == arrival::Gear::Blaster || !hidden) {
                     events.insert(Events::PICKUP);
                 }
                 if self.timer >= arrival::GIFT_FRAMES {

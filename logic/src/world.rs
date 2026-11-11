@@ -4,7 +4,7 @@
 use alloc::{boxed::Box, vec};
 
 use crate::{
-    FX, SCREEN_W, TILE,
+    FX, SCREEN_H, SCREEN_W, TILE,
     boss::{Boss, BossCtx},
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
@@ -67,6 +67,24 @@ pub const PIT_DAMAGE: i32 = 2;
 pub const HEAL_AMOUNT: i32 = 2;
 /// The camera keeps the wassie's centre inside this band of the screen.
 const CAMERA_BAND: (i32, i32) = (96, 136);
+/// And vertically, in a level taller than the screen: a little above the middle, so
+/// more shows below than above when dropping down a shaft.
+const CAMERA_BAND_Y: (i32, i32) = (56, 100);
+/// How fast the camera pans to another storey of a level built in storeys, in pixels
+/// a frame: faster than the wassie falls.
+const CAMERA_PAN: i32 = 10;
+/// How far from the elevator's car its terminal may stand for the car's call button
+/// to work it, in pixels. A terminal further off (a breaker somewhere else) has to be
+/// switched on where it stands.
+const CALL_REACH: i32 = 64;
+/// The bit of the file's part mask that records the jetpack, found in a level that
+/// hides it. The other bits are CL207's plasma cells.
+pub const GEAR_JETPACK: u16 = 1 << 15;
+
+/// The plasma cells in a part mask, without the gear bits.
+pub fn cells(parts: u16) -> u16 {
+    parts & !GEAR_JETPACK
+}
 /// Actors wake once this close to the screen edges.
 const WAKE_MARGIN: i32 = 16;
 /// Frames between jetpack exhaust puffs.
@@ -181,6 +199,8 @@ impl Events {
     pub const FENCE_ON: Events = Events(1 << 25);
     /// A live fence shocked the wassie.
     pub const SHOCK: Events = Events(1 << 26);
+    /// The wassie picked up a piece of gear (the jetpack).
+    pub const GEAR: Events = Events(1 << 27);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -320,6 +340,13 @@ impl Lift {
         let (x, feet) = self.car;
         (x + 4..x + LIFT_W - 4).contains(&r.centre_x()) && (feet - 4..=feet).contains(&r.bottom())
     }
+
+    /// Whether a terminal at `t` stands by the car downstairs, where the car's call
+    /// button can work it.
+    fn beside(&self, t: &crate::physics::Rect) -> bool {
+        let (x, feet) = self.car;
+        (t.centre_x() - (x + LIFT_W / 2)).abs() <= CALL_REACH && (t.bottom() - feet).abs() <= TILE
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -330,6 +357,9 @@ pub struct World {
     pub player: Player,
     /// On the heap, filled there: see `new_actors`.
     pub actors: Box<[Actor; MAX_ACTORS]>,
+    /// Slots of `actors` the map filled, from the first; those after stay empty. The
+    /// per-frame loops stop there instead of walking all of them in slow EWRAM.
+    used: usize,
     pub shots: [Shot; MAX_SHOTS],
     pub boss: Boss,
     pub fx: FxPool,
@@ -339,6 +369,12 @@ pub struct World {
     pub kick: u8,
     /// Left edge of the screen in level pixels.
     pub camera_x: i32,
+    /// Top edge of the screen in level pixels: 0 in a level one screen tall.
+    pub camera_y: i32,
+    /// Where the camera's top settles in the boss arena.
+    pub arena_y: i32,
+    /// The level hides the jetpack: the wassie starts without it.
+    pub jetpack_here: bool,
     /// Tile the wassie respawns on, and how many checkpoints have been lit.
     pub checkpoint: (i32, i32),
     pub checkpoints_lit: u8,
@@ -371,9 +407,29 @@ impl World {
     }
 
     pub fn with_level(level: &'static Level, level_index: u8, difficulty: Difficulty) -> Self {
-        let start = level.find(b'P').unwrap_or((2, level.height() - 2));
-        let lift = level.find(b'L').map(|(tx, ty)| {
-            let dest = level.find(b'l').unwrap_or((tx, ty));
+        // One pass over the map's markers for its actors and the places that matter.
+        let mut actors = new_actors();
+        let mut count = 0;
+        let (mut start, mut car, mut dest, mut jetpack, mut boss_row) = (None, None, None, false, None);
+        for (c, tx, ty) in level.markers() {
+            match c {
+                b'P' if start.is_none() => start = Some((tx, ty)),
+                b'L' if car.is_none() => car = Some((tx, ty)),
+                b'l' if dest.is_none() => dest = Some((tx, ty)),
+                b'J' => jetpack = true,
+                b'B' if boss_row.is_none() => boss_row = Some(ty),
+                _ => {}
+            }
+            if let Some(kind) = ActorKind::from_marker(c)
+                && count < MAX_ACTORS
+            {
+                actors[count] = Actor::spawn(kind, tx, ty);
+                count += 1;
+            }
+        }
+        let start = start.unwrap_or((2, level.height() - 2));
+        let lift = car.map(|(tx, ty)| {
+            let dest = dest.unwrap_or((tx, ty));
             Lift {
                 car: (tx * TILE, (ty + 1) * TILE),
                 dest: (dest.0 * TILE, (dest.1 + 1) * TILE),
@@ -400,13 +456,17 @@ impl World {
             level_index,
             difficulty,
             player: Player::new(Body::standing_on_tile(start.0, start.1, PLAYER_W, PLAYER_H)),
-            actors: new_actors(),
+            actors,
+            used: count,
             shots: [Shot::EMPTY; MAX_SHOTS],
             boss: Boss::new(level),
             fx: FxPool::new(),
             shake: 0,
             kick: 0,
             camera_x: 0,
+            camera_y: 0,
+            arena_y: 0,
+            jetpack_here: jetpack,
             checkpoint: start,
             checkpoints_lit: 0,
             arena: false,
@@ -423,19 +483,38 @@ impl World {
             god: false,
             rng: Rng::new(0x5EED ^ level_index as u32),
         };
-        let mut count = 0;
-        for (ty, row) in level.rows.iter().enumerate() {
-            for (tx, c) in row.bytes().enumerate() {
-                if let Some(kind) = ActorKind::from_marker(c)
-                    && count < MAX_ACTORS
-                {
-                    world.actors[count] = Actor::spawn(kind, tx as i32, ty as i32);
-                    count += 1;
-                }
-            }
+        world.player.jetpack = !world.jetpack_here;
+        if let Some(ty) = boss_row {
+            // The arena's floor sits four rows above the bottom of the screen, as in a
+            // level one screen tall.
+            world.arena_y = ((ty + 5) * TILE - SCREEN_H).clamp(0, world.max_camera_y());
         }
         world.snap_camera();
         world
+    }
+
+    /// The actors the map placed: every slot that can hold one.
+    pub fn placed_actors(&self) -> &[Actor] {
+        &self.actors[..self.used]
+    }
+
+    fn max_camera_y(&self) -> i32 {
+        (self.level.px_height() - SCREEN_H).max(0)
+    }
+
+    /// Whether the wassie owns the jetpack in this level.
+    pub fn has_jetpack(&self) -> bool {
+        !self.jetpack_here || self.parts & GEAR_JETPACK != 0
+    }
+
+    /// The actors taken so far, one bit per actor slot: pickups collected, villains
+    /// beaten for good, beacons lit and terminals on. Saved with the run so an
+    /// explorable level comes back exactly as it was left.
+    pub fn taken(&self) -> u128 {
+        self.actors[..self.used].iter().enumerate().fold(0, |mask, (i, a)| {
+            let done = a.killed || (matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) && a.state == enemy::state::LIT);
+            if done { mask | 1 << i } else { mask }
+        })
     }
 
     pub fn score(&self) -> u32 {
@@ -450,8 +529,15 @@ impl World {
     /// The file already owns the parts in `mask`: those here are gone from the map.
     pub fn own_parts(&mut self, mask: u16) {
         self.parts |= mask;
+        if mask & GEAR_JETPACK != 0 {
+            for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Jetpack) {
+                a.alive = false;
+                a.killed = true;
+            }
+        }
+        self.player.jetpack = self.has_jetpack();
         let base = self.level.parts_base;
-        for (n, a) in self.actors.iter_mut().filter(|a| a.kind == ActorKind::Part).enumerate() {
+        for (n, a) in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Part).enumerate() {
             if mask & (1 << (base as usize + n)) != 0 {
                 a.alive = false;
                 a.killed = true;
@@ -461,7 +547,7 @@ impl World {
 
     /// Shield parts this level holds, and how many of them the file owns.
     pub fn parts_here(&self) -> (u32, u32) {
-        let total = self.actors.iter().filter(|a| a.kind == ActorKind::Part).count() as u32;
+        let total = self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Part).count() as u32;
         let base = self.level.parts_base as u32;
         let mask = ((1u32 << total) - 1) << base;
         (total, (self.parts as u32 & mask).count_ones())
@@ -480,8 +566,24 @@ impl World {
         let Some((tx, ty)) = progress.checkpoint else {
             return;
         };
-        let edge = (tx + 1) * TILE;
-        for a in self.actors.iter_mut().filter(|a| a.alive) {
+        let edge = if self.level.explore {
+            // No left-to-right order to go by: put back exactly what was taken.
+            for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
+                if progress.taken & (1 << i) == 0 {
+                    continue;
+                }
+                if matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) {
+                    a.state = enemy::state::LIT;
+                } else {
+                    a.alive = false;
+                    a.killed = true;
+                }
+            }
+            i32::MIN
+        } else {
+            (tx + 1) * TILE
+        };
+        for a in self.actors[..self.used].iter_mut().filter(|a| a.alive) {
             if a.home.0 + a.kind.size().0 / 2 >= edge {
                 continue;
             }
@@ -498,11 +600,21 @@ impl World {
         self.coins = progress.coins;
         self.kills = progress.kills;
         self.frames = progress.frames;
-        if let Some(lift) = &mut self.lift
-            && edge > lift.car.0
-        {
-            // A beacon past the elevator: it was ridden on the way.
-            lift.state = if edge > lift.dest.0 { LiftState::Done } else { LiftState::Open };
+        if let Some(mut lift) = self.lift {
+            let powered = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
+            if self.level.explore {
+                // Upstairs, it was ridden; downstairs with its power on, it waits open.
+                if self.upstairs(&lift, tx * TILE + TILE / 2, (ty + 1) * TILE) {
+                    lift.state = LiftState::Done;
+                } else if powered {
+                    lift.state = LiftState::Open;
+                    lift.timer = LIFT_DOOR_FRAMES;
+                }
+            } else if edge > lift.car.0 {
+                // A beacon past the elevator: it was ridden on the way.
+                lift.state = if edge > lift.dest.0 { LiftState::Done } else { LiftState::Open };
+            }
+            self.lift = Some(lift);
         }
         self.place_player(MAX_HP);
         self.snap_camera();
@@ -595,7 +707,10 @@ impl World {
             if !s.active && matches!(s.kind, ShotKind::Cucumber | ShotKind::MegaCucumber) {
                 self.fx.spawn(FxKind::Splat, r.centre_x(), r.centre_y());
             }
-            if r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16 {
+            let off_side = r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16;
+            // Well above or below the screen too, in a tall level.
+            let off_end = r.bottom() < self.camera_y - SCREEN_H || r.y > self.camera_y + 2 * SCREEN_H;
+            if off_side || off_end {
                 s.active = false;
             }
         }
@@ -618,14 +733,19 @@ impl World {
         let r = self.player.body.rect();
         match lift.state {
             LiftState::Dark => {
-                let on = self.actors.iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
+                let on = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT);
                 if on {
                     next(&mut lift, LiftState::Powering);
                 }
             }
             LiftState::Powering if lift.timer >= LIFT_POWER_FRAMES => {
                 next(&mut lift, LiftState::Opening);
-                events.insert(Events::LIFT);
+                // Its doors are heard only near it, not from a breaker far away.
+                let (x, feet) = lift.car;
+                let (cx, cy) = (self.camera_x + SCREEN_W / 2, self.camera_y + SCREEN_H / 2);
+                if (x - cx).abs() < SCREEN_W && (feet - cy).abs() < SCREEN_H {
+                    events.insert(Events::LIFT);
+                }
             }
             LiftState::Opening if lift.timer >= LIFT_DOOR_FRAMES => next(&mut lift, LiftState::Open),
             // Up held counts too, so walking in while aiming up still boards.
@@ -665,12 +785,22 @@ impl World {
                 // beacon further on is lit: a respawn on the casino floor would leave
                 // it below a lift it has already taken.
                 let arrived = ((lift.dest.0 + LIFT_W / 2).div_euclid(TILE), lift.dest.1.div_euclid(TILE) - 1);
-                if self.checkpoint.0 < arrived.0 {
+                let (cx, cy) = self.checkpoint;
+                let further = if self.level.explore {
+                    self.upstairs(&lift, cx * TILE + TILE / 2, (cy + 1) * TILE)
+                } else {
+                    cx >= arrived.0
+                };
+                if !further {
                     self.checkpoint = arrived;
                 }
             }
             // Back downstairs after the ride (a resumed run, say): the car waits open again.
-            LiftState::Done if r.centre_x() < lift.dest.0 && lift.car.0 < lift.dest.0 => {
+            LiftState::Done if self.level.explore && !self.upstairs(&lift, r.centre_x(), r.bottom()) => {
+                lift.state = LiftState::Open;
+                lift.timer = LIFT_DOOR_FRAMES;
+            }
+            LiftState::Done if !self.level.explore && r.centre_x() < lift.dest.0 && lift.car.0 < lift.dest.0 => {
                 lift.state = LiftState::Open;
                 lift.timer = LIFT_DOOR_FRAMES;
             }
@@ -681,21 +811,34 @@ impl World {
         riding
     }
 
+    /// Whether a wassie with its centre at `x` and feet at `feet` is up where the
+    /// elevator goes. In a level that runs left to right that is past the car; in an
+    /// explorable one, the floor it arrives on and above, from the car's column on.
+    fn upstairs(&self, lift: &Lift, x: i32, feet: i32) -> bool {
+        if self.level.explore {
+            feet <= lift.dest.1 && x + TILE >= lift.dest.0
+        } else {
+            x >= lift.dest.0
+        }
+    }
+
     /// Up at a dark terminal switches it on, whether pressed there or held on the way.
-    /// So does Up at the dark elevator's door: its call button works the terminal too.
+    /// So does Up at the dark elevator's door, if its terminal stands by the car: the
+    /// call button works it too.
     fn work_terminals(&mut self, input: &Input, events: &mut Events) {
         if !input.up() || self.player.hurt > 0 {
             return;
         }
         let r = self.player.body.rect();
-        let at_dark_car = self
+        let dark_car = self
             .lift
-            .is_some_and(|l| l.state == LiftState::Dark && self.player.grounded && l.at_door(&r));
-        for a in self.actors.iter_mut() {
+            .filter(|l| l.state == LiftState::Dark && self.player.grounded && l.at_door(&r));
+        for a in self.actors[..self.used].iter_mut() {
+            let called = dark_car.is_some_and(|l| l.beside(&a.rect()));
             if a.kind == ActorKind::Terminal
                 && a.alive
                 && a.state != enemy::state::LIT
-                && (at_dark_car || reaches_terminal(&r, &a.rect()))
+                && (called || reaches_terminal(&r, &a.rect()))
             {
                 a.state = enemy::state::LIT;
                 let ar = a.rect();
@@ -710,13 +853,27 @@ impl World {
     pub fn up_prompt(&self) -> Option<(i32, i32)> {
         let r = self.player.body.rect();
         let dark = |a: &&Actor| a.kind == ActorKind::Terminal && a.alive && a.state != enemy::state::LIT;
-        if let Some(a) = self.actors.iter().filter(dark).find(|a| reaches_terminal(&r, &a.rect())) {
+        if let Some(a) = self.actors[..self.used].iter().filter(dark).find(|a| reaches_terminal(&r, &a.rect())) {
             let ar = a.rect();
             return Some((ar.centre_x(), ar.y - 4));
         }
         let lift = self.lift?;
-        let ready = lift.state == LiftState::Open || (lift.state == LiftState::Dark && self.actors.iter().any(|a| dark(&a)));
+        let callable = |a: &Actor| dark(&a) && lift.beside(&a.rect());
+        let ready = lift.state == LiftState::Open || (lift.state == LiftState::Dark && self.actors[..self.used].iter().any(callable));
         (ready && lift.at_door(&r)).then_some((lift.car.0 + LIFT_W / 2, lift.car.1 - LIFT_H - 4))
+    }
+
+    /// Whether the wassie stands by the dark elevator with no terminal there to power
+    /// it: its power is switched on somewhere else. For the sign on the car.
+    pub fn lift_unpowered(&self) -> bool {
+        let Some(lift) = self.lift else {
+            return false;
+        };
+        let r = self.player.body.rect();
+        let (x, feet) = lift.car;
+        let near = (r.centre_x() - (x + LIFT_W / 2)).abs() <= 48 && (r.bottom() - feet).abs() <= 2 * TILE;
+        let terminal_here = self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && lift.beside(&a.rect()));
+        lift.state == LiftState::Dark && near && !terminal_here
     }
 
     /// Dust at the wassie's feet: a burst on take-off and on a hard landing, a puff
@@ -744,7 +901,11 @@ impl World {
             return;
         }
         let (left, _) = self.boss.arena;
-        if !self.arena && self.player.body.x() >= left + 2 * TILE {
+        // In a tall level, other floors may run under the arena: it closes only on
+        // the wassie up on its own floor.
+        let centre = self.player.body.rect().centre_y();
+        let level_with_it = (self.arena_y..self.arena_y + SCREEN_H).contains(&centre);
+        if !self.arena && level_with_it && self.player.body.x() >= left + 2 * TILE {
             self.arena = true;
             self.talk_due = !self.talked && !self.level.boss_talk.is_empty();
             self.boss.wake();
@@ -814,10 +975,34 @@ impl World {
         }
     }
 
+    /// Where the camera's top starts in `level`: on the wassie standing at its start.
+    pub fn start_camera_y(level: &Level) -> i32 {
+        let (tx, ty) = level.find(b'P').unwrap_or((2, level.height() - 2));
+        let r = Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H).rect();
+        let (lo, hi) = Self::camera_y_range(level, r.centre_y());
+        (r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2).clamp(lo, hi)
+    }
+
+    /// The tops the camera may take with the wassie's centre at pixel row `y`: the
+    /// whole level, or in a level built in storeys ([`Level::bands`]), the storey it
+    /// is in.
+    pub fn camera_y_range(level: &Level, y: i32) -> (i32, i32) {
+        let max = (level.px_height() - SCREEN_H).max(0);
+        if level.bands.is_empty() {
+            return (0, max);
+        }
+        let (top, bottom) = level.band(y);
+        let lo = (top * TILE).min(max);
+        (lo, (bottom * TILE - SCREEN_H).clamp(lo, max))
+    }
+
     fn snap_camera(&mut self) {
-        let centre = self.player.body.rect().centre_x();
-        self.camera_x = centre - (CAMERA_BAND.0 + CAMERA_BAND.1) / 2;
+        let r = self.player.body.rect();
+        self.camera_x = r.centre_x() - (CAMERA_BAND.0 + CAMERA_BAND.1) / 2;
+        self.camera_y = r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2;
         self.clamp_camera();
+        let (lo, hi) = Self::camera_y_range(self.level, r.centre_y());
+        self.camera_y = self.camera_y.clamp(lo, hi);
     }
 
     /// The stretch of level the camera may show: up to and including the sealed walls
@@ -839,20 +1024,34 @@ impl World {
         let (lo, hi) = self.view_bounds();
         let max = (hi - SCREEN_W).max(lo);
         self.camera_x = self.camera_x.clamp(lo, max);
+        self.camera_y = self.camera_y.clamp(0, self.max_camera_y());
     }
 
     fn update_camera(&mut self) {
         if self.arena {
             let target = self.boss.arena.0;
             self.camera_x += (target - self.camera_x).clamp(-3, 3);
+            self.camera_y += (self.arena_y - self.camera_y).clamp(-3, 3);
             return;
         }
-        let centre = self.player.body.rect().centre_x();
+        let r = self.player.body.rect();
+        let centre = r.centre_x();
         if centre < self.camera_x + CAMERA_BAND.0 {
             self.camera_x = centre - CAMERA_BAND.0;
         } else if centre > self.camera_x + CAMERA_BAND.1 {
             self.camera_x = centre - CAMERA_BAND.1;
         }
+        let middle = r.centre_y();
+        let mut target = self.camera_y;
+        if middle < target + CAMERA_BAND_Y.0 {
+            target = middle - CAMERA_BAND_Y.0;
+        } else if middle > target + CAMERA_BAND_Y.1 {
+            target = middle - CAMERA_BAND_Y.1;
+        }
+        // Into another storey, the camera pans over to it.
+        let (lo, hi) = Self::camera_y_range(self.level, middle);
+        let target = target.clamp(lo, hi);
+        self.camera_y += (target - self.camera_y).clamp(-CAMERA_PAN, CAMERA_PAN);
         self.clamp_camera();
     }
 
@@ -865,14 +1064,18 @@ impl World {
             camera_x: self.camera_x,
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
-        for a in self.actors.iter_mut().filter(|a| a.alive) {
+        let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
+        for a in self.actors[..self.used].iter_mut().filter(|a| a.alive) {
             let r = a.rect();
-            let visible = r.right() > view.0 && r.x < view.1;
+            let visible = r.right() > view.0 && r.x < view.1 && r.bottom() > view_y.0 && r.y < view_y.1;
             if !a.awake && visible {
                 a.awake = true;
             }
             // Villains far off screen stop, so the CPU and object budget stay bounded.
-            let far = r.right() < view.0 - SCREEN_W / 2 || r.x > view.1 + SCREEN_W / 2;
+            let far = r.right() < view.0 - SCREEN_W / 2
+                || r.x > view.1 + SCREEN_W / 2
+                || r.bottom() < view_y.0 - SCREEN_H / 2
+                || r.y > view_y.1 + SCREEN_H / 2;
             if a.awake && !far {
                 a.update(&mut ctx);
             }
@@ -880,10 +1083,21 @@ impl World {
     }
 
     fn collide(&mut self, events: &mut Events) {
-        // The wassie's shots against villains and the boss.
+        // The wassie's shots against villains and the boss. Only the few villains awake
+        // can be hit: listed once, in slot order, rather than every shot walking every
+        // slot. A villain a shot downs is still listed, so each one is checked again.
+        let mut threats = [0u8; MAX_ACTORS];
+        let mut count = 0;
+        for (i, a) in self.actors[..self.used].iter().enumerate() {
+            if a.is_threat() {
+                threats[count] = i as u8;
+                count += 1;
+            }
+        }
         for s in self.shots.iter_mut().filter(|s| s.active && s.kind.from_player()) {
             let r = s.rect();
-            for (i, a) in self.actors.iter_mut().enumerate() {
+            for &i in &threats[..count] {
+                let (a, i) = (&mut self.actors[i as usize], i as usize);
                 if !a.is_threat() || !r.overlaps(&a.rect()) || s.hits & (1u128 << i) != 0 {
                     continue;
                 }
@@ -944,7 +1158,7 @@ impl World {
         // Touching villains, pickups and checkpoints.
         let mut checkpoint_reached = None;
         let mut part_taken = None;
-        for (i, a) in self.actors.iter_mut().enumerate() {
+        for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
             if !a.alive || !player.overlaps(&a.rect()) {
                 continue;
             }
@@ -980,6 +1194,17 @@ impl World {
                     let r = a.rect();
                     self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
                     events.insert(Events::PART);
+                }
+                ActorKind::Jetpack => {
+                    a.alive = false;
+                    a.killed = true;
+                    self.parts |= GEAR_JETPACK;
+                    self.player.jetpack = true;
+                    self.player.hover_fuel = HOVER_FRAMES;
+                    let r = a.rect();
+                    self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
+                    self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
+                    events.insert(Events::GEAR);
                 }
                 ActorKind::Terminal => {}
                 ActorKind::Checkpoint => {
@@ -1156,6 +1381,7 @@ impl World {
         let (tx, ty) = self.checkpoint;
         self.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
         self.player.hp = hp;
+        self.player.jetpack = self.has_jetpack();
     }
 
     /// Back to the last checkpoint. A knockout restores full health; a pit keeps what
@@ -1164,7 +1390,7 @@ impl World {
         let hp = if self.player.hp > 0 { self.player.hp } else { MAX_HP };
         self.place_player(hp);
         self.player.invuln = crate::player::INVULN_FRAMES;
-        for a in self.actors.iter_mut() {
+        for a in self.actors[..self.used].iter_mut() {
             a.reset();
         }
         self.shots = [Shot::EMPTY; MAX_SHOTS];
@@ -1649,13 +1875,20 @@ mod tests {
     }
 
     /// The Trenches, with the wassie placed at tile `tx` on the floor and no villains.
+    /// The Trenches with their bots gone and the wassie on the street storey's floor
+    /// at column `tx`.
     fn trenches_at(tx: i32) -> World {
+        trenches_on(tx, 39)
+    }
+
+    /// The Trenches with their bots gone and the wassie's feet in row `ty`.
+    fn trenches_on(tx: i32, ty: i32) -> World {
         let mut w = World::new(1, Difficulty::Normal);
         for a in w.actors.iter_mut().filter(|a| a.kind.is_enemy()) {
             a.alive = false;
             a.killed = true;
         }
-        w.player = Player::new(Body::standing_on_tile(tx, 15, PLAYER_W, PLAYER_H));
+        w.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
         w.snap_camera();
         w
     }
@@ -1718,7 +1951,7 @@ mod tests {
         assert!(w.coins >= 3, "picked up the street's first coins: {}", w.coins);
         assert_eq!(w.diamonds, 0, "coins never count as diamonds");
         let sentry = w.actors.iter().position(|a| a.kind == ActorKind::Sentry).unwrap();
-        w.actors[sentry] = Actor::spawn(ActorKind::Sentry, 10, 15);
+        w.actors[sentry] = Actor::spawn(ActorKind::Sentry, 10, 39);
         w.actors[sentry].awake = true;
         let before = w.coins;
         let r = w.actors[sentry].rect();
@@ -1730,23 +1963,32 @@ mod tests {
     }
 
     #[test]
-    fn the_elevator_needs_its_terminal_then_rides_to_the_upper_floor() {
-        let terminal = levels::get(1).find(b'E').unwrap();
-        let mut w = trenches_at(terminal.0);
+    fn the_elevator_needs_the_breaker_in_the_sewers_then_rides_up_the_tower() {
+        let level = levels::get(1);
+        let (car_x, car_y) = level.find(b'L').unwrap();
+        let mut w = trenches_on(car_x + 1, car_y);
         let lift = w.lift.unwrap();
         assert_eq!(lift.state, LiftState::Dark);
-        let (lo, hi) = w.view_bounds();
-        assert!(hi <= lift.dest.0, "the camera stays downstairs: {lo}..{hi}");
-        assert!(w.camera_x + SCREEN_W <= hi);
+        assert!(w.lift_unpowered(), "the car says it has no power");
+        assert!(w.up_prompt().is_none(), "and Up does nothing at it");
+        assert!(!tap(&mut w, keys::UP).contains(Events::POWER));
+        assert_eq!(w.lift.unwrap().state, LiftState::Dark);
 
-        // Up at the car does nothing without power.
-        let mut events = tap(&mut w, keys::UP);
-        assert!(events.contains(Events::POWER), "Up at the terminal powers it");
-        events = hold(&mut w, 0, (LIFT_POWER_FRAMES + LIFT_DOOR_FRAMES + 4) as usize);
-        assert!(events.contains(Events::LIFT));
+        // Down in the sewers, Up at the breaker brings the power up.
+        let (bx, by) = level.find(b'E').unwrap();
+        w.player = Player::new(Body::standing_on_tile(bx, by, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        hold(&mut w, 0, 4);
+        assert!(w.up_prompt().is_some());
+        assert!(tap(&mut w, keys::UP).contains(Events::POWER));
+        let events = hold(&mut w, 0, (LIFT_POWER_FRAMES + LIFT_DOOR_FRAMES + 4) as usize);
+        assert!(!events.contains(Events::LIFT), "its doors aren't heard from the sewers");
         assert_eq!(w.lift.unwrap().state, LiftState::Open);
 
-        // Walk into the car and press Up.
+        // Back at the car, in and Up.
+        w.player = Player::new(Body::standing_on_tile(car_x - 2, car_y, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        assert!(!w.lift_unpowered());
         let car = lift.car.0 + LIFT_W / 2;
         while w.player.body.rect().centre_x() < car - 2 {
             w.step(&Input::from_keys(keys::RIGHT, keys::RIGHT));
@@ -1754,13 +1996,59 @@ mod tests {
         hold(&mut w, 0, 20);
         tap(&mut w, keys::UP);
         assert!(w.lift.unwrap().riding());
-        let frames = w.frames;
-        hold(&mut w, keys::LEFT, (LIFT_DOOR_FRAMES * 2 + LIFT_RIDE_FRAMES + 4) as usize);
+        hold(&mut w, keys::RIGHT, (LIFT_DOOR_FRAMES * 2 + LIFT_RIDE_FRAMES + 4) as usize);
         assert_eq!(w.lift.unwrap().state, LiftState::Done);
-        assert!(w.frames > frames);
         let r = w.player.body.rect();
-        assert!((r.centre_x() - (lift.dest.0 + LIFT_W / 2)).abs() <= 4, "stepped out upstairs at {}", r.x);
-        assert!(w.camera_x >= w.view_bounds().0 && w.view_bounds().0 > lift.car.0, "the camera moved up with it");
+        assert!(r.bottom() <= lift.dest.1 && r.x >= lift.dest.0 - TILE, "stepped out at the top: {r:?}");
+        assert!(w.camera_y < SCREEN_H, "the camera went up the tower with it: {}", w.camera_y);
+    }
+
+    /// A one-screen test floor: a terminal beside a car, and one off by itself.
+    static LOBBY: Level = Level {
+        rows: &[
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "............................................................",
+            "..P.................E...L........................#...l......",
+            "############################################################",
+            "############################################################",
+            "############################################################",
+            "############################################################",
+        ],
+        ..Level::BASE
+    };
+
+    #[test]
+    fn up_at_the_dark_elevator_calls_it_when_its_terminal_stands_by() {
+        let mut w = World::with_level(&LOBBY, 0, Difficulty::Normal);
+        let car = w.lift.unwrap().car;
+        w.player = Player::new(Body::standing_on_tile(car.0 / TILE + 1, 15, PLAYER_W, PLAYER_H));
+        hold(&mut w, 0, 10);
+        assert!(!w.lift_unpowered());
+        assert!(w.up_prompt().is_some(), "the dark car shows the Up bubble too");
+        let events = tap(&mut w, keys::UP);
+        assert!(events.contains(Events::POWER), "its call button powers it");
+        assert_eq!(w.lift.unwrap().state, LiftState::Powering);
+
+        let mut w = World::with_level(&LOBBY, 0, Difficulty::Normal);
+        let terminal = LOBBY.find(b'E').unwrap();
+        w.player = Player::new(Body::standing_on_tile(terminal.0, 15, PLAYER_W, PLAYER_H));
+        w.player.body.x_fx += 12 * FX;
+        hold(&mut w, 0, 10);
+        assert!(w.up_prompt().is_some(), "a step to the side of the kiosk still reaches it");
+        assert!(tap(&mut w, keys::UP).contains(Events::POWER));
     }
 
     #[test]
@@ -1796,8 +2084,9 @@ mod tests {
     #[test]
     fn a_fall_after_the_ride_respawns_upstairs() {
         let level = levels::get(1);
-        let mut w = trenches_at(level.find(b'L').unwrap().0);
-        let beacon = level.markers().filter(|m| m.0 == b'C').nth(1).unwrap();
+        let (car_x, car_y) = level.find(b'L').unwrap();
+        let mut w = trenches_on(car_x, car_y);
+        let beacon = level.markers().find(|m| m.0 == b'C' && m.2 > car_y - 4).unwrap();
         w.checkpoint = (beacon.1, beacon.2);
         let mut lift = w.lift.unwrap();
         lift.state = LiftState::Open;
@@ -1809,13 +2098,38 @@ mod tests {
         w.player.invuln = 0;
         w.hurt_player(2, 0, &mut Events::default());
         hold(&mut w, 0, DEATH_FRAMES as usize + 40);
-        assert!(w.player.body.x() >= lift.dest.0, "back upstairs, not under the lift: x={}", w.player.body.x());
+        let r = w.player.body.rect();
+        assert!(r.bottom() <= lift.dest.1, "back up the tower, not under the lift: {r:?}");
+        assert_eq!(w.lift.unwrap().state, LiftState::Done);
+    }
+
+    #[test]
+    fn a_resumed_trenches_run_finds_the_lift_as_it_left_it() {
+        let level = levels::get(1);
+        let mut w = World::new(1, Difficulty::Normal);
+        // The breaker thrown, a beacon lit down on the casino floor.
+        let breaker = w.actors.iter().position(|a| a.kind == ActorKind::Terminal).unwrap();
+        w.actors[breaker].state = state::LIT;
+        let floor = level.markers().find(|m| m.0 == b'C' && (24..44).contains(&m.2)).unwrap();
+        let down = Progress { level: 1, checkpoint: Some((floor.1, floor.2)), taken: w.taken(), ..Progress::default() };
+        let again = World::resume(&down, Difficulty::Normal);
+        assert_eq!(again.lift.unwrap().state, LiftState::Open, "powered, it waits open");
+        // And one lit up the tower: it was ridden.
+        let top = level.markers().find(|m| m.0 == b'C' && m.2 < 20).unwrap();
+        let up = Progress { checkpoint: Some((top.1, top.2)), ..down };
+        let again = World::resume(&up, Difficulty::Normal);
+        assert_eq!(again.lift.unwrap().state, LiftState::Done);
+        assert!(again.camera_y < SCREEN_H);
+        // Without the breaker, the lift is still dark.
+        let dark = Progress { taken: 0, ..down };
+        assert_eq!(World::resume(&dark, Difficulty::Normal).lift.unwrap().state, LiftState::Dark);
     }
 
     #[test]
     fn a_ridden_lift_reopens_if_the_wassie_is_downstairs_again() {
         let level = levels::get(1);
-        let mut w = trenches_at(level.find(b'L').unwrap().0 - 2);
+        let (car_x, car_y) = level.find(b'L').unwrap();
+        let mut w = trenches_on(car_x - 2, car_y);
         let mut lift = w.lift.unwrap();
         lift.state = LiftState::Done;
         w.lift = Some(lift);
@@ -1831,21 +2145,4 @@ mod tests {
         assert!(w.lift.unwrap().riding(), "and it can be ridden again");
     }
 
-    #[test]
-    fn up_at_the_dark_elevator_calls_it_and_the_terminal_reaches_further() {
-        let level = levels::get(1);
-        let mut w = trenches_at(level.find(b'L').unwrap().0 + 1);
-        hold(&mut w, 0, 10);
-        assert!(w.up_prompt().is_some(), "the dark car shows the Up bubble too");
-        let events = tap(&mut w, keys::UP);
-        assert!(events.contains(Events::POWER), "its call button powers it");
-        assert_eq!(w.lift.unwrap().state, LiftState::Powering);
-
-        let terminal = level.find(b'E').unwrap();
-        let mut w = trenches_at(terminal.0);
-        w.player.body.x_fx += 12 * FX;
-        hold(&mut w, 0, 10);
-        assert!(w.up_prompt().is_some(), "a step to the side of the kiosk still reaches it");
-        assert!(tap(&mut w, keys::UP).contains(Events::POWER));
-    }
 }
