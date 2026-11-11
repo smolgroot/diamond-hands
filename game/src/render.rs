@@ -334,7 +334,10 @@ impl Renderer {
         }
         if fence != self.fence {
             match theme {
-                Theme::Badlands => frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence.0)),
+                Theme::Badlands => {
+                    frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence.0));
+                    frame.set_background_palette(badlands::BACK_PALETTE, &badlands::back_palette(stage, fence.0));
+                }
                 Theme::Trenches => {
                     // Every stratum's light, and its scenery's muted copy.
                     for (stratum, (&slot, &scenery)) in
@@ -658,7 +661,7 @@ impl Renderer {
         let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
         let palette = match level.theme {
             Theme::Trenches => trenches::palette_slot(level, ty, key),
-            Theme::Badlands => TERRAIN_PALETTE,
+            Theme::Badlands => badlands::palette_slot(key),
         };
         self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, palette));
     }

@@ -152,8 +152,22 @@ const GROUND_COLOURS: [(u16, u16, u16); 16] = [
 /// Terrain palette for a theme and stage: as drawn at dusk, dimmer at night, and
 /// red-lit in the last stretch.
 pub fn ground_palette(stage: u8, fence: u8) -> Palette16 {
+    tinted(&GROUND_COLOURS, stage, fence)
+}
+
+/// The back wall's palette ([`BACK_PALETTE`]): the terrain's, so props in front of the
+/// wall keep their colours, with the rock tones swapped for the wall's muted ones.
+pub fn back_palette(stage: u8, fence: u8) -> Palette16 {
+    let mut colours = GROUND_COLOURS;
+    for (i, c) in BACK_COLOURS {
+        colours[i as usize] = c;
+    }
+    tinted(&colours, stage, fence)
+}
+
+/// `base` lit for a stage, with the fence nodes in their state.
+fn tinted(base: &[(u16, u16, u16); 16], stage: u8, fence: u8) -> Palette16 {
     let (num, den, red) = [(1, 1, 0), (4, 5, 0), (3, 4, 4)][stage.min(2) as usize];
-    let base = &GROUND_COLOURS;
     let mut colours = [rgb(0, 0, 0); 16];
     for (i, (out, &(r, g, b))) in colours.iter_mut().zip(base.iter()).enumerate() {
         // Energy spikes and crystals keep their glow.
@@ -299,8 +313,123 @@ pub fn paint_city(bg: &mut RegularBackground) {
     }
 }
 
+/// The back wall behind the caves, after `.claude/mockup/level1-tiles-sprites-sheet-
+/// with-background.png`: from this row down, open cells show a dim arcade of round
+/// arches on pillars instead of the black void, with brick above it.
+const BACK_WALL_ROW: i32 = 20;
+/// The rows of the floors the arcade stands on, the cavern's and the deep's (see
+/// `logic/src/levels/badlands.rs`).
+const ARCADE_FLOORS: [i32; 2] = [37, 56];
+/// The arcade's height in cells, and its bays' width (a pillar to the next) in pixels.
+const ARCADE_ROWS: i32 = 10;
+const BAY: i32 = 64;
+/// A back wall cell is its column in a bay and its row: 0 for the brick above the
+/// arcade, then the arcade's rows from the top.
+const BACK_CELLS: usize = (BAY as usize / 8) * (1 + ARCADE_ROWS as usize);
+/// What stands in front of a back wall cell: nothing, or a prop (and its variant).
+const BACK_VARIANTS: usize = 10;
+/// BG palette slot for the back wall (the Trenches use it for their back room).
+pub const BACK_PALETTE: u8 = 4;
+/// The wall's tones, in the rock's palette indices: lit stone, brick, mortar and
+/// shadow, and the dim brick seen through the arches.
+const BACK_COLOURS: [(u8, (u16, u16, u16)); 4] = [
+    (ground_ix::ROCK_LIGHT, (9, 4, 11)),
+    (ground_ix::ROCK, (6, 2, 8)),
+    (ground_ix::ROCK_DARK, (3, 1, 5)),
+    (ground_ix::ROCK_DEEP, (4, 2, 6)),
+];
+
+/// The BG palette slot a [`terrain_key`]'s tile uses.
+pub fn palette_slot(key: usize) -> u8 {
+    if key >= BACK_BASE { BACK_PALETTE } else { 1 }
+}
+
+/// The back wall's [`terrain_key`] for cell `(tx, ty)` with a prop of `kind` (0 for
+/// none) in front, or `None` if the wall doesn't show there.
+fn back_key(kind: usize, tx: i32, ty: i32) -> Option<usize> {
+    if ty < BACK_WALL_ROW {
+        return None;
+    }
+    // Props keep the variant their own key would give them (see `terrain_pixels`).
+    let variant = match kind {
+        0 => 0,
+        2 => 1 + (tx & 1) as usize,
+        3 => 3,
+        5 => 4 + (tx & 1) as usize,
+        6 => 6 + ((tx & 3) >= 2) as usize,
+        7 => 8 + (tx & 1) as usize,
+        _ => return None,
+    };
+    let row = match ARCADE_FLOORS.iter().find(|&&f| f > ty) {
+        Some(&floor) if floor - ty <= ARCADE_ROWS => (1 + ARCADE_ROWS - (floor - ty)) as usize,
+        _ => 0,
+    };
+    let col = (tx & (BAY / 8 - 1)) as usize;
+    Some(BACK_BASE + variant * BACK_CELLS + row * (BAY as usize / 8) + col)
+}
+
+/// Rows of brick: three-pixel courses over mortar, with the joints staggered.
+fn brick(x: i32, y: i32, face: u8) -> u8 {
+    let course = y.div_euclid(4);
+    if y.rem_euclid(4) == 3 || (x + course.rem_euclid(2) * 8).rem_euclid(16) == 15 {
+        ground_ix::ROCK_DARK
+    } else {
+        face
+    }
+}
+
+/// A pixel of the arcade, `x` across a bay (a pillar at 0) and `y` down from its top
+/// (`ARCADE_ROWS` cells tall, standing on the floor).
+fn arcade_pixel(x: i32, y: i32) -> u8 {
+    use ground_ix::*;
+    let h = ARCADE_ROWS * 8;
+    // The pillar: a capital flaring under the arch's springing, a shaft and a base.
+    let d = (x - if x >= BAY / 2 { BAY } else { 0 }).abs();
+    let (spring, base) = (36, h - 6);
+    let half = match y {
+        _ if y < spring => -1,
+        _ if y < spring + 2 => 8,
+        _ if y < spring + 4 => 6,
+        _ if y < base => 4,
+        _ if y < base + 3 => 6,
+        _ => 7,
+    };
+    if d <= half {
+        let band = y == spring + 1 || y == spring + 3 || y == base || y == base + 2;
+        return if d == half || band {
+            ROCK_DARK
+        } else if x == BAY - half + 1 || x == BAY - half + 2 {
+            ROCK_LIGHT
+        } else {
+            ROCK
+        };
+    }
+    // A cornice over the arches.
+    if y == 6 {
+        return ROCK_LIGHT;
+    }
+    if y == 7 {
+        return ROCK_DARK;
+    }
+    // The arch: a round head over the opening between the pillars.
+    let (cx, r) = (BAY / 2, BAY / 2 - 6);
+    let inside = if y < spring {
+        let (dx, dy) = (x - cx, y - spring);
+        dx * dx + dy * dy < r * r
+    } else {
+        (x - cx).abs() < r
+    };
+    if !inside {
+        return brick(x, y, ROCK);
+    }
+    // Through the arch, the dark, and dim brick further in where the light reaches.
+    if y >= 46 + (x - cx).abs() / 2 { brick(x + 4, y, ROCK_DEEP) } else { OUTLINE }
+}
+
 /// Number of distinct [`terrain_key`] values.
-pub const TERRAIN_KEYS: usize = 9 * 3 * 16 * 4 * 3;
+pub const TERRAIN_KEYS: usize = BACK_BASE + BACK_VARIANTS * BACK_CELLS;
+/// Keys up to here are the rock's and the props' own; the back wall's follow.
+const BACK_BASE: usize = 9 * 3 * 16 * 4 * 3;
 /// The kind of a rock cell with a crystal set in it.
 const GEM_KIND: usize = 8;
 
@@ -323,8 +452,14 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
         b',' => 5,
         b'*' => 6,
         b'&' => 7,
-        _ => return 0,
+        _ => 0,
     };
+    if let Some(key) = back_key(kind, tx, ty) {
+        return key;
+    }
+    if kind == 0 {
+        return 0;
+    }
     // Below the map counts as rock, so the screen's bottom edge gets no outline.
     let solid = |dx: i32, dy: i32| {
         let (x, y) = (tx + dx, ty + dy);
@@ -532,6 +667,31 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
     let kind = key / 576;
     let (up, left, right, down) = (sides & 1 != 0, sides & 2 != 0, sides & 4 != 0, sides & 8 != 0);
     let mut px = [0u8; 64];
+    if key >= BACK_BASE {
+        let (variant, cell) = ((key - BACK_BASE) / BACK_CELLS, (key - BACK_BASE) % BACK_CELLS);
+        let (row, col) = ((cell / (BAY as usize / 8)) as i32, (cell % (BAY as usize / 8)) as i32);
+        for (i, p) in px.iter_mut().enumerate() {
+            let (x, y) = (col * 8 + (i % 8) as i32, (i / 8) as i32);
+            *p = if row == 0 { brick(x, y, ground_ix::ROCK) } else { arcade_pixel(x, (row - 1) * 8 + y) };
+        }
+        // The prop in front, as its own key draws it.
+        let prop = match variant {
+            0 => None,
+            1 | 2 => Some((2, variant - 1)),
+            3 => Some((3, 0)),
+            4 | 5 => Some((5, variant - 4)),
+            6 | 7 => Some((6, (variant - 6) * 2)),
+            _ => Some((7, variant - 8)),
+        };
+        if let Some((kind, col4)) = prop {
+            for (p, q) in px.iter_mut().zip(terrain_pixels(kind * 576 + col4 * 3)) {
+                if q != 0 {
+                    *p = q;
+                }
+            }
+        }
+        return px;
+    }
     match kind {
         1 | GEM_KIND => {
             for (i, p) in px.iter_mut().enumerate() {

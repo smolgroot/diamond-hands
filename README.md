@@ -145,6 +145,11 @@ The Badlands' ground follows the tiles mockup in `.claude/mockup/` (`level1-tile
 lime moss hanging over the edges in leafy lobes, two courses of rounded purple bricks
 under it, then big slanted flagstones with blue crystals glinting in them, pillars of
 stacked blocks up the cliff faces, a brick trim under ceilings and grey steel girders.
+Below ground, open cells show a dim back wall instead of black, after
+`level1-tiles-sprites-sheet-with-background.png`: an arcade of round arches on pillars
+standing on the cavern's and the deep's floors, with brick above it. It is drawn in the
+terrain layer (no background layer is free) in its own muted palette, BG slot 4, and
+girders, fences and scenery underground are drawn over it in the same tile.
 The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
 - the wassie has a gold rim light, a broad bill and a red neck scarf
 - it squashes on a hard landing and leans back when it skids
