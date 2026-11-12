@@ -1147,38 +1147,31 @@ impl Renderer {
         let (px, py) = ui::portrait_pos(line.speaker != Speaker::Wassie);
         // The speaker bobs while the words come out.
         let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
-        if let Some(portrait) = self.portrait(line.speaker) {
-            // The speaker flaps their bill or jaw while the words come out:
-            // shut, half, wide, half.
-            let portrait = match (line.speaker, typing) {
-                (Speaker::Wassie, true) => {
-                    let talk = &self.wassie.portrait_talk;
-                    match (game.frame / 5) % 4 {
-                        1 | 3 => &talk[0],
-                        2 => &talk[1],
-                        _ => portrait,
-                    }
-                }
-                (Speaker::Cl207, true) => match (game.frame / 5) % 4 {
-                    1 | 3 => &self.cl207[1],
-                    2 => &self.cl207[2],
-                    _ => portrait,
-                },
-                _ => portrait,
-            };
-            show(frame, portrait, px, py - bob);
+        // The speaker flaps their bill or jaw while the words come out: shut, half, wide,
+        // half.
+        let mouth = match (typing, (game.frame / 5) % 4) {
+            (true, 1 | 3) => 1,
+            (true, 2) => 2,
+            _ => 0,
+        };
+        if let Some(portrait) = self.portrait(line.speaker, mouth) {
+            show(frame, &portrait, px, py - bob);
         }
     }
 
     /// Each speaker's face for the dialogue box. A new speaker needs a 32x32 portrait
     /// here and a name in `talk::Speaker`.
-    fn portrait(&self, speaker: Speaker) -> Option<&SpriteVram> {
+    /// `mouth` is 0 shut, 1 half open, 2 wide open, for the speakers who have them.
+    fn portrait(&self, speaker: Speaker, mouth: usize) -> Option<SpriteVram> {
         Some(match (speaker, self.level_art.as_ref()?) {
-            (Speaker::Wassie, _) => &self.wassie.portrait,
-            (Speaker::Cl207, _) => &self.cl207[0],
-            (Speaker::Bera, LevelArt::Badlands(bera, _)) => &bera.portrait,
-            (Speaker::Sam, LevelArt::Trenches(c)) => &c.arena.as_ref()?.sam.portrait,
-            (Speaker::Penguin, LevelArt::Trenches(c)) => &c.arena.as_ref()?.penguin,
+            (Speaker::Wassie, _) => match mouth {
+                0 => self.wassie.portrait.clone(),
+                m => self.wassie.portrait_talk[m - 1].clone(),
+            },
+            (Speaker::Cl207, _) => self.cl207[mouth].clone(),
+            (Speaker::Bera, LevelArt::Badlands(bera, _)) => bera.portrait.clone(),
+            (Speaker::Sam, LevelArt::Trenches(c)) => c.arena.as_ref()?.sam.portrait(mouth),
+            (Speaker::Penguin, LevelArt::Trenches(c)) => c.arena.as_ref()?.penguin.clone(),
             _ => return None,
         })
     }
