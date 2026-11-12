@@ -69,29 +69,66 @@ const BACK_ROOM: [Colour; 12] = [
     (2, 0, 4), (30, 26, 14), (26, 18, 5), (14, 7, 2), (21, 15, 25), (9, 4, 13), (3, 1, 6), (5, 21, 12), (2, 10, 7), (31, 4, 18), (6, 24, 28), (4, 1, 8),
 ];
 
-/// The sewers: the same slots as rust (the golds), grimy brick and concrete (the
-/// steels), sludge (the pipes), hazard orange (pink) and murky teal (cyan).
-const SEWERS: [Colour; 12] = [
-    (1, 2, 2), (27, 19, 9), (19, 10, 4), (10, 5, 2), (18, 20, 16), (9, 11, 9), (4, 5, 4), (13, 28, 6), (5, 16, 3), (31, 14, 4), (6, 18, 17), (2, 4, 4),
+/// The sewers' own palette, after `.claude/mockup/level2-sewers-tiles-sprites-sheet.png`
+/// (see [`sw`]): mossy green-grey brick, a steel rail with hazard orange dashes, rust,
+/// toxic slime, the dark teal of the vaults behind
+/// (`level2-sewers-background-tiles-sprites-sheet.png`). Indices 1..=13 (14 is spare);
+/// 15 is the fences' energy.
+const SEWERS: [Colour; 14] = [
+    (1, 2, 3),
+    (17, 20, 17),
+    (11, 14, 12),
+    (6, 9, 8),
+    (9, 20, 5),
+    (15, 31, 8),
+    (27, 28, 27),
+    (14, 16, 17),
+    (31, 16, 3),
+    (19, 10, 5),
+    (4, 10, 10),
+    (2, 6, 7),
+    (1, 4, 5),
+    (31, 27, 10),
 ];
+
+/// Sewer palette indices. The fence pylon (drawn with [`gx`]'s golds, 2-4) comes out in
+/// concrete.
+mod sw {
+    pub const OUTLINE: u8 = 1;
+    pub const STONE_LIGHT: u8 = 2;
+    pub const STONE: u8 = 3;
+    pub const STONE_DARK: u8 = 4;
+    pub const MOSS: u8 = 5;
+    pub const SLIME: u8 = 6;
+    pub const STEEL_LIGHT: u8 = 7;
+    pub const STEEL: u8 = 8;
+    pub const HAZARD: u8 = 9;
+    pub const RUST: u8 = 10;
+    /// The vaults behind, lit to dark.
+    pub const BACK_LIGHT: u8 = 11;
+    pub const BACK: u8 = 12;
+    pub const BACK_DARK: u8 = 13;
+}
 
 /// The terrain palette for stratum `stratum` (0 the street storey, then the back room
 /// and the sewers): its area's light (`stage`, on the street storey), the fence cycle,
 /// the marquee's chase step and whether the market is crashing (the screens flash red).
 pub fn stratum_palette(stratum: usize, stage: u8, fence: u8, chase: bool, crash: bool) -> Palette16 {
     let mut colours = [rgb(0, 0, 0); 16];
-    let area = match stratum {
+    let area: &[Colour] = match stratum {
         0 => &GROUND[(stage as usize).min(GROUND.len() - 1)],
         1 => &BACK_ROOM,
         _ => &SEWERS,
     };
-    for (out, &(r, g, b)) in colours[1..13].iter_mut().zip(area.iter()) {
+    for (out, &(r, g, b)) in colours[1..].iter_mut().zip(area.iter()) {
         *out = rgb(r, g, b);
     }
-    // Marquee bulbs up top; amber warning lamps in the sewers.
-    let (on, off) = if stratum >= 2 { (rgb(31, 21, 5), rgb(9, 5, 2)) } else { (rgb(31, 29, 14), rgb(14, 7, 4)) };
-    colours[gx::BULB_A as usize] = if chase { on } else { off };
-    colours[gx::BULB_B as usize] = if chase { off } else { on };
+    // Marquee bulbs up top. The sewers have no marquee: their slots are their own.
+    if stratum < 2 {
+        let (on, off) = (rgb(31, 29, 14), rgb(14, 7, 4));
+        colours[gx::BULB_A as usize] = if chase { on } else { off };
+        colours[gx::BULB_B as usize] = if chase { off } else { on };
+    }
     colours[gx::ENERGY as usize] = match fence {
         0 => rgb(6, 4, 10),
         1 => rgb(8, 14, 24),
@@ -113,7 +150,9 @@ pub fn scenery_palette(terrain: &Palette16) -> Palette16 {
 /// scenery.
 pub fn palette_slot(level: &Level, ty: i32, key: usize) -> u8 {
     let stratum = level.stratum(ty).min(TERRAIN_SLOTS.len() - 1);
-    if key >= DECOR_BASE { SCENERY_SLOTS[stratum] } else { TERRAIN_SLOTS[stratum] }
+    // The sewers' pictures sit on the back wall, drawn into the same tiles, so they
+    // keep its palette; their art is dim enough on its own.
+    if key >= DECOR_BASE && stratum < 2 { SCENERY_SLOTS[stratum] } else { TERRAIN_SLOTS[stratum] }
 }
 
 /// Backdrop (BG palette 0): the same slots as the Badlands' sky (bands 1-6, the "moon"
@@ -351,8 +390,109 @@ const LOOKS: usize = 2;
 const DECOR_BASE: usize = 1 + LOOKS * LOOK_KEYS;
 /// Cells a picture may have: up to 8 across and 8 down.
 const DECOR_CELLS: usize = 64;
-/// Number of distinct [`terrain_key`] values.
+/// Number of [`terrain_key`] values that aren't drawn over the sewers' back wall. Those
+/// that are come after, one run of these per back wall cell, and are sparse: only a few
+/// of them are on the map.
 pub const TERRAIN_KEYS: usize = DECOR_BASE + level::DECOR.len() * DECOR_CELLS;
+
+/// The sewers' back wall, after `.claude/mockup/level2-sewers-background-tiles-sprites-
+/// sheet.png`: vaults on pillars along the corridor, a round grate in each bay, a ledge,
+/// and dark water at the foot, all in dim teal. It fills the corridor from its ceiling
+/// down to the floor at this row (see `logic/src/levels/trenches.rs`); above, in the
+/// shafts, it is plain brick, and below the floor (the sunken channel) water.
+const SEWER_FLOOR: i32 = 80;
+/// The corridor's height in cells, and a bay's width (a pillar to the next) in pixels.
+const VAULT_ROWS: i32 = 14;
+const BAY: i32 = 64;
+const BAY_CELLS: i32 = BAY / 8;
+
+/// The key of `own` (a cell's key on its own, 0 for nothing) drawn over the back wall
+/// at `(tx, ty)`.
+fn back_key(own: usize, tx: i32, ty: i32) -> usize {
+    let row = (ty - (SEWER_FLOOR - VAULT_ROWS)).clamp(-1, VAULT_ROWS) + 1;
+    let cell = row * BAY_CELLS + (tx & (BAY_CELLS - 1));
+    own + TERRAIN_KEYS * (1 + cell as usize)
+}
+
+/// A pixel of the back wall: `row` is 0 for the brick above the corridor, then the
+/// corridor's rows, then the water under the floor; `x` across a bay (a pillar at 0).
+fn back_pixel(x: i32, row: i32, y: i32) -> u8 {
+    use sw::*;
+    let brick = |x: i32, y: i32| {
+        let course = y.div_euclid(4);
+        if y.rem_euclid(4) == 3 || (x + course.rem_euclid(2) * 4).rem_euclid(8) == 7 { OUTLINE } else { BACK_DARK }
+    };
+    if row == 0 {
+        return brick(x, y);
+    }
+    let water = |x: i32, y: i32| {
+        // Dark water, and the pillars and grates catching in it in broken streaks.
+        let d = (x - if x >= BAY / 2 { BAY } else { 0 }).abs();
+        let streak = y % 3 == 1 && ((d <= 3 && (x + y) % 5 != 0) || ((x - BAY / 2).abs() <= 5 - y / 6 && (x * 3 + y) % 4 != 0));
+        if streak { if y % 6 == 1 { BACK_LIGHT } else { BACK } } else { BACK_DARK }
+    };
+    let y = (row - 1) * 8 + y;
+    if row > VAULT_ROWS {
+        return water(x, y);
+    }
+    // Top to bottom: the vaults, the pillars' capitals, the grates, a ledge, brick, water.
+    let (spring, ledge, wet) = (38, 84, 100);
+    if y >= wet {
+        return if y == wet { OUTLINE } else { water(x, y - wet) };
+    }
+    let d = (x - if x >= BAY / 2 { BAY } else { 0 }).abs();
+    if y >= ledge {
+        return match y - ledge {
+            0 => BACK_LIGHT,
+            1 | 2 => BACK,
+            3 => OUTLINE,
+            _ => brick(x, y),
+        };
+    }
+    // The pillars: a capital under the vault's springing, a ring halfway down.
+    let half = match y {
+        _ if y < spring => -1,
+        _ if y < spring + 3 => 6,
+        _ if (spring + 24..spring + 27).contains(&y) => 5,
+        _ => 4,
+    };
+    if d <= half {
+        return if d == half || y == spring + 2 || y == spring + 26 {
+            OUTLINE
+        } else if y == spring || y == spring + 24 || x == BAY - half + 1 {
+            BACK_LIGHT
+        } else {
+            BACK
+        };
+    }
+    // The vault's ribs, springing from the capitals and meeting over the bay.
+    let (cx, cy) = (BAY / 2, spring + 4);
+    let (dx, dy) = (x - cx, y - cy);
+    let r2 = dx * dx + dy * dy;
+    let (inner, outer) = (BAY / 2 - 3, BAY / 2 + 2);
+    if y < cy && r2 < outer * outer && r2 >= inner * inner {
+        // Stones along the rib, its inner edge catching the light.
+        let seam = (dx * 5 + dy * 7).rem_euclid(23) == 0;
+        return if r2 < (inner + 1) * (inner + 1) { BACK_LIGHT } else if seam { OUTLINE } else { BACK };
+    }
+    if r2 >= outer * outer || y < cy - inner {
+        return brick(x, y);
+    }
+    // Under the vault: the dark recess, faint brick low down, and a round grate.
+    let (gx, gy, gr) = (BAY / 2, spring + 22, 9);
+    let (ex, ey) = (x - gx, y - gy);
+    let g2 = ex * ex + ey * ey;
+    if g2 <= gr * gr {
+        return if g2 > (gr - 2) * (gr - 2) {
+            if ex + ey < 0 { BACK_LIGHT } else { BACK }
+        } else if ex.rem_euclid(3) == 0 {
+            BACK
+        } else {
+            OUTLINE
+        };
+    }
+    if y > spring + 34 && brick(x, y) == OUTLINE { OUTLINE } else { BACK_DARK }
+}
 
 /// Map characters that look like the casino's walls.
 fn looks_solid(c: u8) -> bool {
@@ -372,8 +512,21 @@ fn slope_at(level: &Level, tx: i32, ty: i32) -> Option<Slope> {
     }
 }
 
-/// What a cell of the casino looks like: see the module docs.
+/// What a cell of the casino looks like: see the module docs. In the sewers, a cell
+/// with nothing in it, or with something that doesn't fill it (a picture, a catwalk, a
+/// fence, a slope), is drawn over the back wall: its key is then [`back_key`]'s.
 pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
+    let key = own_key(level, tx, ty);
+    if level.stratum(ty) < 2 {
+        return key;
+    }
+    let off = key.wrapping_sub(1 + LOOK_KEYS);
+    let open = key == 0 || key >= DECOR_BASE || matches!(off, LEDGE | FENCE) || (SLOPES..UNDER_SLOPE).contains(&off);
+    if open { back_key(key, tx, ty) } else { key }
+}
+
+/// A cell's key on its own, without the back wall.
+fn own_key(level: &Level, tx: i32, ty: i32) -> usize {
     let mut c = level.char_at(tx, ty);
     // Pickups hidden in a false wall are drawn behind it, so the wall stays whole.
     if !looks_solid(c) && level.char_at(tx, ty - 1) == b'%' && level.char_at(tx, ty + 1) != b'.' {
@@ -439,6 +592,22 @@ pub fn terrain_pixels(key: usize) -> [u8; 64] {
     if key == 0 {
         return px;
     }
+    if key >= TERRAIN_KEYS {
+        // Something over the sewers' back wall: the wall, then what's in front.
+        let (own, cell) = (key % TERRAIN_KEYS, (key / TERRAIN_KEYS - 1) as i32);
+        let (row, col) = (cell / BAY_CELLS, cell % BAY_CELLS);
+        for (n, p) in px.iter_mut().enumerate() {
+            *p = back_pixel(col * 8 + (n % 8) as i32, row, (n / 8) as i32);
+        }
+        if own != 0 {
+            for (p, q) in px.iter_mut().zip(terrain_pixels(own)) {
+                if q != 0 {
+                    *p = q;
+                }
+            }
+        }
+        return px;
+    }
     if key >= DECOR_BASE {
         let i = (key - DECOR_BASE) / DECOR_CELLS;
         let cell = (key - DECOR_BASE) % DECOR_CELLS;
@@ -496,12 +665,13 @@ fn slope(x: i32, y: i32, below: i32, shape: Slope, sewer: bool) -> u8 {
         return 0;
     }
     if sewer {
+        // The rail along the slope, then brick.
         return match d {
-            0 | 4 => OUTLINE,
-            1 | 2 => WALL_LIGHT,
-            3 => if (x + y).rem_euclid(4) < 2 { PINK } else { OUTLINE },
-            _ if (x * 5 + y * 3) % 11 == 0 => WALL_DARK,
-            _ => WALL,
+            0 => sw::STEEL_LIGHT,
+            1 => sw::STEEL,
+            2 => if x.rem_euclid(4) < 2 { sw::HAZARD } else { sw::OUTLINE },
+            3 => sw::OUTLINE,
+            _ => sewer_brick(x, y + below, false),
         };
     }
     match d {
@@ -601,32 +771,70 @@ fn ledge(x: i32, y: i32) -> u8 {
     }
 }
 
-/// Sewer brickwork, after a storm drain: a concrete walkway with a hazard-striped lip
-/// over courses of grimy brick, moss in the mortar, rust weeping from the ceilings, a
-/// darker course deep down. The bricks line up across cells, as the variant gives each
-/// cell its place in a 32 by 24 pixel pattern.
+/// A sewer brick's pixel at `(gx, gy)` in the bricks' 32 by 24 pattern: 8 by 4 bricks,
+/// every other course offset by half a brick, lit on top, some dark and some mossy;
+/// darker deep down.
+fn sewer_brick(gx: i32, gy: i32, deep: bool) -> u8 {
+    use sw::*;
+    let course = gy.div_euclid(4);
+    let shift = course.rem_euclid(2) * 4;
+    let (bx, by) = ((gx + shift).rem_euclid(8), gy.rem_euclid(4));
+    if by == 3 || bx == 7 {
+        return OUTLINE;
+    }
+    let brick = (gx + shift).div_euclid(8) * 5 + course * 3;
+    let (light, face) = match brick.rem_euclid(7) {
+        _ if deep => (STONE, STONE_DARK),
+        0 | 4 => (STONE, STONE_DARK),
+        _ => (STONE_LIGHT, STONE),
+    };
+    if brick.rem_euclid(7) == 2 && (bx + by * 2) % 3 == 0 {
+        // Moss growing on the brick.
+        return MOSS;
+    }
+    if by == 0 && bx < 6 || bx == 0 { light } else { face }
+}
+
+/// Moss drips hanging off the rail over the brick: (column in the 32 px pattern, length).
+const SEWER_DRIPS: [(i32, i32); 4] = [(3, 3), (12, 2), (21, 4), (28, 2)];
+
+/// Sewer brickwork, after the sewers mockup: a steel rail along exposed tops with a
+/// row of hazard orange dashes and moss dripping from under it, wrapping round open
+/// corners; courses of mossy green-grey brick, darker deep down. The bricks line up
+/// across cells, as the variant gives each cell its place in a 32 by 24 pattern.
 fn sewer_wall(x: i32, y: i32, sides: usize, depth: usize, col4: i32, row3: i32, cracked: bool) -> u8 {
-    use gx::*;
+    use sw::*;
     let (up, left, right, down) = (sides & 1 != 0, sides & 2 != 0, sides & 4 != 0, sides & 8 != 0);
+    // Rounded outer corners show the dark of the back wall.
     let corner = |a: bool, b: bool, cx: i32, cy: i32| a && b && (x - cx).abs() + (y - cy).abs() <= 1;
     if corner(up, left, 0, 0) || corner(up, right, 7, 0) || corner(down, left, 0, 7) || corner(down, right, 7, 7) {
-        return 0;
+        return BACK_DARK;
     }
     let (gx, gy) = (col4 * 8 + x, row3 * 8 + y);
     if up {
+        // The rail: its lit top is the walking line.
         match y {
-            0 | 4 => return OUTLINE,
-            1 => return WALL_LIGHT,
-            2 => return if (gx * 5 + gy) % 9 == 0 { WALL } else { WALL_LIGHT },
-            3 => return if gx.rem_euclid(4) < 2 { PINK } else { OUTLINE },
+            0 => return STEEL_LIGHT,
+            1 => return if gx % 16 == 15 { STEEL } else { STEEL_LIGHT },
+            2 => return STEEL,
+            3 => return if gx.rem_euclid(4) < 2 { HAZARD } else { OUTLINE },
+            4 => return OUTLINE,
             _ => {}
         }
+    }
+    // The rail wraps down an open side under it.
+    if up && y <= 5 && (left && x <= 2 || right && x >= 5) {
+        let d = if left { x } else { 7 - x };
+        return match d {
+            0 => if left { STEEL_LIGHT } else { STEEL },
+            1 => STEEL,
+            _ => OUTLINE,
+        };
     }
     if down {
         match y {
             7 => return OUTLINE,
-            6 => return GOLD_DARK,
-            5 if gx % 5 == 2 => return GOLD,
+            6 => return STONE_DARK,
             _ => {}
         }
     }
@@ -634,39 +842,35 @@ fn sewer_wall(x: i32, y: i32, sides: usize, depth: usize, col4: i32, row3: i32, 
         return OUTLINE;
     }
     if left && x == 1 {
-        return WALL_LIGHT;
+        return STONE_LIGHT;
     }
     if right && x == 6 {
-        return WALL_DARK;
+        return STONE_DARK;
     }
     if cracked && col4 == 2 && row3 == 1 && matches!((x, y), (3, 2) | (4, 3) | (4, 4) | (3, 5)) {
         return OUTLINE;
     }
-    // Bricks 8 by 4, every other course offset by half a brick.
-    let course = gy / 4;
-    let mortar = gy % 4 == 3 || (gx + course % 2 * 4) % 8 == 0;
-    let brick = (gx + course % 2 * 4) / 8 + course * 3;
-    if depth == 2 {
-        return if mortar { OUTLINE } else if brick % 4 == 0 { WALL } else { WALL_DARK };
+    if up {
+        for &(dx, len) in &SEWER_DRIPS {
+            if gx == dx && y < 5 + len {
+                return if y == 4 + len { SLIME } else { MOSS };
+            }
+        }
     }
-    if mortar {
-        return if (gx * 7 + gy * 3) % 13 == 0 { FELT } else { WALL_DARK };
-    }
-    match brick % 5 {
-        0 => WALL_DARK,
-        3 if gy % 4 == 0 => WALL_LIGHT,
-        _ => WALL,
-    }
+    sewer_brick(gx, gy, depth == 2)
 }
 
-/// A rusty grated catwalk, the sewers' girder, slung from two hangers.
+/// The sewers' catwalk, after the mockup: a steel deck with hazard dashes along its
+/// edge and rust under it, on brackets.
 fn catwalk(x: i32, y: i32) -> u8 {
-    use gx::*;
+    use sw::*;
     match y {
-        0 | 3 => OUTLINE,
-        1 => GOLD,
-        2 => if x % 2 == 0 { OUTLINE } else { GOLD_DARK },
-        4 | 5 if x == 1 || x == 6 => GOLD_DARK,
+        0 => STEEL_LIGHT,
+        1 => STEEL,
+        2 => if x % 4 < 2 { HAZARD } else { OUTLINE },
+        3 => RUST,
+        4 => OUTLINE,
+        5 | 6 if x == 1 || x == 6 => if y == 5 { STEEL } else { OUTLINE },
         _ => 0,
     }
 }
@@ -797,6 +1001,10 @@ fn picture(letter: u8, x: i32, y: i32, w: i32, h: i32) -> u8 {
         b'Y' => atm(x, y),
         b'H' => outflow(x, y),
         b'G' => graffiti(x, y, w),
+        b'O' => vines(x, y),
+        b'q' => pipework(x, y),
+        b'k' => barrier(x, y),
+        b'j' => ladder(x, y),
         _ => 0,
     }
 }
@@ -838,49 +1046,154 @@ fn atm(x: i32, y: i32) -> u8 {
     }
 }
 
-/// A sewer outflow, 24x24: a rusty pipe mouth in the wall, sludge pouring out of it.
+/// A sewer outflow, 24x24, after the mockup: a riveted rust ring round a dark pipe
+/// mouth with slime glowing in it.
 fn outflow(x: i32, y: i32) -> u8 {
-    use gx::*;
-    let (dx, dy) = (x - 12, y - 9);
+    use sw::*;
+    let (dx, dy) = (x - 12, y - 10);
     let d2 = dx * dx + dy * dy;
-    if d2 <= 81 {
+    if d2 <= 100 {
         return match () {
-            _ if d2 > 72 => OUTLINE,
-            _ if d2 > 49 => if dx + dy < -3 { GOLD_LIGHT } else if dx + dy > 4 { GOLD_DARK } else { GOLD },
-            _ if d2 > 36 => OUTLINE,
-            _ if dy >= 3 => if dy == 3 { FELT_LIGHT } else { FELT },
-            _ => SCREEN,
+            _ if d2 > 90 => OUTLINE,
+            _ if d2 > 56 => {
+                // Rivets round the ring.
+                let rivet = d2 > 66 && d2 < 82 && (dx * dx - dy * dy).rem_euclid(13) == 0;
+                if rivet { STEEL_LIGHT } else if dx + dy < -5 { HAZARD } else { RUST }
+            }
+            _ if d2 > 46 => OUTLINE,
+            _ if dy >= 3 => if dy == 3 { SLIME } else { MOSS },
+            _ if dy >= 0 && (x + y) % 3 == 0 => MOSS,
+            _ => OUTLINE,
         };
-    }
-    // The stream off the lip, wavering as it falls.
-    let wobble = [0, 1, 1, 0, -1, -1][(y % 6) as usize];
-    let sx = x - 12 - wobble;
-    if y > 17 && sx.abs() <= 2 {
-        return if sx.abs() == 2 { FELT } else { FELT_LIGHT };
     }
     0
 }
 
-/// Graffiti, `w` by 16: NGMI sprayed in pink with a dark shadow and drips, over a cyan
-/// swoosh.
+/// Graffiti, `w` by 16: NGMI sprayed in hazard orange with a dark shadow and drips,
+/// over a slime green swoosh, on the brick under the back wall's ledge.
 fn graffiti(x: i32, y: i32, w: i32) -> u8 {
-    use gx::*;
+    use sw::*;
     let tx = (w - 4 * 6 + 1) / 2;
     if text_at("NGMI", tx, 2, x, y) {
-        return PINK;
+        return HAZARD;
     }
     let drip = [tx + 1, tx + 9, tx + 20].contains(&x) && (9..9 + (x % 3) + 2).contains(&y);
     if drip {
-        return PINK;
+        return HAZARD;
     }
     if text_at("NGMI", tx + 1, 3, x, y) {
         return OUTLINE;
     }
-    let wave = 13 + [0, 0, 1, 1, 1, 0, 0, -1, -1, -1][(x % 10) as usize];
+    let wave = 11 + [0, 0, 1, 1, 1, 0, 0, -1, -1, -1][(x % 10) as usize];
     if y == wave && (2..w - 2).contains(&x) {
-        return CYAN;
+        return MOSS;
     }
     0
+}
+
+/// Vines, 16x16: a rope sagging between two hooks in the ceiling, leafy strands
+/// hanging off it.
+fn vines(x: i32, y: i32) -> u8 {
+    use sw::*;
+    let dx2 = x * 2 - 15;
+    let rope = 1 + (4 * 64 - dx2 * dx2) / 64;
+    if y == rope {
+        return RUST;
+    }
+    if y == rope + 1 && x > 0 && x < 15 {
+        return OUTLINE;
+    }
+    // Strands: (column, length).
+    for (sx, len) in [(3, 11), (6, 8), (11, 14), (13, 9)] {
+        let top = 1 + (4 * 64 - (sx * 2 - 15) * (sx * 2 - 15)) / 64 + 1;
+        if y > top && y <= top + len {
+            let k = y - top;
+            let leaf = k % 3 == 1;
+            if x == sx {
+                return if leaf { SLIME } else { MOSS };
+            }
+            if leaf && x == sx + if k % 6 == 1 { 1 } else { -1 } {
+                return MOSS;
+            }
+        }
+    }
+    0
+}
+
+/// Pipework on the wall, 32x24: a pipe along the wall with flanged joints, turning down
+/// through an elbow into a downpipe that ends in a flange.
+fn pipework(x: i32, y: i32) -> u8 {
+    use sw::*;
+    // The run: rows 4..=9; the downpipe: columns 21..=26, from the elbow down.
+    let shade = |across: i32, len: i32| match across {
+        0 | 5 => OUTLINE,
+        1 => STONE_LIGHT,
+        4 => STONE_DARK,
+        _ => if len % 12 == 6 { STONE_DARK } else { STONE },
+    };
+    let flange = |across: i32| match across {
+        -1 | 6 => OUTLINE,
+        0 => STEEL_LIGHT,
+        _ => STEEL,
+    };
+    let run = (4..=9).contains(&y) && x < 24;
+    let down = (21..=26).contains(&x) && y >= 10;
+    // The elbow: a quarter ring between them.
+    let (ex, ey) = (x - 20, y - 10);
+    let e2 = ex * ex + ey * ey;
+    if x >= 24 && y <= 10 && ey <= 0 && ex >= 0 && e2 <= 6 * 6 + 1 {
+        return match e2 {
+            _ if e2 > 30 => OUTLINE,
+            _ if e2 > 20 => STONE_LIGHT,
+            _ if e2 > 4 => STONE,
+            _ => STONE_DARK,
+        };
+    }
+    if run {
+        if x % 12 == 3 || x % 12 == 4 {
+            return flange(y - 4);
+        }
+        return shade(y - 4, x);
+    }
+    if (3..=10).contains(&y) && (x % 12 == 3 || x % 12 == 4) && x < 24 {
+        return OUTLINE;
+    }
+    if down {
+        if y >= 21 || y == 15 || y == 16 {
+            return flange(x - 21);
+        }
+        return shade(x - 21, y);
+    }
+    if (20..=27).contains(&x) && (y >= 21 || y == 15 || y == 16) {
+        return OUTLINE;
+    }
+    0
+}
+
+/// A road barrier on the floor, 16x8: a hazard-striped board on two legs.
+fn barrier(x: i32, y: i32) -> u8 {
+    use sw::*;
+    match y {
+        1 | 5 if (1..=14).contains(&x) => OUTLINE,
+        2..=4 if x == 1 || x == 14 => OUTLINE,
+        2..=4 if (2..=13).contains(&x) => if (x + y).rem_euclid(6) < 3 { HAZARD } else { OUTLINE },
+        6 | 7 if x == 3 || x == 12 => STEEL,
+        6 | 7 if x == 2 || x == 4 || x == 11 || x == 13 => if y == 7 { OUTLINE } else { 0 },
+        _ => 0,
+    }
+}
+
+/// A steel ladder, 8 px wide and repeating down: two rails and a rung every 4 px.
+fn ladder(x: i32, y: i32) -> u8 {
+    use sw::*;
+    match (x, y.rem_euclid(4)) {
+        (0 | 7, _) => OUTLINE,
+        (1, _) => STEEL_LIGHT,
+        (6, _) => STEEL,
+        (_, 1) => STEEL_LIGHT,
+        (_, 2) => OUTLINE,
+        _ => 0,
+    }
 }
 
 /// A slot machine, 16x24, after the mockup: a pink dome with a light, a slate cabinet

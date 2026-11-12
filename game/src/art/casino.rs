@@ -92,20 +92,58 @@ static SAM_PORTRAIT_PALETTE: Palette16 = super::gfx_palette(include_bytes!("../.
 /// The dialogue portrait, from the card in the sheet's corner. Colour indices, row by row.
 static SAM_PORTRAIT: &[u8; 1024] = include_bytes!("../../gfx/sam-portrait.idx");
 
+/// Mouth patches over the portrait for talking: (row, column, colour indices). His mouth
+/// sits under the nose around column 16; it opens to a dark gap in a lip outline, then
+/// wide with the tongue showing.
+const MOUTH_HALF: [(i32, i32, &[u8]); 2] = [(21, 15, &[14, 14, 14]), (22, 15, &[14, 8, 8, 8])];
+const MOUTH_WIDE: [(i32, i32, &[u8]); 3] = [
+    (21, 14, &[8, 14, 14, 14, 14, 8]),
+    (22, 14, &[8, 14, 5, 5, 14, 8]),
+    (23, 15, &[8, 8, 8, 8]),
+];
+
 /// SAM. Only the pose on screen sits in sprite VRAM: all of them would take 32 KB, more
 /// than there is. Changing pose copies the new one in from ROM.
 pub struct Sam {
     shown: RefCell<Option<(SamPose, SpriteVram)>>,
-    pub portrait: SpriteVram,
+    /// His face for the dialogue box, with the mouth it shows (0 shut, 1 half open,
+    /// 2 wide open). Only the one on screen is kept: the arena has no sprite memory
+    /// for three.
+    face: RefCell<Option<(usize, SpriteVram)>>,
 }
 
 impl Sam {
     pub fn new() -> Self {
+        Self { shown: RefCell::new(None), face: RefCell::new(Some((0, Self::draw_face(0)))) }
+    }
+
+    fn draw_face(mouth: usize) -> SpriteVram {
+        let patches: &[(i32, i32, &[u8])] = match mouth {
+            1 => &MOUTH_HALF,
+            2 => &MOUTH_WIDE,
+            _ => &[],
+        };
         let mut c = Canvas::new(Size::S32x32);
         for (i, &colour) in SAM_PORTRAIT.iter().enumerate() {
             c.px(i as i32 % 32, i as i32 / 32, colour);
         }
-        Self { shown: RefCell::new(None), portrait: c.vram_with(&SAM_PORTRAIT_PALETTE) }
+        for &(y, x, row) in patches {
+            for (i, &colour) in row.iter().enumerate() {
+                c.px(x + i as i32, y, colour);
+            }
+        }
+        c.vram_with(&SAM_PORTRAIT_PALETTE)
+    }
+
+    /// His portrait with `mouth` open, swapping the loaded face when it changes. The old
+    /// one is dropped first so the two never sit in sprite memory together.
+    pub fn portrait(&self, mouth: usize) -> SpriteVram {
+        let mut face = self.face.borrow_mut();
+        if face.as_ref().is_none_or(|(loaded, _)| *loaded != mouth) {
+            *face = None;
+            *face = Some((mouth, Self::draw_face(mouth)));
+        }
+        face.as_ref().map(|(_, sprite)| sprite.clone()).unwrap()
     }
 
     /// The 64x64 sprite for `pose`, loading it if it isn't the one already loaded.

@@ -126,6 +126,11 @@ const MAX_BACKDROP_Y: i32 = 256 - HEIGHT;
 /// Falling at least this fast draws wind streaks over the wassie.
 const SPEED_LINES_FX: i32 = 4 * diamond_hands_logic::FX;
 const KEY_UNSET: u16 = u16::MAX;
+/// A terrain tile id holds its region's cache from this bit up, its place in it below.
+const REGION_SHIFT: u16 = 14;
+/// Room made up front for terrain keys past [`MAX_TERRAIN_KEYS`]: the sewers have about
+/// 220.
+const FAR_TERRAIN_KEYS: usize = 256;
 const KEY_BLANK: u16 = u16::MAX - 1;
 /// Integer sine for 16 directions, scaled by 64.
 const SIN16: [i32; 16] = [0, 24, 45, 59, 64, 59, 45, 24, 0, -24, -45, -59, -64, -59, -45, -24];
@@ -141,7 +146,8 @@ pub struct Renderer {
     villains: Villains,
     /// The loaded level's own art; `None` only between dropping one and loading the next.
     level_art: Option<LevelArt>,
-    cl207: SpriteVram,
+    /// CL207's face: mouth shut, half open, wide open.
+    cl207: [SpriteVram; 3],
     font: Font,
     sky: RegularBackground,
     city: RegularBackground,
@@ -160,10 +166,21 @@ pub struct Renderer {
     clear_badge: SpriteVram,
     /// The pause menu's layer, only while the game is paused.
     menu: Option<MenuScreen>,
-    terrain_tiles: TileCache,
+    /// Terrain tiles, one cache per region of the level (see [`Renderer::region`]):
+    /// when the camera is wholly in one, the other's tiles are let go.
+    terrain_tiles: [TileCache; 2],
+    /// The region the camera is in, and the rows it spans.
+    region: (usize, i32, i32),
+    /// Clearing the map of the region left behind: the next terrain map slot to look
+    /// at, and which half of its rows.
+    sweep: Option<(usize, i32)>,
     /// Tile for each [`badlands::terrain_key`], built on first use: [`KEY_UNSET`] until
     /// then, [`KEY_BLANK`] for transparent cells. On the heap, as it is a few KB.
     terrain_by_key: Vec<u16>,
+    /// The same for keys past the table's end (the Trenches' sewers draw cells over a
+    /// back wall, and there are many such keys but few on the map): `(key, tile)`,
+    /// sorted by key.
+    terrain_by_far_key: Vec<(u32, u16)>,
     blank: DynamicTile16,
     /// The level whose terrain tiles are being made ahead of time, and the next cell
     /// (row-major) to look at.
@@ -240,8 +257,11 @@ impl Renderer {
             locked: ui::lock_marker(),
             clear_badge: ui::clear_badge(),
             menu: None,
-            terrain_tiles: TileCache::new(),
+            terrain_tiles: [TileCache::new(), TileCache::new()],
+            region: (0, 0, i32::MAX),
+            sweep: None,
             terrain_by_key: vec![KEY_UNSET; MAX_TERRAIN_KEYS],
+            terrain_by_far_key: Vec::with_capacity(FAR_TERRAIN_KEYS),
             blank: DynamicTile16::new().fill_with(0),
             columns: [(i32::MIN, 0, 0); TERRAIN_COLS as usize],
             level: None,
@@ -374,6 +394,10 @@ impl Renderer {
             Scene::Intro | Scene::Title | Scene::Files | Scene::FileChoice | Scene::Options => Some((64, 4)),
             _ => None,
         };
+        if game.scene == Scene::Play || in_menu {
+            self.track_region(level, top, top + VIEW_ROWS);
+        }
+        self.sweep_terrain();
         if let Some((cells, new)) = warm.filter(|_| terrain_ready) {
             self.warm_terrain(level, cells, new);
         }
@@ -536,8 +560,11 @@ impl Renderer {
                         self.terrain.set_tile_dynamic16((slot, ty), &self.blank, effect);
                     }
                 }
-                self.terrain_tiles = TileCache::new();
+                self.terrain_tiles = [TileCache::new(), TileCache::new()];
+                self.region = (0, 0, i32::MAX);
+                self.sweep = None;
                 self.terrain_by_key.fill(KEY_UNSET);
+                self.terrain_by_far_key.clear();
                 self.warm_level = None;
                 self.columns = [(i32::MIN, 0, 0); TERRAIN_COLS as usize];
             }
@@ -614,12 +641,89 @@ impl Renderer {
         }
     }
 
-    /// Makes the tile for terrain `key` if it isn't made yet.
-    fn make_terrain_tile(&mut self, theme: Theme, key: usize) {
-        if self.terrain_by_key[key] == KEY_UNSET {
+    /// The tile made for terrain `key`: [`KEY_UNSET`] if none is yet.
+    fn terrain_tile_id(&self, key: usize) -> u16 {
+        if key < MAX_TERRAIN_KEYS {
+            return self.terrain_by_key[key];
+        }
+        match self.terrain_by_far_key.binary_search_by_key(&(key as u32), |e| e.0) {
+            Ok(i) => self.terrain_by_far_key[i].1,
+            Err(_) => KEY_UNSET,
+        }
+    }
+
+    /// Which of a level's regions row `ty` is in. Background VRAM can't hold all of the
+    /// Trenches' terrain at once, but the sewers (with their back wall) and the floors
+    /// above them are never on screen together, so each keeps its tiles only while the
+    /// camera is there. The Badlands are one region.
+    fn region(level: &Level, ty: i32) -> usize {
+        match level.theme {
+            Theme::Trenches => (level.stratum(ty) >= 2) as usize,
+            Theme::Badlands => 0,
+        }
+    }
+
+    /// Notes which region the camera's rows `top..bottom` are in. Once they are all in
+    /// another region than before, the old one's tiles are let go: dropped from the
+    /// cache, and cleared from the map off screen over the next frames (see
+    /// [`Self::sweep_terrain`]) so nothing keeps them in VRAM.
+    fn track_region(&mut self, level: &Level, top: i32, bottom: i32) {
+        let (top, bottom) = (top.max(0), bottom.min(level.height()) - 1);
+        let region = Self::region(level, top);
+        if region != Self::region(level, bottom) || region == self.region.0 {
+            return;
+        }
+        let old = self.region.0;
+        let rows = (0..level.height()).filter(|&ty| Self::region(level, ty) == region);
+        let (first, last) = rows.clone().fold((i32::MAX, i32::MIN), |(a, b), ty| (a.min(ty), b.max(ty)));
+        self.region = (region, first, last + 1);
+        self.terrain_tiles[old] = TileCache::new();
+        let gone = |id: u16| id < KEY_BLANK && (id >> REGION_SHIFT) as usize == old;
+        for id in self.terrain_by_key.iter_mut().filter(|id| gone(**id)) {
+            *id = KEY_UNSET;
+        }
+        self.terrain_by_far_key.retain(|e| !gone(e.1));
+        self.warm_next = 0;
+        self.sweep = Some((0, 0));
+    }
+
+    /// Clears half a terrain map slot's rows a frame, until the whole map is done: every
+    /// cell but those of rows of the camera's region the slot holds now goes blank, so
+    /// none still shows (and keeps in VRAM) a tile of the region left behind.
+    fn sweep_terrain(&mut self) {
+        let Some((slot, half)) = self.sweep else {
+            return;
+        };
+        let (_, first, end) = self.region;
+        let (held, lo, hi) = self.columns[slot];
+        let (lo, hi) = (lo.max(first), hi.min(end));
+        let (lo, hi) = if held != i32::MIN && lo < hi { (lo, hi) } else { (0, 0) };
+        self.columns[slot] = if hi > lo { (held, lo, hi) } else { (i32::MIN, 0, 0) };
+        let effect = TileEffect::new(false, false, 0);
+        for ring in half * TERRAIN_ROWS / 2..(half + 1) * TERRAIN_ROWS / 2 {
+            if (ring - lo).rem_euclid(TERRAIN_ROWS) >= hi - lo {
+                self.terrain.set_tile_dynamic16((slot as i32, ring), &self.blank, effect);
+            }
+        }
+        self.sweep = match (slot + 1 < TERRAIN_COLS as usize, half) {
+            (_, 0) => Some((slot, 1)),
+            (true, _) => Some((slot + 1, 0)),
+            (false, _) => None,
+        };
+    }
+
+    /// Makes the tile for terrain `key` if it isn't made yet, in `region`'s cache.
+    fn make_terrain_tile(&mut self, theme: Theme, key: usize, region: usize) {
+        if self.terrain_tile_id(key) == KEY_UNSET {
             let pixels = if theme == Theme::Trenches { trenches::terrain_pixels(key) } else { badlands::terrain_pixels(key) };
-            let id = self.terrain_tiles.intern(pixels);
-            self.terrain_by_key[key] = id.map_or(KEY_BLANK, |id| id as u16);
+            let id = self.terrain_tiles[region]
+                .intern(pixels)
+                .map_or(KEY_BLANK, |id| id as u16 | (region as u16) << REGION_SHIFT);
+            if key < MAX_TERRAIN_KEYS {
+                self.terrain_by_key[key] = id;
+            } else if let Err(i) = self.terrain_by_far_key.binary_search_by_key(&(key as u32), |e| e.0) {
+                self.terrain_by_far_key.insert(i, (key as u32, id));
+            }
         }
     }
 
@@ -638,13 +742,19 @@ impl Renderer {
             if self.warm_next >= total {
                 return;
             }
-            let key = Self::terrain_key(level, self.warm_next % w, self.warm_next / w);
-            if self.terrain_by_key[key] == KEY_UNSET {
+            // Only the camera's region: the other's tiles would be let go anyway.
+            let ty = self.warm_next / w;
+            if Self::region(level, ty) != self.region.0 {
+                self.warm_next = (ty + 1) * w;
+                continue;
+            }
+            let key = Self::terrain_key(level, self.warm_next % w, ty);
+            if self.terrain_tile_id(key) == KEY_UNSET {
                 if made == new {
                     return;
                 }
                 made += 1;
-                self.make_terrain_tile(level.theme, key);
+                self.make_terrain_tile(level.theme, key, self.region.0);
             }
             self.warm_next += 1;
         }
@@ -653,10 +763,10 @@ impl Renderer {
     /// Writes the level's cell `(col, ty)` into its terrain map slot.
     fn write_terrain(&mut self, level: &'static Level, col: i32, ty: i32) {
         let key = Self::terrain_key(level, col, ty);
-        self.make_terrain_tile(level.theme, key);
-        let tile = match self.terrain_by_key[key] {
+        self.make_terrain_tile(level.theme, key, Self::region(level, ty));
+        let tile = match self.terrain_tile_id(key) {
             KEY_BLANK => &self.blank,
-            id => &self.terrain_tiles.tiles[id as usize],
+            id => &self.terrain_tiles[(id >> REGION_SHIFT) as usize].tiles[(id & ((1 << REGION_SHIFT) - 1)) as usize],
         };
         let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
         let palette = match level.theme {
@@ -718,7 +828,7 @@ impl Renderer {
             self.font.draw_centred(frame, "INCOMING CALL", 52, true);
         }
         self.font.draw_centred(frame, "CL207", 70, false);
-        show(frame, &self.cl207, 104, 82);
+        show(frame, &self.cl207[0], 104, 82);
         self.font.draw_centred(frame, "A: ANSWER", 122, false);
     }
 
@@ -1037,20 +1147,31 @@ impl Renderer {
         let (px, py) = ui::portrait_pos(line.speaker != Speaker::Wassie);
         // The speaker bobs while the words come out.
         let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
-        if let Some(portrait) = self.portrait(line.speaker) {
-            show(frame, portrait, px, py - bob);
+        // The speaker flaps their bill or jaw while the words come out: shut, half, wide,
+        // half.
+        let mouth = match (typing, (game.frame / 5) % 4) {
+            (true, 1 | 3) => 1,
+            (true, 2) => 2,
+            _ => 0,
+        };
+        if let Some(portrait) = self.portrait(line.speaker, mouth) {
+            show(frame, &portrait, px, py - bob);
         }
     }
 
     /// Each speaker's face for the dialogue box. A new speaker needs a 32x32 portrait
     /// here and a name in `talk::Speaker`.
-    fn portrait(&self, speaker: Speaker) -> Option<&SpriteVram> {
+    /// `mouth` is 0 shut, 1 half open, 2 wide open, for the speakers who have them.
+    fn portrait(&self, speaker: Speaker, mouth: usize) -> Option<SpriteVram> {
         Some(match (speaker, self.level_art.as_ref()?) {
-            (Speaker::Wassie, _) => &self.wassie.portrait,
-            (Speaker::Cl207, _) => &self.cl207,
-            (Speaker::Bera, LevelArt::Badlands(bera, _)) => &bera.portrait,
-            (Speaker::Sam, LevelArt::Trenches(c)) => &c.arena.as_ref()?.sam.portrait,
-            (Speaker::Penguin, LevelArt::Trenches(c)) => &c.arena.as_ref()?.penguin,
+            (Speaker::Wassie, _) => match mouth {
+                0 => self.wassie.portrait.clone(),
+                m => self.wassie.portrait_talk[m - 1].clone(),
+            },
+            (Speaker::Cl207, _) => self.cl207[mouth].clone(),
+            (Speaker::Bera, LevelArt::Badlands(bera, _)) => bera.portrait.clone(),
+            (Speaker::Sam, LevelArt::Trenches(c)) => c.arena.as_ref()?.sam.portrait(mouth),
+            (Speaker::Penguin, LevelArt::Trenches(c)) => c.arena.as_ref()?.penguin.clone(),
             _ => return None,
         })
     }

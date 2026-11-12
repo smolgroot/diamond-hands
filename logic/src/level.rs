@@ -123,7 +123,7 @@ pub enum BossKind {
 
 /// Scenery pictures bigger than a tile: the letter fills the picture's whole block in
 /// the map, `(letter, width, height)` in tiles. A wider or taller block repeats it.
-pub const DECOR: [(u8, i32, i32); 16] = [
+pub const DECOR: [(u8, i32, i32); 20] = [
     (b'S', 2, 3),  // slot machine
     (b'M', 4, 3),  // trading screen
     (b'N', 6, 2),  // CASINO sign
@@ -140,6 +140,10 @@ pub const DECOR: [(u8, i32, i32); 16] = [
     (b'Y', 2, 3),  // crypto ATM, the back room's cash machine
     (b'H', 3, 3),  // sewer outflow pipe
     (b'G', 4, 2),  // graffiti
+    (b'O', 2, 2),  // vines hanging from the sewers' ceiling
+    (b'q', 4, 3),  // pipework on the sewers' wall
+    (b'k', 2, 1),  // a hazard-striped barrier on the floor
+    (b'j', 1, 1),  // a ladder, repeating down
 ];
 
 /// The size of the picture `c` draws, if it is a picture.

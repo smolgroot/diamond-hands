@@ -215,12 +215,25 @@ impl ArrivalArt {
     }
 }
 
-/// CL207's face for the dialogue box, facing left. Kept loaded in every level: CL207
+/// Mouth patches over [`PORTRAIT`] for talking: (row, column, pixels). The cat's small
+/// mouth sits under the nose around column 10; it opens to a dark gap, then wide with a
+/// pink tongue.
+const MOUTH_HALF: [(i32, i32, &str); 2] = [(22, 9, "kkk"), (23, 9, "kkk")];
+const MOUTH_WIDE: [(i32, i32, &str); 3] = [(22, 9, "kkk"), (23, 9, "kpk"), (24, 9, "kkk")];
+
+/// CL207's face for the dialogue box, facing left, and the same face with its mouth
+/// half open and wide open, for while he talks. Kept loaded in every level: CL207
 /// calls in the Trenches too. The rest of [`ArrivalArt`] is the Badlands' alone.
-pub fn portrait() -> SpriteVram {
-    let mut c = Canvas::new(Size::S32x32);
-    c.art_with(KEY, 0, 0, &PORTRAIT);
-    c.vram_with(&PALETTE)
+pub fn portrait() -> [SpriteVram; 3] {
+    let face = |patches: &[(i32, i32, &str)]| {
+        let mut c = Canvas::new(Size::S32x32);
+        c.art_with(KEY, 0, 0, &PORTRAIT);
+        for &(y, x, rows) in patches {
+            c.art_with(KEY, x, y, &[rows]);
+        }
+        c.vram_with(&PALETTE)
+    };
+    [face(&[]), face(&MOUTH_HALF), face(&MOUTH_WIDE)]
 }
 
 /// The left half of a 64-pixel cargo ship: an armoured pod with a lit window at each
