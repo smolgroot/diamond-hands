@@ -5,41 +5,20 @@
 
 A side-scrolling action platformer for the Game Boy Advance, written in Rust with [agb](https://agbrs.dev).
 In a dystopian future the bears have built machines. A wassie in a red poncho, hauling an
-oversized laser cannon, blasts its way through their cyber bots. Each level ends with a boss.
+oversized laser cannon, blasts its way left to right through their cyber bots. Each level ends
+with a boss.
 
-1. **The Badlands** (playable): an explorable map, Metroidvania style, three screens tall.
-   Mossy cliffs below a ruined city, from a violet dusk to a burning night. Sentry walkers,
-   Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a bear-shaped war mech.
-   The way to her runs over a cliff face too high to jump. The only other way on is down a
-   pit, which can't be climbed back up without the jetpack. Below it are the caves: a long
-   cavern, a false wall hiding a secret room at its west end, and a shaft. The shaft drops to
-   the deep, a crystal cave where the **jetpack** lies at the far west end, past electric
-   fences. With the jetpack, the girders up the shaft climb all the way back to the plateau
-   over the cliff, and the high ledges passed on the way down are in reach.
+1. **The Badlands** (playable): mossy cliffs below a ruined city, from a violet dusk to a burning
+   night. Sentry walkers, Crawler spider-bots, Drones and rolling Mines, then **BERA 3000**, a
+   bear-shaped war mech.
 2. **Solana Trenches** (playable): not a battlefield but Crypto Twitter's memecoin casino,
-   where a coin launches every minute and most of them rug. An explorable map, Metroidvania
-   style, four storeys tall. CL207 calls as it starts. SAM runs the casino from his rooftop
-   and has cut the power to his elevator. CL207 is also building a **Plasma Shield** and
-   needs the three plasma cells hidden below ground.
-   - **The strip and the casino floor:** a neon Vegas strip under a giant gold coin, with
-     a plaza up a ramp. Then the casino floor: felt tables to hop, slot banks, roulette,
-     trading screens, croupier bots dealing cards, rolling chips, a sunken bar and a false
-     wall hiding a secret tunnel. The elevator lobby at its end is dead ("NO POWER").
-   - **The back room:** down a hole in the casino floor, the underground casino. A grand
-     ramp leads down to banks of slot machines and crypto ATMs, a high rollers' stage and,
-     behind a false wall, the VIP vault with the first cell.
-   - **The sewers:** down the back room's drain (or a manhole on the strip), a long brick
-     corridor full of bots. Sentries, crawlers, guards and drones stand between two fences,
-     a sunken channel and a raised walkway. A second cell waits in the bots' nest at the
-     west end, and a third on a pipe above the walkway, up on the jetpack. The **breaker**
-     at the east end brings the elevator's power back. The shaft beside it climbs on
-     girders back up to a hatch in the lobby floor, which only opens from below.
-   - **The tower:** the elevator rides up to the exchange suites (server racks, the vault
-     up a ramp, armoured guard bots) and out onto the rooftop, where **SAM**, a cyborg
-     exchange founder with a cucumber, waits under the open sky.
-
-   The floors aren't all flat: ramps and slopes, steep and gentle, run through all four
-   storeys. The casino pays in **gold coins**, which the penguin cashier changes into
+   where a coin launches every minute and most of them rug. CL207 calls as it starts: he is
+   building a **Plasma Shield** and needs the three plasma cells hidden in the level. A neon
+   Vegas strip under a giant gold coin leads into the casino floor (felt tables to hop, slot
+   banks, roulette, trading screens, croupier bots dealing cards, rolling chips, a false wall
+   hiding a secret tunnel), then an elevator up to the red-lit exchange suites (server racks,
+   the vault, armoured guard bots). The boss is **SAM**, a cyborg exchange founder with a
+   cucumber. The casino pays in **gold coins**, which the penguin cashier changes into
    diamonds after the fight.
 3. **Ethereum City** (unlocked by clearing the Trenches, not built yet): where CL207's
    Plasma Shield arrives.
@@ -64,16 +43,14 @@ oversized laser cannon, blasts its way through their cyber bots. Each level ends
   the levels before it cleared.
 - **Combat:** you can stomp bots by landing on them. A "!" over a bot means it is about to
   attack. The blaster fires in eight directions; diagonal shots fly at the same speed.
-- **Jetpack:** in the Badlands it has to be found first (in the deep); the Trenches start with
-  it. After a jump's rise, keeping A held lights a jetpack that climbs slowly for
+- **Jetpack:** after a jump's rise, keeping A held lights a jetpack that climbs slowly for
   48 frames. This reaches about 62 px, against 38 px for a plain jump, so the diamonds on
   the floating rocks are reachable. Letting go saves the rest of the fuel, landing or
   stomping a bot refuels it, and a quick tap in the air never hovers (it stays a buffered
   jump).
 - **Arrival:** starting the Badlands fresh plays its arrival on CryptoTerra. A cargo ship drops the
   wassie off, rekt and owning nothing but its scarf. CL207, a white cat in a yellow cat-eared hazmat suit,
-  explains the rules, then hands over the blaster. A bear bot dragged the jetpack he meant
-  to give it down into the caves. A reads the lines and Start
+  explains the rules, then hands over the blaster and the jetpack. A reads the lines and Start
   skips the scene. Continuing a saved run never replays it.
 - **Boss dialogue:** when the arena closes and the camera settles, the boss and the wassie
   trade a few lines. A finishes a line and then turns the page; Start skips the rest. It
@@ -93,12 +70,10 @@ oversized laser cannon, blasts its way through their cyber bots. Each level ends
   play carries on exactly where it stopped. Left/Right (or L/R) switch tabs:
   - CONTROLS lists every button with what it does in play and in menus. The rows come from
     the game's own input mapping (`logic/src/controls.rs`), so they can't drift from it.
-  - BAG shows the wassie's gear: the blaster, the jetpack, CL207's plasma shield (not held
-    until Ethereum City hands it over), the plasma cells and the red scarf, each with an
-    icon, its slot and an "E" when equipped. The icons follow the inventory mockup in the
-    project skill (`inventory-mockup.png`). Up/Down pick an item and the box below
-    describes it; A opens a card with a big icon, more detail and, for the jetpack and the
-    cells, a live gauge. B closes the card.
+  - BAG shows the wassie's gear: the blaster, the jetpack and the red scarf, each with an
+    icon, its slot and an "E" when equipped. Up/Down pick an item and the box below
+    describes it; A opens a card with a big icon, more detail and, for the jetpack, a live
+    fuel gauge. B closes the card.
   - WALLET shows the diamond balance (banked plus this level's), the banked count, the
     level's diamonds found out of its total, gold coins (this level's and the purse), and
     the score.
@@ -113,14 +88,11 @@ oversized laser cannon, blasts its way through their cyber bots. Each level ends
   again at the next visit. The deal is struck once and saved with the level's clear.
   Replays bank no diamonds or coins, as they bank no score, but the purse can still be
   changed.
-- **Plasma cells:** three in the Trenches, one in the back room and two in the sewers.
-  Each is found once per file (the bag shows how many), and they stay found on replays.
-- **Elevator:** its power is cut. Press Up at the breaker in the sewers and its lights come
-  back on. Then, in the lobby, step into the open car and press Up again. A "^" bubble shows
-  where Up does something. A terminal standing by a car (none does in the Trenches) can also
-  be worked from the car's door.
-- **Slopes:** walk up and down them like any floor. Standing on one, the wassie stands where
-  the floor crosses its middle. Bots walk them too, and shots stop at the rock under them.
+- **Plasma cells:** three in the Trenches, each found once per file (the bag shows how
+  many); they stay found on replays.
+- **Elevator:** the casino floor ends at a sealed wall. Press Up at the terminal to power
+  the elevator, wait for its doors, step in and press Up again. A "^" bubble shows where Up
+  does something.
 - **SAM:** opens with his **Cucumber Hit** (crackling aura, then a lunge and a giant
   cucumber along the floor that knocks you flying: jump it; afterwards he's winded and takes
   double damage), lobs arcing cucumbers, and calls a **Market Crash** (the screens go red,
@@ -138,26 +110,6 @@ oversized laser cannon, blasts its way through their cyber bots. Each level ends
   how often bots fire. It is saved to SRAM with the best score.
 
 Art direction follows `cover.png` and the project skill in `.claude/skills/diamond-hands-gba/`.
-The backdrops (sky and city) are muted, and the scenery pictures on the terrain less so
-(`BACKDROP_MUTE` and `SCENERY_MUTE` in `game/src/art/mod.rs`). The wassie, the bots and
-the ground they stand on keep their full colour, so they stand out.
-The Badlands' ground follows the tiles mockup in `.claude/mockup/` (`level1-tiles.png`):
-lime moss hanging over the edges in leafy lobes, two courses of rounded purple bricks
-under it, then big slanted flagstones with blue crystals glinting in them, pillars of
-stacked blocks up the cliff faces, a brick trim under ceilings and grey steel girders.
-Below ground, open cells show a dim back wall instead of black, after
-`level1-tiles-sprites-sheet-with-background.png`: an arcade of round arches on pillars
-standing on the cavern's and the deep's floors, with brick above it. It is drawn in the
-terrain layer (no background layer is free) in its own muted palette, BG slot 4, and
-girders, fences and scenery underground are drawn over it in the same tile.
-The Trenches' sewers follow `level2-sewers-tiles-sprites-sheet.png` and
-`level2-sewers-background-tiles-sprites-sheet.png`: mossy green-grey brick under a steel
-rail with hazard orange dashes (its lit top is the walking line), the same rail up the
-ramps and along the catwalks, and behind the corridor a dark teal back wall of vaults on
-pillars with a round grate in each bay, a ledge and water at the foot. The corridor has
-outflow pipes with slime glowing in them, vines, pipework, barriers, a ladder up to the
-breaker's catwalk and graffiti on the brick under the ledge. Every copy of a
-picture sits at the same place in the back wall's 64 px bay, so the copies share tiles.
 The wassie's poses and effects follow the player sprite sheet there (`sprite-sheet.png`):
 - the wassie has a gold rim light, a broad bill and a red neck scarf
 - it squashes on a hard landing and leans back when it skids
@@ -179,27 +131,10 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
 - `logic/`: all game rules. Tile physics, the player, villains, the boss, scenes, levels and the
   test probe. `no_std` and integer-only, tested on the host.
   - Levels are ASCII maps in `logic/src/levels/`. The legend is in `logic/src/level.rs`,
-    including the scenery pictures (`DECOR`: slots, screens, signs, ATMs, sewer pipes,
-    graffiti) drawn over a block of their letter, and the slopes: `/` and `\` rise and fall
-    a tile per tile, `{` and `}` a tile over two, in pairs. A slope is a floor under a body's
-    centre only, cut from rock (`Body::step` in `logic/src/physics.rs`). Each
+    including the scenery pictures (`DECOR`: slots, screens, signs) drawn over a block
+    of their letter. Each
     level also carries its boss dialogue; places on the world map and the unlock rules are in
     `logic/src/levels.rs`.
-  - A map is one screen (20 rows) tall, or taller for an explorable level (`explore`): the
-    Badlands are 180 x 60, the Trenches 280 x 84. There the camera follows the wassie up and
-    down too, the sky and the city fade to black below `sky_rows`, a resumed run comes back
-    with exactly what it had taken (`World::taken`, saved per actor), and `route` lists
-    waypoints for the route bot. `J` is the jetpack for a level that hides it; owning it is
-    a bit of the file's part mask (`GEAR_JETPACK`), next to the plasma cells.
-  - A map can also be built in storeys (`bands`). The camera then keeps to the storey the
-    wassie is in and pans when it drops or climbs to another. A test checks that everywhere
-    the wassie can stand shows whole in its storey. `strata` gives the rows where the
-    renderer switches tileset and palette (the Trenches' back room and sewers). `areas`
-    light a block of the map as another stage (the Trenches' tower top under the night
-    sky). `backdrop_y` is the camera height the sky and the city were painted for.
-  - Each map's markers are listed when the game compiles (`Markers::scan`): on the GBA the
-    map sits in cartridge ROM, and reading every cell of a tall one as a level starts
-    overran a frame.
   - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
     `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
     A new item needs an entry there and an icon in `game/src/art/menu.rs`.
@@ -259,48 +194,25 @@ cargo test -p diamond_hands_harness  # boots the ROM on gba-wasm (needs dist/dia
 
 The logic tests also check every map for authoring mistakes: unreachable steps, spawns inside
 rock, the arena size, and diamonds on floating rock that the jetpack can't reach. They also
-check that the dialogue fits the box and the font, that every slope has rock under it, and
-that in a map built in storeys everywhere the wassie stands shows whole on screen. A route
-bot then plays each level in god mode and must beat the boss. In an explorable level it
-follows the level's waypoints there:
-- the Badlands: down the pit, through the caves, to the jetpack and back up the shaft
-- the Trenches: down the casino's hole, through the back room and down its drain, along
-  the sewers to the breaker, up the shaft, then the elevator
-
-The gates are checked too. In the Badlands, a jump can't top the cliff and the jetpack
-can, and a resumed run keeps the jetpack and exactly what it had taken. In the Trenches,
-the elevator stays dark until the breaker is thrown, the lobby's hatch holds from above,
-the cells are below ground, and a resumed run finds the elevator as it was left.
+check that the dialogue fits the box and the font. A route bot then plays each level in god
+mode and must beat the boss.
 
 Each frame, the ROM mirrors a `Probe` struct into EWRAM. The harness finds it by its `DHPR` magic, then checks:
 - scene flow
 - running, jumping, firing
 - pausing
 - SRAM persistence
-- that the Badlands start without the jetpack, and diagonal and downward aim
+- hovering, and diagonal and downward aim
 - the world map: locked and coming-soon places, and unlocking the Trenches by clearing the
   Badlands, which survives a power cycle
 - the pause menu's tabs, items and inspect card, and that closing it neither fires nor
   moves the level on
 - that the ROM matches the host-side model frame by frame while the route bot clears the
-  Badlands, including the boss dialogue. A frame that runs long on the ROM is followed rather
-  than flagged: the model steps as often as the ROM's frame counter did (`step_in_sync`)
+  Badlands, including the boss dialogue
 
 Set `DIAMOND_HANDS_SHOTS=<dir>` to have the harness save screenshots (PPM) of the title, map,
-aiming, each line of dialogue, each waypoint on the Badlands' route (`b1-*`), the
-level-clear sequence, each pause-menu page, and the Trenches' storeys (street, back room,
-sewers, the shaft, the tower), SAM's attacks and the exchange (`t2-*`).
-
-Set `DIAMOND_HANDS_PROFILE=<file>` to profile the ROM through Level 2 in
-`the_trenches_play_through_to_the_exchange_in_step_with_the_model` (profiled frames aren't
-drawn, so take screenshots in a separate run). Each video frame gets an `F` line: busy
-CPU cycles out of 280,896, scene, camera x and y, bots and shots on screen, objects in
-OAM, fence state, game frame, and whether the wassie's sprite is in OAM (`1`, `0`, or `-`
-while it shouldn't show). Then `P <pc> <cycles>` lines give cycles by program counter, to
-look up with `nm -C --numeric-sort` or `addr2line` on
-`game/target/thumbv4t-none-eabi/release/diamond-hands`.
-`DIAMOND_HANDS_PROFILE_WATCH=<hex start>-<hex end>,...` also logs who calls the leaf
-functions in those address ranges (`C <range> <lr> <cycles>`).
+hovering, aiming, each line of dialogue, the level-clear sequence, each pause-menu page and
+every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
 
 ## Known limitations
 
@@ -315,31 +227,9 @@ functions in those address ranges (`C <range> <lr> <cycles>`).
   Badlands and the Trenches repaints the backdrop over three frames for the same reason.
 - `World` keeps its actor table on the heap, and `Game` its `World`: built on the IWRAM
   stack they overflowed it at boot.
-- The heap is easily fragmented: agb copies a background's tile map whenever it changes,
-  and the pause menu (two pages of about 19 KB) and the world map need large blocks
-  beside a level's terrain. Running out panics the ROM, and the harness then sees its
-  frame counter stop. The tile cache (`TileCache` in `game/src/art/mod.rs`) keeps 8 bytes
-  per tile in one sorted block to leave room. The Trenches play-through opens every
-  pause page up the tower, where the terrain is fullest, then goes on to the world map.
 - Saves from before the casino (version 5) are moved over with an empty wallet: version 5
   kept no diamond balance. A run saved part-way through the old Trenches starts the
-  rebuilt level from the top, and one part-way through the Badlands from before they became
-  explorable (version 6 and older) starts them from the top too.
-- Background VRAM can't hold all of the Trenches' terrain at once. The sewers and the
-  floors above them each keep their tiles only while the camera is there (`region` in
-  `game/src/render.rs`): once the camera is wholly in one, the other's tiles are dropped
-  and the map is cleared of them off screen, half a column a frame.
-- The back room has no backdrop of its own yet: there the sky and the city fade to black
-  behind the rock. The caves and the sewers draw a back wall instead.
-- Slopes are drawn only in the Trenches' tilesets; the Badlands have none.
-- A file that found plasma cells in the old Trenches keeps them: the cells are numbered in
-  map order, so they count as the new map's first cells.
-- The ROM runs close to its frame budget. Each terrain cell costs agb's VRAM manager a few
-  thousand cycles, so the renderer loads terrain a little ahead of the camera, makes the
-  level's tiles ahead of time on the level card and in the menus, and after a respawn
-  refills the screen over about ten frames, dark behind the sprites. Opening BERA 3000's
-  dialogue drops a frame on this map (the whole frame runs about three times slower, game
-  step included); the cause isn't tracked down yet.
+  rebuilt level from the top.
 - Background VRAM is nearly full too. All eight screenblocks are taken, so the pause menu
   borrows the dialogue box's unused rows, and while it is open the dialogue text lends it
   its tiles. The menu is drawn on an 8x8 grid so each glyph is one shared tile, and a page
