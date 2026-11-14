@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "name": "Wassie",
+  "image": "assets/sprites/wassie.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 14,
+    "y": 32
+  },
+  "hitbox": {
+    "x": 9,
+    "y": 6,
+    "width": 10,
+    "height": 26
+  },
+  "animations": [
+    {
+      "name": "idle",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 36
+        },
+        {
+          "index": 2,
+          "duration": 12
+        },
+        {
+          "index": 3,
+          "duration": 12
+        },
+        {
+          "index": 4,
+          "duration": 12
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "recoil",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 6
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "run",
+      "frames": [
+        {
+          "index": 5,
+          "duration": 6
+        },
+        {
+          "index": 6,
+          "duration": 6
+        },
+        {
+          "index": 7,
+          "duration": 6
+        },
+        {
+          "index": 8,
+          "duration": 6
+        },
+        {
+          "index": 9,
+          "duration": 6
+        },
+        {
+          "index": 10,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "jump",
+      "frames": [
+        {
+          "index": 11,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "fall",
+      "frames": [
+        {
+          "index": 12,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "hurt",
+      "frames": [
+        {
+          "index": 13,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "landing",
+      "frames": [
+        {
+          "index": 14,
+          "duration": 6
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "braking",
+      "frames": [
+        {
+          "index": 15,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "sag",
+      "frames": [
+        {
+          "index": 16,
+          "duration": 14
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "lying",
+      "frames": [
+        {
+          "index": 17,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

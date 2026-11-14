@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "Crawler",
+  "image": "assets/sprites/crawler.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 8,
+    "y": 16
+  },
+  "hitbox": {
+    "x": 0,
+    "y": 2,
+    "width": 16,
+    "height": 14
+  },
+  "animations": [
+    {
+      "name": "crawl",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 10
+        },
+        {
+          "index": 1,
+          "duration": 10
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

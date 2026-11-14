@@ -1,0 +1,27 @@
+[package]
+name = "diamond-hands-studio"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Diamond Hands levels, made in GBA-Studio"
+publish = false
+
+[dependencies]
+agb = "0.25.0"
+agb_tracker = "0.25.0"
+gba_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
+
+[build-dependencies]
+gba_studio_build = { path = "/home/user/repos/gba-studio/codegen" }
+
+[profile.dev]
+opt-level = 3
+debug = true
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+debug = true

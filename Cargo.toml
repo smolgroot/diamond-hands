@@ -3,7 +3,7 @@
 [workspace]
 resolver = "3"
 members = ["logic", "harness"]
-exclude = ["game"]
+exclude = ["game", "project"]
 
 # The harness emulates minutes of gameplay; an unoptimised emulator core makes that slow.
 [profile.dev.package.pecten]

@@ -1,0 +1,211 @@
+{
+  "version": 1,
+  "name": "Diamond Hands",
+  "build": {
+    "dev": "mkdir -p dist && cargo build && agb-gbafix target/thumbv4t-none-eabi/debug/diamond-hands-studio -o dist/diamond-hands-dev.gba",
+    "release": "mkdir -p dist && cargo build --release && agb-gbafix target/thumbv4t-none-eabi/release/diamond-hands-studio -o dist/diamond-hands.gba",
+    "devRom": "dist/diamond-hands-dev.gba",
+    "releaseRom": "dist/diamond-hands.gba"
+  },
+  "collisionClasses": [
+    {
+      "id": "empty",
+      "name": "Empty",
+      "colour": "#000000",
+      "kind": "empty"
+    },
+    {
+      "id": "solid",
+      "name": "Solid",
+      "colour": "#e5484d",
+      "kind": "solid"
+    },
+    {
+      "id": "oneway",
+      "name": "One-way platform",
+      "colour": "#f5d90a",
+      "kind": "oneway"
+    },
+    {
+      "id": "slope-up",
+      "name": "Slope up 45\u00b0",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 0,
+        "right": 8
+      }
+    },
+    {
+      "id": "slope-down",
+      "name": "Slope down 45\u00b0",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 8,
+        "right": 0
+      }
+    },
+    {
+      "id": "hazard",
+      "name": "Hazard",
+      "colour": "#d6409f",
+      "kind": "hazard"
+    },
+    {
+      "id": "slope-up-low",
+      "name": "Slope up, low half",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 0,
+        "right": 4
+      }
+    },
+    {
+      "id": "slope-up-high",
+      "name": "Slope up, high half",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 4,
+        "right": 8
+      }
+    },
+    {
+      "id": "slope-down-high",
+      "name": "Slope down, high half",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 8,
+        "right": 4
+      }
+    },
+    {
+      "id": "slope-down-low",
+      "name": "Slope down, low half",
+      "colour": "#46a758",
+      "kind": "slope",
+      "slope": {
+        "left": 4,
+        "right": 0
+      }
+    }
+  ],
+  "entityTypes": [
+    {
+      "id": "player-start",
+      "name": "Player start",
+      "colour": "#3e63dd",
+      "sprite": "wassie",
+      "props": []
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry bot",
+      "colour": "#e5484d",
+      "sprite": "sentry",
+      "props": []
+    },
+    {
+      "id": "crawler",
+      "name": "Crawler",
+      "colour": "#f5a623",
+      "sprite": "crawler",
+      "props": []
+    },
+    {
+      "id": "drone",
+      "name": "Drone",
+      "colour": "#9b5de5",
+      "sprite": "drone",
+      "props": []
+    },
+    {
+      "id": "mine",
+      "name": "Mine",
+      "colour": "#8d99ae",
+      "sprite": "mine",
+      "props": []
+    },
+    {
+      "id": "checkpoint",
+      "name": "Checkpoint",
+      "colour": "#30a46c",
+      "props": []
+    },
+    {
+      "id": "diamond",
+      "name": "Diamond",
+      "colour": "#46c8f0",
+      "props": []
+    },
+    {
+      "id": "heal",
+      "name": "Cold-wallet heal",
+      "colour": "#3dd68c",
+      "props": []
+    },
+    {
+      "id": "dealer",
+      "name": "Dealer",
+      "colour": "#ffb224",
+      "props": []
+    },
+    {
+      "id": "guard",
+      "name": "Guard",
+      "colour": "#e54666",
+      "props": []
+    },
+    {
+      "id": "coin",
+      "name": "Gold coin",
+      "colour": "#f5c41e",
+      "props": []
+    },
+    {
+      "id": "plasma-cell",
+      "name": "Plasma cell",
+      "colour": "#ff6ad5",
+      "props": []
+    },
+    {
+      "id": "jetpack",
+      "name": "Jetpack",
+      "colour": "#bd7cff",
+      "props": []
+    },
+    {
+      "id": "breaker",
+      "name": "Elevator breaker",
+      "colour": "#12a594",
+      "props": []
+    },
+    {
+      "id": "lift-car",
+      "name": "Elevator car (left edge)",
+      "colour": "#8e8c99",
+      "props": []
+    },
+    {
+      "id": "lift-stop",
+      "name": "Elevator arrival",
+      "colour": "#8e8c99",
+      "props": []
+    },
+    {
+      "id": "arena-edge",
+      "name": "Boss arena (left edge)",
+      "colour": "#e5484d",
+      "props": []
+    },
+    {
+      "id": "boss",
+      "name": "Boss",
+      "colour": "#e5484d",
+      "props": []
+    }
+  ]
+}

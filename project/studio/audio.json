@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "tracks": [
+    {
+      "id": "title",
+      "name": "Title",
+      "file": "assets/audio/title.xm",
+      "format": "xm"
+    },
+    {
+      "id": "badlands",
+      "name": "Badlands",
+      "file": "assets/audio/badlands.xm",
+      "format": "xm"
+    },
+    {
+      "id": "boss",
+      "name": "Boss",
+      "file": "assets/audio/boss.xm",
+      "format": "xm"
+    },
+    {
+      "id": "clear",
+      "name": "Clear",
+      "file": "assets/audio/clear.xm",
+      "format": "xm"
+    },
+    {
+      "id": "down",
+      "name": "Down",
+      "file": "assets/audio/down.xm",
+      "format": "xm"
+    }
+  ],
+  "sfx": []
+}

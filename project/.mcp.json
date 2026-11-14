@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gba-studio": {
+      "command": "node",
+      "args": [
+        "/home/user/repos/gba-studio/server/src/cli.ts",
+        "mcp",
+        "."
+      ]
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Jetpack",
+  "image": "assets/sprites/jetpack.png",
+  "frame": {
+    "width": 8,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "on",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

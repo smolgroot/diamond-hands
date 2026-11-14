@@ -1,0 +1,4 @@
+[toolchain]
+channel = "nightly-2026-09-20"
+# agb 0.25 breaks on nightlies from ~2026-10 (allocator_ext / AllocatorNightly changes); bump once agb catches up.
+components = ["rust-src", "clippy", "rustfmt"]
