@@ -56,7 +56,8 @@ enum LevelArt {
 impl LevelArt {
     fn new(theme: Theme) -> Self {
         match theme {
-            Theme::Badlands => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
+            // Sol City is drawn by the studio ROM only; this one never starts it.
+            Theme::Badlands | Theme::SolCity => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
             Theme::Trenches => LevelArt::Trenches(CasinoArt::new()),
         }
     }
@@ -354,7 +355,7 @@ impl Renderer {
         }
         if fence != self.fence {
             match theme {
-                Theme::Badlands => {
+                Theme::Badlands | Theme::SolCity => {
                     frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence.0));
                     frame.set_background_palette(badlands::BACK_PALETTE, &badlands::back_palette(stage, fence.0));
                 }
@@ -637,7 +638,7 @@ impl Renderer {
     fn terrain_key(level: &Level, col: i32, ty: i32) -> usize {
         match level.theme {
             Theme::Trenches => trenches::terrain_key(level, col, ty),
-            Theme::Badlands => badlands::terrain_key(level, col, ty),
+            Theme::Badlands | Theme::SolCity => badlands::terrain_key(level, col, ty),
         }
     }
 
@@ -659,7 +660,7 @@ impl Renderer {
     fn region(level: &Level, ty: i32) -> usize {
         match level.theme {
             Theme::Trenches => (level.stratum(ty) >= 2) as usize,
-            Theme::Badlands => 0,
+            Theme::Badlands | Theme::SolCity => 0,
         }
     }
 
@@ -771,7 +772,7 @@ impl Renderer {
         let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
         let palette = match level.theme {
             Theme::Trenches => trenches::palette_slot(level, ty, key),
-            Theme::Badlands => badlands::palette_slot(key),
+            Theme::Badlands | Theme::SolCity => badlands::palette_slot(key),
         };
         self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, palette));
     }
@@ -2090,6 +2091,8 @@ impl Renderer {
                     }
                     (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
                 }
+                // Sol City's people and creatures: the studio ROM draws that level.
+                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade => continue,
                 ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;

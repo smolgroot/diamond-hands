@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "name": "Wormhole portal",
+  "image": "assets/sprites/portal.png",
+  "frame": {
+    "width": 32,
+    "height": 64
+  },
+  "anchor": {
+    "x": 16,
+    "y": 64
+  },
+  "hitbox": {
+    "x": 8,
+    "y": 12,
+    "width": 16,
+    "height": 52
+  },
+  "animations": [
+    {
+      "name": "spin",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 6
+        },
+        {
+          "index": 1,
+          "duration": 6
+        },
+        {
+          "index": 2,
+          "duration": 6
+        },
+        {
+          "index": 3,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

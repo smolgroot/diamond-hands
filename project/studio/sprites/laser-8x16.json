@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "laser-8x16",
+  "image": "assets/sprites/laser-8x16.png",
+  "frame": {
+    "width": 8,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "bolt_up",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

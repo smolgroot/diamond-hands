@@ -1,11 +1,18 @@
 //! The levels in play order, and the places on the world map.
 
 pub mod badlands;
+pub mod sol_city;
 pub mod trenches;
 
 use crate::{arrival::Arrival, level::Level};
 
-pub static ALL: [&Level; 2] = [&badlands::BADLANDS, &trenches::TRENCHES];
+pub static ALL: [&Level; 3] = [&badlands::BADLANDS, &trenches::TRENCHES, &sol_city::SOL_CITY];
+
+/// Whether this build can play `level`: a level painted in GBA-Studio needs the studio
+/// ROM (the `studio` feature). Elsewhere it shows on the map as coming soon.
+pub const fn playable_here(level: &Level) -> bool {
+    !level.studio || cfg!(feature = "studio")
+}
 
 /// Which levels a save file has cleared: bit `i` is level `i`. A `u8` holds eight
 /// levels; widen it (and the save format) before adding a ninth.
@@ -65,6 +72,13 @@ pub struct Place {
     pub level: Option<u8>,
 }
 
+impl Place {
+    /// The level this build can play here, if any.
+    fn built(&self) -> Option<u8> {
+        self.level.filter(|&i| playable_here(ALL[i as usize]))
+    }
+}
+
 /// How a place shows on the map for a save file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaceStatus {
@@ -82,7 +96,7 @@ pub enum PlaceStatus {
 
 impl Place {
     pub fn status(&self, cleared: Cleared) -> PlaceStatus {
-        match self.level {
+        match self.built() {
             None if is_reached(cleared, self.order) => PlaceStatus::Upcoming,
             None => PlaceStatus::Soon,
             Some(i) if is_cleared(cleared, i) => PlaceStatus::Cleared,
@@ -98,7 +112,7 @@ impl Place {
 }
 
 /// West to east, in the order the map cursor walks them.
-pub static MAP: [Place; 3] = [
+pub static MAP: [Place; 4] = [
     Place {
         name: "THE BADLANDS",
         blurb: "MOSSY CLIFFS. BERA 3000 WAITS.",
@@ -116,11 +130,19 @@ pub static MAP: [Place; 3] = [
         level: Some(1),
     },
     Place {
+        name: "SOL CITY",
+        blurb: "BEACH, DINOS AND A WORMHOLE.",
+        x: 168,
+        y: 116,
+        order: 2,
+        level: Some(2),
+    },
+    Place {
         name: "ETHEREUM CITY",
         blurb: "CL207'S PLASMA SHIELD AWAITS.",
-        x: 196,
-        y: 92,
-        order: 2,
+        x: 212,
+        y: 60,
+        order: 3,
         level: None,
     },
 ];
@@ -149,9 +171,15 @@ mod tests {
     fn places_show_cleared_open_locked_and_soon() {
         use PlaceStatus::*;
         let status = |cleared| MAP.each_ref().map(|p| p.status(cleared));
-        assert_eq!(status(0), [Open, Locked, Soon]);
-        assert_eq!(status(0b1), [Cleared, Open, Soon]);
-        assert_eq!(status(0b11), [Cleared, Cleared, Upcoming], "clearing level 2 unlocks level 3");
+        let sol_city = if cfg!(feature = "studio") { Locked } else { Soon };
+        assert_eq!(status(0), [Open, Locked, sol_city, Soon]);
+        assert_eq!(status(0b1), [Cleared, Open, sol_city, Soon]);
+        if cfg!(feature = "studio") {
+            assert_eq!(status(0b11), [Cleared, Cleared, Open, Soon], "clearing level 2 unlocks Sol City");
+            assert_eq!(status(0b111), [Cleared, Cleared, Cleared, Upcoming], "and Sol City unlocks Ethereum City");
+        } else {
+            assert_eq!(status(0b11), [Cleared, Cleared, Upcoming, Soon], "Sol City needs the studio ROM");
+        }
         assert!(!MAP[1].playable(0) && MAP[1].playable(0b1));
     }
 }

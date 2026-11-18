@@ -2,7 +2,7 @@
 # so it is built from its own directory (see game/.cargo/config.toml) and kept out of here.
 [workspace]
 resolver = "3"
-members = ["logic", "harness"]
+members = ["logic", "harness", "tools/export-art"]
 exclude = ["game", "project"]
 
 # The harness emulates minutes of gameplay; an unoptimised emulator core makes that slow.

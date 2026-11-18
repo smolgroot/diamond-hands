@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "villains-16x16",
+  "image": "assets/sprites/villains-16x16.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "shockwave",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

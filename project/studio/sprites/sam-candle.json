@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "sam-candle",
+  "image": "assets/sprites/sam-candle.png",
+  "frame": {
+    "width": 8,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "candle",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

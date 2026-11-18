@@ -143,7 +143,7 @@ fn toward(world: &World, previous: u16, target: (i32, i32)) -> u16 {
     let wall = (r.y.div_euclid(TILE)..=(r.bottom() - 1).div_euclid(TILE))
         .any(|ty| level.tile((front + dir * 3).div_euclid(TILE), ty) == Tile::Solid);
     let ahead = (front + dir * 4).div_euclid(TILE);
-    let gap = !(below && dx.abs() < 48) && (feet_row..feet_row + 6).all(|ty| !level.is_floor(ahead, ty));
+    let gap = !(below && dx.abs() < 48) && pit(level, ahead, feet_row);
     let villain = world.actors.iter().any(|a| {
         let ar = a.rect();
         let gap = if dir > 0 { ar.x - front } else { front - ar.right() };
@@ -153,6 +153,13 @@ fn toward(world: &World, previous: u16, target: (i32, i32)) -> u16 {
         out |= keys::A;
     }
     out
+}
+
+/// Whether column `tx` is a pit for feet in row `feet_row`: no floor within a few rows,
+/// or water under the feet.
+fn pit(level: &crate::level::Level, tx: i32, feet_row: i32) -> bool {
+    let floor = (feet_row..feet_row + 6).find(|&ty| level.is_floor(tx, ty) || level.tile(tx, ty) == Tile::Water);
+    floor.is_none_or(|ty| level.tile(tx, ty) == Tile::Water)
 }
 
 /// Buttons to hold this frame. `previous` is last frame's keys: jumping and firing
@@ -195,7 +202,7 @@ pub fn keys_for(world: &World, previous: u16) -> u16 {
     // A pit, as opposed to a step down: no floor ahead within a few rows. Steps down
     // are walked off; leaping off a high ledge can overshoot into the next pit.
     let ahead = (front + 4).div_euclid(TILE);
-    let gap = (feet_row..feet_row + 6).all(|ty| !level.is_floor(ahead, ty));
+    let gap = pit(level, ahead, feet_row);
     let villain = world.actors.iter().any(|a| {
         let ar = a.rect();
         a.is_threat()

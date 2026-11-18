@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "bera-portrait",
+  "image": "assets/sprites/bera-portrait.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "portrait",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

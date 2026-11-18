@@ -6,12 +6,35 @@ license = "MIT"
 description = "Diamond Hands levels, made in GBA-Studio"
 publish = false
 
+[[bin]]
+# The whole game, as the code-drawn ROM plays it, with its art and music from the studio.
+name = "diamond-hands-studio"
+path = "src/main.rs"
+
+[[bin]]
+# Sol City, the level painted in the studio, on its own: the full game's renderer can't
+# draw it yet. `cargo build --features sol-city --bin sol-city`
+name = "sol-city"
+path = "src/sol_city/main.rs"
+required-features = ["sol-city"]
+
+[features]
+# A dev build: every level is open on the world map, without beating the ones before.
+dev = []
+# Plays levels painted in the studio (logic's `studio` feature): builds the `sol-city` ROM.
+sol-city = ["diamond_hands_logic/studio"]
+# The route bot plays Sol City in god mode, A-ing through the dialogue, to watch the level.
+demo = ["sol-city"]
+
 [dependencies]
 agb = "0.25.0"
 agb_tracker = "0.25.0"
+diamond_hands_logic = { path = "../logic" }
+serde = { version = "1", default-features = false, features = ["derive"] }
 gba_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
 
 [build-dependencies]
+png = "0.17"
 gba_studio_build = { path = "/home/user/repos/gba-studio/codegen" }
 
 [profile.dev]

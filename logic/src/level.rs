@@ -1,7 +1,9 @@
 //! Levels are hand-drawn ASCII maps, one character per 8x8 tile, read in place.
 //!
 //! Terrain: `#` solid rock, `r` crystal boulder (solid), `=` one-way steel girder
-//! (solid from above only), `T` one-way casino table top, `^` an electric fence's
+//! (solid from above only), `T` one-way casino table top, `~` water (a pit you can see
+//! the bottom of: falling in costs health and sends the wassie back to its beacon),
+//! `^` an electric fence's
 //! emitter: its lightning curtain runs from there up to the rock above (see
 //! [`Level::fence_hit`]). Slopes are floors that rise or fall across their tile, with
 //! rock under them: `/` rises a whole tile to the right and `\` falls one; `{` rises
@@ -33,6 +35,14 @@
 //! | `l`  | where the elevator arrives (feet row) |
 //! | `X`  | left edge of the boss arena (any row) |
 //! | `B`  | the boss |
+//! | `x`  | a clay dino on the loose: charges; calms down once the power is back |
+//! | `e`, `c` | someone to talk to (the zookeeper, the cosmonaut wassie): their lines are [`Level::npcs`], in map order |
+//! | `w`  | the Wormhole portal: stepping in ends the level |
+//! | `h`  | a gate that stays shut until a terminal (`E`) brings the power back |
+//! | `m`  | a blockade bot: armoured, it can't be beaten, only gone around |
+//!
+//! Studio levels (Sol City) are painted in GBA-Studio; `build.rs` writes their rows in
+//! this legend.
 
 use crate::{TILE, talk::Line};
 
@@ -42,6 +52,8 @@ pub enum Tile {
     Solid,
     OneWay,
     Spike,
+    /// Water: walked and fallen through, but falling in is a pit.
+    Water,
     /// A floor across the tile at the height its shape gives.
     Slope(Slope),
 }
@@ -55,6 +67,7 @@ impl Tile {
             b'#' | b'r' => Tile::Solid,
             b'=' | b'T' => Tile::OneWay,
             b'^' => Tile::Spike,
+            b'~' => Tile::Water,
             b'/' => Tile::Slope(Slope::Up),
             b'\\' => Tile::Slope(Slope::Down),
             b'{' => Tile::Slope(Slope::UpLow),
@@ -110,6 +123,9 @@ pub enum Theme {
     Badlands,
     /// A neon casino strip, its gaming floor and the exchange suites above it.
     Trenches,
+    /// Sol City on a Miami morning: the beach, the MagicEden dino zoo, the harbor and
+    /// the Wormhole Bridge. Painted in GBA-Studio.
+    SolCity,
 }
 
 /// Who waits in the arena.
@@ -155,7 +171,7 @@ pub fn decor_size(c: u8) -> Option<(i32, i32)> {
 const fn is_scenery(c: u8) -> bool {
     if matches!(
         c,
-        b'.' | b'#' | b'r' | b'=' | b'T' | b'^' | b',' | b'*' | b'&' | b'|' | b'%' | b'/' | b'\\' | b'{' | b'}'
+        b'.' | b'#' | b'r' | b'=' | b'T' | b'^' | b'~' | b',' | b'*' | b'&' | b'|' | b'%' | b'/' | b'\\' | b'{' | b'}'
     ) {
         return true;
     }
@@ -262,6 +278,10 @@ pub struct Level {
     /// drift up only as the camera goes below it.
     pub backdrop_y: i32,
     pub rows: &'static [&'static str],
+    /// What each person on the map says (`e` and `c` markers), in map order.
+    pub npcs: &'static [&'static [Line]],
+    /// Painted in GBA-Studio: only the studio ROM (the `studio` feature) can draw it.
+    pub studio: bool,
     /// The map's markers, listed when the game is compiled ([`Markers::scan`]); `None`
     /// to read them off the map, as test levels do.
     pub markers: Option<&'static Markers>,
@@ -291,6 +311,8 @@ impl Level {
         areas: &[],
         backdrop_y: 0,
         rows: &[],
+        npcs: &[],
+        studio: false,
         markers: None,
     };
 
@@ -432,6 +454,14 @@ impl Level {
             }
         }
         None
+    }
+
+    /// Whether the pixel rect `(x, y, w, h)` dips into water.
+    pub fn water_hit(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        // Only the lower half of the body: a jump over the water clears it.
+        let top = y + h / 2;
+        (x.div_euclid(TILE)..=(x + w - 1).div_euclid(TILE))
+            .any(|tx| (top.div_euclid(TILE)..=(y + h - 1).div_euclid(TILE)).any(|ty| self.tile(tx, ty) == Tile::Water))
     }
 
     /// Every marker character with its tile position, in row-major order. Terrain and

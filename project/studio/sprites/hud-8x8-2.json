@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "hud-8x8-2",
+  "image": "assets/sprites/hud-8x8-2.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "boss_cell",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 3,
+          "duration": 8
+        },
+        {
+          "index": 4,
+          "duration": 8
+        },
+        {
+          "index": 5,
+          "duration": 8
+        },
+        {
+          "index": 6,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 8,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

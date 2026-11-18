@@ -182,5 +182,7 @@ pub static TRENCHES: Level = Level {
     // The camera on the strip, where the backdrop was painted for.
     backdrop_y: 192,
     rows: ROWS,
+    npcs: &[],
+    studio: false,
     markers: Some(&MARKERS),
 };

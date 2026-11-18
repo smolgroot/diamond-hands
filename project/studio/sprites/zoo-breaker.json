@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "name": "Zoo breaker",
+  "image": "assets/sprites/zoo-breaker.png",
+  "frame": {
+    "width": 16,
+    "height": 32
+  },
+  "anchor": {
+    "x": 8,
+    "y": 32
+  },
+  "hitbox": {
+    "x": 2,
+    "y": 8,
+    "width": 12,
+    "height": 24
+  },
+  "animations": [
+    {
+      "name": "off",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "on",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

@@ -5,4 +5,12 @@ edition = "2024"
 description = "Platform-independent game rules for Diamond Hands (no_std, fixed point)"
 license = "MIT"
 
+[features]
+# Built into the GBA-Studio ROM (`project/`): levels made in the studio are playable.
+# The older code-drawn ROM (`game/`) leaves it off and shows them as coming soon.
+studio = []
+
 [dependencies]
+
+[build-dependencies]
+serde_json = "1"

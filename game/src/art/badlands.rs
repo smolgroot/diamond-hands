@@ -72,7 +72,8 @@ pub static SKY_PALETTES: [Palette16; 3] = [
 /// The backdrop palettes for a level's theme, one per stage.
 pub fn sky_palettes(theme: Theme) -> &'static [Palette16] {
     match theme {
-        Theme::Badlands => &SKY_PALETTES,
+        // Sol City is drawn by the studio ROM only; this one never starts it.
+        Theme::Badlands | Theme::SolCity => &SKY_PALETTES,
         Theme::Trenches => &super::trenches::SKY_PALETTES,
     }
 }

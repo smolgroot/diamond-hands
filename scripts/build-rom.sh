@@ -2,19 +2,39 @@
 # Builds the release ROM and writes a header-fixed dist/diamond-hands.gba.
 # Needs the nightly toolchain from game/rust-toolchain.toml and `cargo install agb-gbafix`.
 #
-#   ./scripts/build-rom.sh         # dist/diamond-hands.gba
-#   ./scripts/build-rom.sh --dev   # dist/diamond-hands-dev.gba: every level open on the map
+#   ./scripts/build-rom.sh                 # the code-drawn ROM (game/) -> dist/diamond-hands.gba
+#   ./scripts/build-rom.sh --dev           # ... with every level open on the map: dist/diamond-hands-dev.gba
+#   ./scripts/build-rom.sh --studio        # the same game with its art and music from GBA-Studio
+#                                          # (project/) -> dist/diamond-hands-studio.gba
+#   ./scripts/build-rom.sh --studio --dev  # ... with every level open: dist/diamond-hands-studio-dev.gba
+#
+# The studio build needs GBA-Studio's runtime and build helper checked out next to this
+# repo (../gba-studio), see project/Cargo.toml.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
+studio=0
 features=()
-out="$root/dist/diamond-hands.gba"
-if [[ "${1:-}" == "--dev" ]]; then
-    features=(--features dev)
-    out="$root/dist/diamond-hands-dev.gba"
+suffix=""
+for arg in "$@"; do
+    case "$arg" in
+        --studio) studio=1 ;;
+        --dev) features=(--features dev); suffix="-dev" ;;
+        *) echo "unknown option $arg" >&2; exit 2 ;;
+    esac
+done
+
+if [[ $studio == 1 ]]; then
+    crate="$root/project"
+    bin="diamond-hands-studio"
+    out="$root/dist/diamond-hands-studio$suffix.gba"
+else
+    crate="$root/game"
+    bin="diamond-hands"
+    out="$root/dist/diamond-hands$suffix.gba"
 fi
 
-(cd "$root/game" && cargo build --release "${features[@]}")
+(cd "$crate" && cargo build --release "${features[@]}")
 mkdir -p "$root/dist"
-agb-gbafix "$root/game/target/thumbv4t-none-eabi/release/diamond-hands" -o "$out"
+agb-gbafix "$crate/target/thumbv4t-none-eabi/release/$bin" -o "$out"
 echo "wrote $out"

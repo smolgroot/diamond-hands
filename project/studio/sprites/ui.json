@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "UI",
+  "image": "assets/sprites/ui.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": []
+}

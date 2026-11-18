@@ -216,5 +216,7 @@ pub static BADLANDS: Level = Level {
     areas: &[],
     backdrop_y: 0,
     rows: ROWS,
+    npcs: &[],
+    studio: false,
     markers: Some(&MARKERS),
 };

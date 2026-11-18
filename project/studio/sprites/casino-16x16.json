@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "name": "casino-16x16",
+  "image": "assets/sprites/casino-16x16.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "cell",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "terminal_on",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "up_prompt",
+      "frames": [
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "phone",
+      "frames": [
+        {
+          "index": 3,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "chip",
+      "frames": [
+        {
+          "index": 4,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

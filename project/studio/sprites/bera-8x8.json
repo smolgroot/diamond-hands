@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "bera-8x8",
+  "image": "assets/sprites/bera-8x8.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "core",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "smoke",
+      "frames": [
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

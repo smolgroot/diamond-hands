@@ -28,7 +28,7 @@
     },
     {
       "id": "slope-up",
-      "name": "Slope up 45\u00b0",
+      "name": "Slope up 45°",
       "colour": "#46a758",
       "kind": "slope",
       "slope": {
@@ -38,7 +38,7 @@
     },
     {
       "id": "slope-down",
-      "name": "Slope down 45\u00b0",
+      "name": "Slope down 45°",
       "colour": "#46a758",
       "kind": "slope",
       "slope": {
@@ -133,18 +133,21 @@
       "id": "checkpoint",
       "name": "Checkpoint",
       "colour": "#30a46c",
+      "sprite": "beacon",
       "props": []
     },
     {
       "id": "diamond",
       "name": "Diamond",
       "colour": "#46c8f0",
+      "sprite": "fx",
       "props": []
     },
     {
       "id": "heal",
       "name": "Cold-wallet heal",
       "colour": "#3dd68c",
+      "sprite": "fx",
       "props": []
     },
     {
@@ -205,6 +208,73 @@
       "id": "boss",
       "name": "Boss",
       "colour": "#e5484d",
+      "props": []
+    },
+    {
+      "id": "dino",
+      "name": "Clay dino (loose)",
+      "colour": "#f5a24b",
+      "sprite": "clay-dino",
+      "props": []
+    },
+    {
+      "id": "zookeeper",
+      "name": "MagicEden zookeeper",
+      "colour": "#e83088",
+      "sprite": "zookeeper",
+      "props": [
+        {
+          "name": "talk",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "cosmo-wassie",
+      "name": "Cosmonaut wassie",
+      "colour": "#e0e0f0",
+      "sprite": "cosmonaut-wassie",
+      "props": [
+        {
+          "name": "talk",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "portal",
+      "name": "Wormhole portal (level end)",
+      "colour": "#8848d8",
+      "sprite": "wormhole-portal",
+      "props": [
+        {
+          "name": "to",
+          "type": "string",
+          "default": "ethereum-city"
+        }
+      ]
+    },
+    {
+      "id": "zoo-breaker",
+      "name": "Zoo breaker",
+      "colour": "#f8d048",
+      "sprite": "zoo-breaker",
+      "props": []
+    },
+    {
+      "id": "power-gate",
+      "name": "Power gate (opens with the breaker)",
+      "colour": "#7080a8",
+      "sprite": "power-gate",
+      "props": []
+    },
+    {
+      "id": "bot-blockade",
+      "name": "Blockade bot (bars the Wormhole door)",
+      "colour": "#c03050",
+      "sprite": "sentry",
       "props": []
     }
   ]

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "bera-32x32",
+  "image": "assets/sprites/bera-32x32.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "head",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "head_dead",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

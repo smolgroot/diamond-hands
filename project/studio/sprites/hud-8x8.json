@@ -1,0 +1,336 @@
+{
+  "version": 1,
+  "name": "hud-8x8",
+  "image": "assets/sprites/hud-8x8.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "life_caps",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_0",
+      "frames": [
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_1",
+      "frames": [
+        {
+          "index": 3,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_2",
+      "frames": [
+        {
+          "index": 4,
+          "duration": 8
+        },
+        {
+          "index": 5,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_3",
+      "frames": [
+        {
+          "index": 4,
+          "duration": 8
+        },
+        {
+          "index": 4,
+          "duration": 8
+        },
+        {
+          "index": 6,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_4",
+      "frames": [
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 8,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_5",
+      "frames": [
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 9,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_6",
+      "frames": [
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 11,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_7",
+      "frames": [
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 12,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "life_8",
+      "frames": [
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/hud.png"
+}
