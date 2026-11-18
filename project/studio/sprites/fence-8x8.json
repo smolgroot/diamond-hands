@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "name": "fence-8x8",
+  "image": "assets/sprites/fence-8x8.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "lightning_short",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 3,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "fence_spark",
+      "frames": [
+        {
+          "index": 4,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

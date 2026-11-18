@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "Wassie portrait",
+  "image": "assets/sprites/wassie-portrait.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": []
+}

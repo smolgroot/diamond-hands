@@ -1,0 +1,7 @@
+[package]
+# Stands in for the parts of agb the code-drawn art uses, so `tools/export-art` can run
+# that art on the host and write what it paints to PNG files. Not for the GBA.
+name = "agb"
+version = "0.0.0"
+edition = "2024"
+publish = false

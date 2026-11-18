@@ -347,8 +347,18 @@ version = "0.1.0"
 dependencies = [
  "agb",
  "agb_tracker",
+ "diamond_hands_logic",
  "gba_studio_build",
  "gba_studio_rt",
+ "png",
+ "serde",
+]
+
+[[package]]
+name = "diamond_hands_logic"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

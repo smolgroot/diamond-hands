@@ -20,7 +20,15 @@ with a boss.
    the vault, armoured guard bots). The boss is **SAM**, a cyborg exchange founder with a
    cucumber. The casino pays in **gold coins**, which the penguin cashier changes into
    diamonds after the fight.
-3. **Ethereum City** (unlocked by clearing the Trenches, not built yet): where CL207's
+3. **Sol City** (playable in its own studio ROM): the morning after the casino, a Miami of the
+   Solana ecosystem. Beach, cafés and palms, then **MagicEden**, a dinosaur zoo hit by a
+   power cut: its clay dinos are loose. The zookeeper explains; the breaker is down in the
+   service tunnels under the paddocks. Thrown, the fences hold the dinos again and the
+   harbor gate opens. At the harbor, bots jam the **Wormhole Bridge**'s door and can't be
+   beaten: climb the containers and the crane onto the terminal's roof, drop in through
+   the skylight, fight through the hall, and a wassie in a cosmonaut suit sends you into
+   the portal. The first level made in GBA-Studio (`project/`).
+4. **Ethereum City** (unlocked by clearing Sol City, not built yet): where CL207's
    Plasma Shield arrives.
 
 | Button      | Action                                                          |
@@ -138,7 +146,20 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
   - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
     `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
     A new item needs an entry there and an icon in `game/src/art/menu.rs`.
-- `game/`: the agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
+  - Sol City is painted in GBA-Studio, not in ASCII: `logic/build.rs` reads
+    `project/studio/rooms/sol-city.json` (collision and entities, and the zookeeper's and
+    cosmonaut's `talk` properties) and writes the map rows and dialogue at compile time.
+    Edit it in the studio; the tests and the route bot then play exactly what the ROM draws.
+  - The `studio` feature marks the build as the studio ROM: only it can play studio-made
+    levels. Without it (the code-drawn ROM), Sol City shows on the map as coming soon.
+- `project/`: the same game with its art and music moved into GBA-Studio. Sprites, fonts,
+  palettes and music are files in `project/assets/` registered in `project/studio/`,
+  edited in the studio (see `project/AGENTS.md`); `project/src/` is `game/src/` with its
+  sprite and glyph painting replaced by loading those sheets (`src/art/studio.rs`, generated).
+  It plays the first two levels with the menus, map and saves of the code-drawn ROM. Sol City,
+  painted in the studio, builds as its own ROM (`--features sol-city --bin sol-city`), because
+  the full game's renderer can't draw it yet.
+- `game/`: the code-drawn agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
   - All art is drawn in code, in `game/src/art/` (`casino.rs` and `trenches.rs` for the
     Trenches, after `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png` and
     `level2-casino-mockup.png`), except the splash, the wassie's portrait, SAM, the Sentry bot and the Guard. The splash
@@ -178,6 +199,29 @@ Then:
 (cd game && cargo run --release)  # play in mgba-qt
 ```
 
+The studio ROM (the same game, art from GBA-Studio) builds from `project/`:
+
+```sh
+./scripts/build-rom.sh --studio   # → dist/diamond-hands-studio.gba (or Build in GBA-Studio)
+(cd project && cargo build --release --features sol-city --bin sol-city)       # Sol City alone
+(cd project && cargo build --features demo --bin sol-city)                     # ... the route bot plays it in god mode
+```
+
+### Moving art out of code
+
+The first ROM drew its art in code at boot. `tools/` brings it into files, repeatably:
+
+```sh
+cargo run -p export-art -- <dir>               # runs game/src/art on the host (against agb-shim) and writes PNGs
+python3 tools/import-art.py <dir>              # copies them to project/assets, registers them as studio sprites
+python3 tools/gen-art-bindings.py <dir>        # writes project/src/art/studio.rs, the code that loads them
+python3 tools/compare-shots.py <old> <new>     # pixel diff of harness screenshots (DIAMOND_HANDS_SHOTS)
+```
+
+The studio ROM is checked against the original: the harness's 368 scenes, saved from each ROM,
+are compared pixel for pixel (`compare-shots.py`). Sprites that moved to files draw
+identically; what still differs is listed under known limitations.
+
 The dev ROM (`DEV` in the title screen's corner) opens every level on the world map from
 a new file, so the Trenches can be played without beating the Badlands. It changes only
 what the map lets you start: nothing extra is saved, and a level beaten there counts as a
@@ -189,6 +233,7 @@ To play in gba-wasm, load `dist/diamond-hands.gba` in its browser UI (`pnpm dev`
 
 ```sh
 cargo test -p diamond_hands_logic    # rules, boss phases, map checks, route-bot clears
+cargo test -p diamond_hands_logic --features studio   # the same, as the studio ROM plays
 cargo test -p diamond_hands_harness  # boots the ROM on gba-wasm (needs dist/diamond-hands.gba)
 ```
 
@@ -216,8 +261,19 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
 
 ## Known limitations
 
-- Two levels are playable; Ethereum City shows on the map once unlocked but can't be
-  played yet. The Trenches have no music of their own yet.
+- Both ROMs play the first two levels. Sol City is only in its own ROM
+  (`project/`, `--features sol-city --bin sol-city`), with no title, map or saving; Ethereum
+  City shows on the map once unlocked but can't be played yet. The Trenches and Sol City
+  borrow the Badlands' music.
+- Still drawn in code in the studio ROM: terrain tiles and the day-to-night lighting, the
+  sky and city backdrops, the dialogue box, the world map, the pause menu's icons and the
+  splash (made from `cover.png` by `scripts/make-splash.py`). `export-art` already writes
+  the skies, cities, dialogue box and map as PNGs; moving them needs the renderer rebuilt on
+  the studio's room view.
+- The art in `project/assets/` came from running the code-drawn art (and, for Sol City, a
+  script), so it is as it was, not redrawn by hand. Open and edit any PNG in the studio.
+- GBA-Studio sprites can name a shared palette file (`palette` in the sprite document, added
+  for this); an already-open studio from before that change drops the field. Restart it.
 - Sprite VRAM is full. Each level's own sprites load while it is on screen (`LevelArt` in
   `game/src/render.rs`): BERA 3000 and the arrival ship in the Badlands, the casino's in the
   Trenches. Even alone the casino's don't fit, so they come in two halves swapped as the

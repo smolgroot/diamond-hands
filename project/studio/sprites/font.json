@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "name": "font",
+  "image": "assets/sprites/font.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "glyphs",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        },
+        {
+          "index": 2,
+          "duration": 8
+        },
+        {
+          "index": 3,
+          "duration": 8
+        },
+        {
+          "index": 4,
+          "duration": 8
+        },
+        {
+          "index": 5,
+          "duration": 8
+        },
+        {
+          "index": 6,
+          "duration": 8
+        },
+        {
+          "index": 7,
+          "duration": 8
+        },
+        {
+          "index": 8,
+          "duration": 8
+        },
+        {
+          "index": 9,
+          "duration": 8
+        },
+        {
+          "index": 10,
+          "duration": 8
+        },
+        {
+          "index": 11,
+          "duration": 8
+        },
+        {
+          "index": 12,
+          "duration": 8
+        },
+        {
+          "index": 13,
+          "duration": 8
+        },
+        {
+          "index": 14,
+          "duration": 8
+        },
+        {
+          "index": 15,
+          "duration": 8
+        },
+        {
+          "index": 16,
+          "duration": 8
+        },
+        {
+          "index": 17,
+          "duration": 8
+        },
+        {
+          "index": 18,
+          "duration": 8
+        },
+        {
+          "index": 19,
+          "duration": 8
+        },
+        {
+          "index": 20,
+          "duration": 8
+        },
+        {
+          "index": 21,
+          "duration": 8
+        },
+        {
+          "index": 22,
+          "duration": 8
+        },
+        {
+          "index": 23,
+          "duration": 8
+        },
+        {
+          "index": 24,
+          "duration": 8
+        },
+        {
+          "index": 25,
+          "duration": 8
+        },
+        {
+          "index": 26,
+          "duration": 8
+        },
+        {
+          "index": 27,
+          "duration": 8
+        },
+        {
+          "index": 28,
+          "duration": 8
+        },
+        {
+          "index": 29,
+          "duration": 8
+        },
+        {
+          "index": 30,
+          "duration": 8
+        },
+        {
+          "index": 31,
+          "duration": 8
+        },
+        {
+          "index": 32,
+          "duration": 8
+        },
+        {
+          "index": 33,
+          "duration": 8
+        },
+        {
+          "index": 34,
+          "duration": 8
+        },
+        {
+          "index": 35,
+          "duration": 8
+        },
+        {
+          "index": 36,
+          "duration": 8
+        },
+        {
+          "index": 37,
+          "duration": 8
+        },
+        {
+          "index": 38,
+          "duration": 8
+        },
+        {
+          "index": 39,
+          "duration": 8
+        },
+        {
+          "index": 40,
+          "duration": 8
+        },
+        {
+          "index": 41,
+          "duration": 8
+        },
+        {
+          "index": 42,
+          "duration": 8
+        },
+        {
+          "index": 43,
+          "duration": 8
+        },
+        {
+          "index": 44,
+          "duration": 8
+        },
+        {
+          "index": 45,
+          "duration": 8
+        },
+        {
+          "index": 46,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sprite.png"
+}

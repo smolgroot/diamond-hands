@@ -26,22 +26,33 @@ fn maps_are_well_formed() {
         }
         let count = |c| level.markers().filter(|&(m, _, _)| m == c).count();
         assert_eq!(count(b'P'), 1, "{name}: one start");
-        assert_eq!(count(b'X'), 1, "{name}: one arena");
-        assert_eq!(count(b'B'), 1, "{name}: one boss");
+        // A level ends at its boss, or else at the Wormhole portal.
+        let boss = count(b'B') > 0;
+        if boss {
+            assert_eq!(count(b'X'), 1, "{name}: one arena");
+            assert_eq!(count(b'B'), 1, "{name}: one boss");
+        } else {
+            assert_eq!(count(b'w'), 1, "{name}: a level without a boss ends at one portal");
+            assert_eq!(count(b'X'), 0, "{name}: no arena without a boss");
+        }
         let actors = level
             .markers()
             .filter(|&(c, _, _)| ActorKind::from_marker(c).is_some())
             .count();
         assert!(actors <= MAX_ACTORS, "{name}: {actors} actors");
 
-        let (arena_x, _) = level.find(b'X').unwrap();
-        assert_eq!(width - arena_x, ARENA_TILES, "{name}: the arena is one screen wide");
-        let (boss_x, _) = level.find(b'B').unwrap();
-        assert!(boss_x > arena_x, "{name}: boss inside the arena");
+        if boss {
+            let (arena_x, _) = level.find(b'X').unwrap();
+            assert_eq!(width - arena_x, ARENA_TILES, "{name}: the arena is one screen wide");
+            let (boss_x, _) = level.find(b'B').unwrap();
+            assert!(boss_x > arena_x, "{name}: boss inside the arena");
+        }
+        let people = level.markers().filter(|&(c, _, _)| matches!(c, b'e' | b'c')).count();
+        assert_eq!(people, level.npcs.len(), "{name}: lines for everyone on the map");
 
         for (c, tx, ty) in level.markers() {
             assert_eq!(level.tile(tx, ty), Tile::Empty, "{name}: {} at ({tx},{ty}) is in rock", c as char);
-            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B');
+            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm');
             if grounded {
                 assert!(level.is_floor(tx, ty + 1), "{name}: {} at ({tx},{ty}) floats", c as char);
             }
@@ -128,6 +139,14 @@ fn bot_clears_every_level_in_god_mode() {
                 break;
             }
         }
+        if world.level.find(b'B').is_none() {
+            // A level without a boss is cleared by stepping into its portal.
+            assert!(world.cleared, "{}: stuck at x={} y={} after waypoint {}", level.name, world.player.body.x(), world.player.body.y(), bot.step());
+            assert_eq!(bot.step(), level.route.len(), "{}: waypoints left", level.name);
+            assert!(world.diamonds > 0 && world.kills > 0);
+            assert!(world.powered(), "{}: the power never came back", level.name);
+            continue;
+        }
         let arena = reached_arena.unwrap_or_else(|| {
             panic!(
                 "{}: stuck at x={} y={} after waypoint {}",
@@ -205,7 +224,9 @@ fn floating_diamond_ledges_are_reachable_on_the_jetpack() {
             assert!(landed, "{}: diamond at ({tx},{ty}) on rock {rise} px up is out of reach", level.name);
             checked += 1;
         }
-        assert!(checked > 0, "{}: no floating ledges checked", level.name);
+        // A studio level's high places are girders and perches, not rock: the studio
+        // map's own check (and the route bot) covers them.
+        assert!(checked > 0 || level.studio, "{}: no floating ledges checked", level.name);
     }
 }
 
@@ -343,4 +364,20 @@ fn the_trenches_hatch_holds_from_above() {
         }
     }
     assert!(world.player.body.bottom() <= (ty + 1) * TILE, "fell through the hatch");
+}
+
+/// In a studio level nothing starts out stuck in the ground: every villain and person
+/// stands clear of rock. (The hand-written maps predate this check: a Badlands drone
+/// starts against a rock face, harmlessly, since drones fly.)
+#[test]
+fn studio_actors_start_clear_of_terrain() {
+    for (index, level) in levels::ALL.iter().enumerate().filter(|(_, l)| l.studio) {
+        let world = World::new(index as u8, Difficulty::Normal);
+        for a in world.placed_actors().iter().filter(|a| a.kind.is_enemy() || matches!(a.kind, ActorKind::Npc | ActorKind::Portal | ActorKind::Gate)) {
+            let r = a.rect();
+            let clips = (r.y.div_euclid(TILE)..=(r.bottom() - 1).div_euclid(TILE))
+                .any(|ty| (r.x.div_euclid(TILE)..=(r.right() - 1).div_euclid(TILE)).any(|tx| level.tile(tx, ty) == Tile::Solid));
+            assert!(!clips, "{}: {:?} at {:?} starts inside rock", level.name, a.kind, a.home);
+        }
+    }
 }

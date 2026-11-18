@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "name": "Zookeeper",
+  "image": "assets/sprites/zookeeper.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 16,
+    "y": 32
+  },
+  "hitbox": {
+    "x": 9,
+    "y": 3,
+    "width": 14,
+    "height": 29
+  },
+  "animations": [
+    {
+      "name": "idle",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 90
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "talk",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 12
+        },
+        {
+          "index": 0,
+          "duration": 12
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

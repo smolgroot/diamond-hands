@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "sam-fx-8x16",
+  "image": "assets/sprites/sam-fx-8x16.png",
+  "frame": {
+    "width": 8,
+    "height": 16
+  },
+  "anchor": {
+    "x": 0,
+    "y": 0
+  },
+  "animations": [
+    {
+      "name": "aura",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        },
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ],
+  "palette": "assets/palettes/sam-fx.png"
+}

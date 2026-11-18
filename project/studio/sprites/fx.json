@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "name": "FX",
+  "image": "assets/sprites/fx.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 8,
+    "y": 8
+  },
+  "animations": [
+    {
+      "name": "diamond",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 20
+        },
+        {
+          "index": 1,
+          "duration": 6
+        },
+        {
+          "index": 2,
+          "duration": 6
+        },
+        {
+          "index": 3,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "heal",
+      "frames": [
+        {
+          "index": 4,
+          "duration": 20
+        },
+        {
+          "index": 5,
+          "duration": 20
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

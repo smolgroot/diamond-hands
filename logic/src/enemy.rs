@@ -40,6 +40,18 @@ pub enum ActorKind {
     Dealer,
     /// Armoured security bot on the upper floors: closes in and fires bursts.
     Guard,
+    /// A clay dinosaur loose in the MagicEden zoo: ambles about, roars, then charges.
+    /// Once the power is back the fences hold it: it goes home and calms down.
+    Dino,
+    /// Someone to talk to; what they say is the level's [`Level::npcs`] entry, by
+    /// their order among the people on the map.
+    Npc,
+    /// The Wormhole portal: stepping in ends the level.
+    Portal,
+    /// A gate that stays shut until the power is back.
+    Gate,
+    /// A blockade bot at the Wormhole terminal's door: armoured, it can't be beaten.
+    Blockade,
 }
 
 impl ActorKind {
@@ -58,6 +70,11 @@ impl ActorKind {
             b'E' => ActorKind::Terminal,
             b'd' => ActorKind::Dealer,
             b'g' => ActorKind::Guard,
+            b'x' => ActorKind::Dino,
+            b'e' | b'c' => ActorKind::Npc,
+            b'w' => ActorKind::Portal,
+            b'h' => ActorKind::Gate,
+            b'm' => ActorKind::Blockade,
             _ => return None,
         })
     }
@@ -77,6 +94,11 @@ impl ActorKind {
             ActorKind::Terminal => (12, 20),
             ActorKind::Dealer => (14, 22),
             ActorKind::Guard => (16, 26),
+            ActorKind::Dino => (20, 24),
+            ActorKind::Npc => (14, 28),
+            ActorKind::Portal => (16, 52),
+            ActorKind::Gate => (16, 32),
+            ActorKind::Blockade => (16, 26),
         }
     }
 
@@ -98,6 +120,8 @@ impl ActorKind {
                 | ActorKind::Mine
                 | ActorKind::Dealer
                 | ActorKind::Guard
+                | ActorKind::Dino
+                | ActorKind::Blockade
         )
     }
 
@@ -114,6 +138,7 @@ impl ActorKind {
     pub fn max_hp(self) -> i32 {
         match self {
             ActorKind::Guard => 6,
+            ActorKind::Dino => 4,
             ActorKind::Sentry | ActorKind::Dealer => 3,
             ActorKind::Crawler | ActorKind::Drone => 2,
             _ => 1,
@@ -122,14 +147,15 @@ impl ActorKind {
 
     pub fn contact_damage(self) -> i32 {
         match self {
-            ActorKind::Sentry | ActorKind::Crawler | ActorKind::Guard => 2,
+            ActorKind::Sentry | ActorKind::Crawler | ActorKind::Guard | ActorKind::Dino | ActorKind::Blockade => 2,
             _ => 1,
         }
     }
 
-    /// Checkpoints stay lit and terminals stay on through a respawn.
-    fn keeps_state(self) -> bool {
-        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal)
+    /// Checkpoints stay lit, terminals on and gates open through a respawn, and a
+    /// saved run brings them back that way.
+    pub fn keeps_state(self) -> bool {
+        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate)
     }
 
     /// Picked up by touching it.
@@ -171,9 +197,18 @@ pub mod state {
     pub const RETURN: u8 = 3;
     /// A sentry rocking back from its shot, cannon still up.
     pub const RECOIL: u8 = 4;
-    /// Checkpoint flag that has been touched, or a terminal switched on.
+    /// Checkpoint flag that has been touched, a terminal switched on, or a gate open.
     pub const LIT: u8 = 1;
+    /// A dino the fences hold again: home and harmless.
+    pub const CALM: u8 = 5;
 }
+
+/// How long a dino roars before it charges, and how long the charge lasts.
+pub const DINO_ROAR_FRAMES: u16 = 30;
+pub const DINO_CHARGE_FRAMES: u16 = 36;
+/// Where a blockade bot fires from, and how often.
+pub const BLOCKADE_MUZZLE: (i32, i32) = (17, 16);
+const BLOCKADE_EVERY: u16 = 90;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Actor {
@@ -277,8 +312,13 @@ impl Actor {
         }
     }
 
-    /// Takes damage; returns true when this hit finished it.
+    /// Takes damage; returns true when this hit finished it. A blockade bot's armour
+    /// takes the hit and only flashes.
     pub fn damage(&mut self, amount: i32) -> bool {
+        if self.kind == ActorKind::Blockade {
+            self.flash = 6;
+            return false;
+        }
         self.hp -= amount;
         self.flash = 6;
         if self.hp <= 0 {
@@ -292,7 +332,12 @@ impl Actor {
 
     /// Whether the wassie can hurt or be hurt by this actor right now.
     pub fn is_threat(&self) -> bool {
-        self.alive && self.awake && self.kind.is_enemy()
+        self.alive && self.awake && self.kind.is_enemy() && !self.calm()
+    }
+
+    /// A dino the fences hold again.
+    pub fn calm(&self) -> bool {
+        self.kind == ActorKind::Dino && self.state == state::CALM
     }
 }
 
@@ -303,6 +348,8 @@ pub struct Ctx<'a> {
     pub shots: &'a mut [Shot; MAX_SHOTS],
     pub difficulty: Difficulty,
     pub camera_x: i32,
+    /// A terminal has brought the power back: fences hold, gates open.
+    pub power: bool,
 }
 
 impl Actor {
@@ -316,6 +363,14 @@ impl Actor {
             ActorKind::Mine => self.mine(ctx),
             ActorKind::Dealer => self.dealer(ctx),
             ActorKind::Guard => self.guard(ctx),
+            ActorKind::Dino => self.dino(ctx),
+            ActorKind::Blockade => self.blockade(ctx),
+            ActorKind::Gate => {
+                if ctx.power {
+                    self.state = state::LIT;
+                }
+            }
+            ActorKind::Npc | ActorKind::Portal => self.face_player(&ctx.player),
             ActorKind::Diamond
             | ActorKind::Heal
             | ActorKind::Checkpoint
@@ -486,6 +541,80 @@ impl Actor {
                     self.timer = 28;
                 }
             }
+        }
+    }
+
+    /// Ambles back and forth; when the wassie is level and near, stops to roar (the
+    /// tell), then charges until a wall, a ledge or the time is up. With the power back
+    /// it is calm: home, and harmless.
+    fn dino(&mut self, ctx: &mut Ctx) {
+        if ctx.power {
+            if self.state != state::CALM {
+                let (x, y) = self.home;
+                self.body.x_fx = x * FX;
+                self.body.y_fx = y * FX;
+                self.state = state::CALM;
+            }
+            self.body.vx_fx = 0;
+            self.fall(ctx.level);
+            return;
+        }
+        match self.state {
+            state::AIM => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.state = state::LUNGE;
+                    self.timer = DINO_CHARGE_FRAMES;
+                }
+            }
+            state::LUNGE => {
+                self.body.vx_fx = self.facing * 9 * FX / 4;
+                if self.timer == 0 {
+                    self.state = state::IDLE;
+                    self.timer = 70;
+                }
+            }
+            _ => {
+                self.body.vx_fx = self.facing * FX / 2;
+                if self.timer == 0 && self.in_line(&ctx.player, 80, 20) {
+                    self.face_player(&ctx.player);
+                    self.state = state::AIM;
+                    self.timer = DINO_ROAR_FRAMES;
+                }
+            }
+        }
+        let contacts = self.fall(ctx.level);
+        let r = self.rect();
+        let front = if self.facing > 0 { r.right() } else { r.x - 1 };
+        let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
+        if contacts.wall() || ledge {
+            if ledge {
+                self.body.x_fx -= self.body.vx_fx;
+            }
+            self.facing = -self.facing;
+            if self.state == state::LUNGE {
+                self.state = state::IDLE;
+                self.timer = 70;
+            }
+        }
+    }
+
+    /// Holds its post at the door, facing the wassie, and fires a round now and then.
+    fn blockade(&mut self, ctx: &mut Ctx) {
+        self.body.vx_fx = 0;
+        self.fall(ctx.level);
+        self.face_player(&ctx.player);
+        if self.timer == 0 && self.in_line(&ctx.player, 120, 24) {
+            let r = self.rect();
+            shot::spawn(
+                ctx.shots,
+                ShotKind::Bullet,
+                r.centre_x() + self.facing * BLOCKADE_MUZZLE.0,
+                r.bottom() - BLOCKADE_MUZZLE.1,
+                self.facing * 3 * FX / 2,
+                0,
+            );
+            self.timer = ctx.difficulty.fire_interval(BLOCKADE_EVERY);
         }
     }
 

@@ -201,6 +201,10 @@ impl Events {
     pub const SHOCK: Events = Events(1 << 26);
     /// The wassie picked up a piece of gear (the jetpack).
     pub const GEAR: Events = Events(1 << 27);
+    /// The wassie stepped into the Wormhole portal.
+    pub const WARP: Events = Events(1 << 28);
+    /// The wassie fell in the water.
+    pub const SPLASH: Events = Events(1 << 29);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -284,6 +288,14 @@ pub const LIFT_DOOR_FRAMES: u16 = 16;
 pub const LIFT_RIDE_FRAMES: u16 = 72;
 /// Sealed walls the camera can be held between.
 const MAX_SEALS: usize = 4;
+/// How near someone the wassie must come for them to speak up, in pixels across.
+const TALK_REACH: i32 = 28;
+/// Someone standing this near a portal sends the wassie in once they've had their say.
+const PORTAL_KEEPER_REACH: i32 = 96;
+/// Frames the portal takes to swallow the wassie before the level is clear.
+pub const WARP_FRAMES: u16 = 80;
+/// People a level may have, for the bits of [`World::heard`].
+const MAX_NPCS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -391,6 +403,14 @@ pub struct World {
     pub parts: u16,
     pub kills: u32,
     pub lift: Option<Lift>,
+    /// Someone has words for the wassie: their number among the level's people.
+    pub npc_due: Option<u8>,
+    /// The people who've had their say this visit, one bit each.
+    pub heard: u16,
+    /// Walking itself into the portal, after its keeper's send-off.
+    pub walk_in: bool,
+    /// Frames since the portal took the wassie, or 0.
+    pub warp: u16,
     /// Sealed walls, as (first column, column after), left to right.
     seals: [(i32, i32); MAX_SEALS],
     /// Frames played, for the clear time.
@@ -477,6 +497,10 @@ impl World {
             parts: 0,
             kills: 0,
             lift,
+            npc_due: None,
+            heard: 0,
+            walk_in: false,
+            warp: 0,
             seals,
             frames: 0,
             cleared: false,
@@ -512,7 +536,7 @@ impl World {
     /// explorable level comes back exactly as it was left.
     pub fn taken(&self) -> u128 {
         self.actors[..self.used].iter().enumerate().fold(0, |mask, (i, a)| {
-            let done = a.killed || (matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) && a.state == enemy::state::LIT);
+            let done = a.killed || (a.kind.keeps_state() && a.state == enemy::state::LIT);
             if done { mask | 1 << i } else { mask }
         })
     }
@@ -572,7 +596,7 @@ impl World {
                 if progress.taken & (1 << i) == 0 {
                     continue;
                 }
-                if matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) {
+                if a.kind.keeps_state() {
                     a.state = enemy::state::LIT;
                 } else {
                     a.alive = false;
@@ -587,7 +611,7 @@ impl World {
             if a.home.0 + a.kind.size().0 / 2 >= edge {
                 continue;
             }
-            if matches!(a.kind, ActorKind::Checkpoint | ActorKind::Terminal) {
+            if a.kind.keeps_state() {
                 a.state = enemy::state::LIT;
             } else {
                 a.alive = false;
@@ -651,8 +675,20 @@ impl World {
         if self.step_lift(input, &mut events) {
             return events;
         }
+        if self.warp > 0 {
+            // The portal has the wassie: the world waits while it is drawn in.
+            self.warp += 1;
+            if self.warp >= WARP_FRAMES {
+                self.cleared = true;
+                events.insert(Events::LEVEL_CLEAR);
+            }
+            return events;
+        }
+        let walk;
+        let input = if self.walk_in { walk = self.walk_in_keys(); &walk } else { input };
 
         self.player.update(input, self.level, &mut events);
+        self.hold_gates();
         if self.player.hovering && self.frames % PUFF_EVERY == 0 {
             let r = self.player.body.rect();
             self.fx.spawn(FxKind::Puff, r.centre_x() - self.player.facing * 9, r.bottom() - 4);
@@ -716,7 +752,121 @@ impl World {
         }
         self.collide(&mut events);
         self.hazards(&mut events);
+        self.meet_people(input);
+        self.enter_portal(&mut events);
         events
+    }
+
+    /// Whether a terminal has brought the power back.
+    pub fn powered(&self) -> bool {
+        self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Terminal && a.state == enemy::state::LIT)
+    }
+
+    /// The people on the map, in the order of [`Level::npcs`].
+    pub fn people(&self) -> impl Iterator<Item = &Actor> {
+        self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Npc)
+    }
+
+    /// Whether the wassie stands near person `a`, on their floor.
+    fn beside(&self, a: &Actor) -> bool {
+        let (r, ar) = (self.player.body.rect(), a.rect());
+        (r.centre_x() - ar.centre_x()).abs() <= TALK_REACH && (r.bottom() - ar.bottom()).abs() <= TILE && self.player.grounded
+    }
+
+    /// Someone speaks up the first time the wassie comes near; Up near them again
+    /// hears them out once more.
+    fn meet_people(&mut self, input: &Input) {
+        if self.player.is_dead() || self.player.hurt > 0 || self.walk_in {
+            return;
+        }
+        let found = self.people().enumerate().find(|(_, a)| self.beside(a)).map(|(n, _)| n.min(MAX_NPCS - 1));
+        if let Some(n) = found
+            && (self.heard & (1 << n) == 0 || input.up_pressed())
+            && n < self.level.npcs.len()
+        {
+            self.heard |= 1 << n;
+            self.npc_due = Some(n as u8);
+            self.player.body.vx_fx = 0;
+        }
+    }
+
+    /// Where Up would hear someone out again, for the prompt over them.
+    pub fn talk_prompt(&self) -> Option<(i32, i32)> {
+        let a = self.people().enumerate().find(|(n, a)| self.heard & (1 << n) != 0 && self.beside(a))?.1;
+        let r = a.rect();
+        Some((r.centre_x(), r.y - 4))
+    }
+
+    /// The portal, if the level has one.
+    fn portal(&self) -> Option<&Actor> {
+        self.actors[..self.used].iter().find(|a| a.kind == ActorKind::Portal && a.alive)
+    }
+
+    /// Whether person `n` minds the portal: their say ends with the wassie sent in.
+    pub fn keeps_portal(&self, n: u8) -> bool {
+        let (Some(portal), Some(person)) = (self.portal(), self.people().nth(n as usize)) else {
+            return false;
+        };
+        (portal.rect().centre_x() - person.rect().centre_x()).abs() <= PORTAL_KEEPER_REACH
+    }
+
+    /// Whether the portal lets the wassie in: its keeper, if it has one, has spoken.
+    pub fn portal_open(&self) -> bool {
+        let keepers = self.people().enumerate().filter(|&(n, _)| self.keeps_portal(n as u8));
+        keepers.into_iter().all(|(n, _)| self.heard & (1 << n) != 0)
+    }
+
+    /// After the keeper's send-off: the wassie walks itself into the portal.
+    pub fn start_walk_in(&mut self) {
+        self.walk_in = self.portal().is_some();
+    }
+
+    fn walk_in_keys(&self) -> Input {
+        let Some(portal) = self.portal() else {
+            return Input::default();
+        };
+        let dx = portal.rect().centre_x() - self.player.body.rect().centre_x();
+        let held = if dx > 2 { keys::RIGHT } else if dx < -2 { keys::LEFT } else { 0 };
+        Input { held, pressed: 0 }
+    }
+
+    /// Into the portal: its middle, once it is open.
+    fn enter_portal(&mut self, events: &mut Events) {
+        if self.player.is_dead() || !self.portal_open() {
+            return;
+        }
+        let Some(portal) = self.portal() else {
+            return;
+        };
+        let (r, pr) = (self.player.body.rect(), portal.rect());
+        if r.overlaps(&pr) && (r.centre_x() - pr.centre_x()).abs() <= 4 {
+            self.warp = 1;
+            self.walk_in = false;
+            self.player.body.vx_fx = 0;
+            self.shots = [Shot::EMPTY; MAX_SHOTS];
+            self.fx.spawn(FxKind::Glint, pr.centre_x(), r.centre_y());
+            events.insert(Events::WARP);
+        }
+    }
+
+    /// A shut gate is a wall: the wassie is put back on the side it came from.
+    fn hold_gates(&mut self) {
+        let r = self.player.body.rect();
+        for a in self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Gate && a.state != enemy::state::LIT) {
+            let g = a.rect();
+            if !r.overlaps(&g) {
+                continue;
+            }
+            let body = &mut self.player.body;
+            if r.centre_x() < g.centre_x() {
+                body.x_fx = (g.x - r.w) * FX;
+                body.vx_fx = body.vx_fx.min(0);
+            } else {
+                body.x_fx = g.right() * FX;
+                body.vx_fx = body.vx_fx.max(0);
+            }
+            return;
+        }
     }
 
     /// Runs the elevator. Returns true while the wassie rides it, when nothing else
@@ -1056,12 +1206,14 @@ impl World {
     }
 
     fn update_actors(&mut self) {
+        let power = self.powered();
         let mut ctx = Ctx {
             level: self.level,
             player: self.player.body.rect(),
             shots: &mut self.shots,
             difficulty: self.difficulty,
             camera_x: self.camera_x,
+            power,
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
         let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
@@ -1206,14 +1358,14 @@ impl World {
                     self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
                     events.insert(Events::GEAR);
                 }
-                ActorKind::Terminal => {}
+                ActorKind::Terminal | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate => {}
                 ActorKind::Checkpoint => {
                     if a.state != enemy::state::LIT {
                         a.state = enemy::state::LIT;
                         checkpoint_reached = Some(i);
                     }
                 }
-                _ if !a.awake => {}
+                _ if !a.awake || a.calm() => {}
                 _ => {
                     let falling = self.player.body.vy_fx > 0;
                     let stomp = falling && player.bottom() - a.rect().y <= 8;
@@ -1353,7 +1505,12 @@ impl World {
             events.insert(Events::FENCE_ON);
         }
         let r = self.player.body.rect();
-        if r.y > self.level.px_height() && !self.player.is_dead() {
+        let drowned = !self.player.is_dead() && self.level.water_hit(r.x, r.y, r.w, r.h);
+        if drowned {
+            self.fx.spawn(FxKind::Kick, r.centre_x(), r.bottom() - 4);
+            events.insert(Events::SPLASH);
+        }
+        if (r.y > self.level.px_height() || drowned) && !self.player.is_dead() {
             if !self.god {
                 self.player.hp -= self.difficulty.damage(PIT_DAMAGE);
             }
@@ -1395,6 +1552,7 @@ impl World {
         }
         self.shots = [Shot::EMPTY; MAX_SHOTS];
         self.fx.clear();
+        self.walk_in = false;
         if self.arena {
             self.arena = false;
             self.talk_due = false;
@@ -2123,6 +2281,118 @@ mod tests {
         // Without the breaker, the lift is still dark.
         let dark = Progress { taken: 0, ..down };
         assert_eq!(World::resume(&dark, Difficulty::Normal).lift.unwrap().state, LiftState::Dark);
+    }
+
+    /// Sol City with the wassie standing at `(tx, ty)` (its feet row), its villains asleep.
+    fn sol_city_on(tx: i32, ty: i32) -> World {
+        let mut w = World::new(2, Difficulty::Normal);
+        w.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        w
+    }
+
+    fn sol_city_first(w: &World, kind: ActorKind) -> usize {
+        w.actors.iter().position(|a| a.kind == kind).unwrap()
+    }
+
+    #[test]
+    fn a_loose_dino_roars_then_charges_and_the_power_calms_it() {
+        let mut w = sol_city_on(80, 35);
+        w.god = true;
+        let d = w.actors.iter().position(|a| a.kind == ActorKind::Dino && (80..90).contains(&a.home.0.div_euclid(TILE))).unwrap();
+        let home = w.actors[d].home;
+        let mut roared = false;
+        let mut charged = false;
+        for _ in 0..240 {
+            w.step(&Input::default());
+            roared |= w.actors[d].state == state::AIM;
+            charged |= w.actors[d].state == state::LUNGE && w.actors[d].body.vx_fx.abs() > FX;
+        }
+        assert!(roared && charged, "the roar is the tell before the charge");
+        assert!(w.actors[d].is_threat());
+        let t = sol_city_first(&w, ActorKind::Terminal);
+        w.actors[t].state = state::LIT;
+        w.step(&Input::default());
+        let dino = &w.actors[d];
+        assert!(dino.calm() && !dino.is_threat(), "the fences hold it again");
+        assert_eq!((dino.body.x(), dino.body.y()), home, "back home");
+    }
+
+    #[test]
+    fn the_harbor_gate_stays_shut_until_the_breaker_is_thrown() {
+        let mut w = sol_city_on(138, 35);
+        w.god = true;
+        let g = w.actors[sol_city_first(&w, ActorKind::Gate)].rect();
+        hold(&mut w, keys::RIGHT, 90);
+        assert!(w.player.body.rect().right() <= g.x, "a shut gate is a wall");
+        let t = sol_city_first(&w, ActorKind::Terminal);
+        w.actors[t].state = state::LIT;
+        hold(&mut w, keys::RIGHT, 90);
+        assert!(w.player.body.x() > g.right(), "open, it lets the wassie through");
+        assert!(w.taken() & (1 << sol_city_first(&w, ActorKind::Gate)) != 0, "and a saved run keeps it open");
+    }
+
+    #[test]
+    fn the_breaker_in_the_tunnels_brings_the_power_back() {
+        let mut w = sol_city_on(70, 55);
+        assert!(!w.powered());
+        assert!(w.up_prompt().is_some(), "Up works the breaker");
+        let events = tap(&mut w, keys::UP);
+        assert!(events.contains(Events::POWER) && w.powered());
+    }
+
+    #[test]
+    fn blockade_bots_shrug_off_shots_and_stomps() {
+        let mut w = sol_city_on(200, 35);
+        let b = sol_city_first(&w, ActorKind::Blockade);
+        w.actors[b].awake = true;
+        for _ in 0..20 {
+            assert!(!w.actors[b].damage(3));
+        }
+        assert!(w.actors[b].alive && w.actors[b].is_threat(), "it can't be beaten, only gone around");
+    }
+
+    #[test]
+    fn falling_in_the_water_is_a_pit() {
+        let mut w = sol_city_on(106, 35);
+        w.player.body.y_fx += 12 * FX;
+        let hp = w.player.hp;
+        let events = w.step(&Input::default());
+        assert!(events.contains(Events::SPLASH) && w.player.is_dead());
+        assert_eq!(w.player.hp, hp - PIT_DAMAGE);
+    }
+
+    #[test]
+    fn people_speak_up_once_then_again_on_up() {
+        let mut w = sol_city_on(56, 35);
+        hold(&mut w, keys::RIGHT, 20);
+        assert_eq!(w.npc_due.take(), Some(0), "the zookeeper has something to say");
+        hold(&mut w, 0, 10);
+        assert_eq!(w.npc_due, None, "only once by walking up");
+        assert!(w.talk_prompt().is_some());
+        tap(&mut w, keys::UP);
+        assert_eq!(w.npc_due, Some(0), "Up hears them out again");
+        assert!(!w.keeps_portal(0), "the zookeeper doesn't mind the portal");
+    }
+
+    #[test]
+    fn the_portal_waits_for_its_keeper_then_takes_the_wassie() {
+        let mut w = sol_city_on(262, 35);
+        w.god = true;
+        assert!(w.keeps_portal(1) && !w.portal_open(), "the cosmonaut minds it");
+        hold(&mut w, keys::LEFT, 30);
+        assert_eq!(w.warp, 0, "shut until it has spoken");
+        let mut w = sol_city_on(249, 35);
+        w.god = true;
+        hold(&mut w, 0, 2);
+        assert_eq!(w.npc_due.take(), Some(1));
+        w.start_walk_in();
+        let mut events = Events::default();
+        for _ in 0..200 {
+            events.insert(w.step(&Input::default()));
+        }
+        assert!(events.contains(Events::WARP), "it walks itself in");
+        assert!(events.contains(Events::LEVEL_CLEAR) && w.cleared);
     }
 
     #[test]

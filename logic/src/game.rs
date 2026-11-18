@@ -99,6 +99,8 @@ pub enum Talk {
     Boss,
     /// CL207 calls when the level starts.
     Call,
+    /// Someone on the map, by their number in [`crate::level::Level::npcs`].
+    Npc(u8),
 }
 
 /// Where the penguin's exchange is.
@@ -362,8 +364,11 @@ impl Game {
                 Deal::Bye => &KEPT,
                 _ => &[],
             },
-            _ if self.talk == Talk::Call => self.world.level.call,
-            _ => self.world.level.boss_talk,
+            _ => match self.talk {
+                Talk::Call => self.world.level.call,
+                Talk::Npc(n) => self.world.level.npcs.get(n as usize).copied().unwrap_or(&[]),
+                Talk::Boss => self.world.level.boss_talk,
+            },
         }
     }
 
@@ -543,6 +548,14 @@ impl Game {
                     }
                     return events;
                 }
+                // Someone the wassie walked up to has something to say.
+                if let Some(n) = self.world.npc_due.take() {
+                    self.talk = Talk::Npc(n);
+                    self.talk_line = 0;
+                    self.talk_shown = 0;
+                    self.enter(Scene::Dialog);
+                    return events;
+                }
                 // The boss speaks once the camera has settled on the arena.
                 let world = &mut self.world;
                 if world.talk_due && world.camera_x == world.boss.arena.0 && world.camera_y == world.arena_y {
@@ -568,6 +581,14 @@ impl Game {
                     || self.talk(input, lines, lines.len())
                 {
                     self.enter(Scene::Play);
+                    // The portal's keeper sends the wassie in.
+                    if let Talk::Npc(n) = self.talk
+                        && self.world.keeps_portal(n)
+                    {
+                        self.world.start_walk_in();
+                    }
+                    // The A that closed the box doesn't also jump.
+                    self.latch = input.held;
                 }
             }
             Scene::Exchange => self.step_exchange(input, &mut events),
@@ -877,6 +898,11 @@ impl Game {
         self.world = new_world(0, self.difficulty);
     }
 
+    /// Starts level `index` at its beginning, from its level card, as the map does.
+    pub fn play_level(&mut self, index: u8) {
+        self.start_level(index);
+    }
+
     /// Starts level `index` at its beginning. Its arrival plays on a first visit only.
     fn start_level(&mut self, index: u8) {
         self.world = new_world(index, self.difficulty);
@@ -1082,7 +1108,8 @@ mod tests {
         assert!(events.contains(Events::SAVE));
         assert_eq!(game.cleared, 0b1);
         use levels::PlaceStatus::*;
-        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, Soon]);
+        let sol_city = if cfg!(feature = "studio") { Locked } else { Soon };
+        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, sol_city, Soon]);
         assert_eq!(game.cursor, 1, "the cursor waits on the new place");
         assert_eq!(game.fresh, Some(1));
         assert_eq!(game.map_walk, Some((0, 1)), "the wassie walks the road there");
@@ -1129,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_every_level_marks_the_file_complete() {
+    fn clearing_the_trenches_unlocks_sol_city_in_the_studio_rom_only() {
         let mut game = at_title();
         game.cleared = 0b1;
         game.cursor = title_menu::PLAY;
@@ -1139,17 +1166,66 @@ mod tests {
         play_level(&mut game);
         clear_level(&mut game);
         let file = game.files[0].expect("saved on clear");
+        assert!(!file.complete, "Sol City and on are still to play");
+        assert_eq!(file.cleared, 0b11);
+        assert_eq!(game.fresh, Some(2), "Sol City shows unlocked");
+        assert_eq!(game.map_walk, Some((1, 2)), "the wassie walks on to it");
+        if cfg!(feature = "studio") {
+            assert_eq!(levels::MAP[2].status(game.cleared), levels::PlaceStatus::Open);
+            tap(&mut game, keys::A);
+            assert_eq!(game.scene, Scene::Intro, "the studio ROM plays it");
+        } else {
+            assert_eq!(levels::MAP[2].status(game.cleared), levels::PlaceStatus::Upcoming);
+            assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "the old ROM can't draw it");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "studio")]
+    fn clearing_every_level_marks_the_file_complete() {
+        let mut game = at_title();
+        game.cleared = 0b11;
+        game.cursor = title_menu::PLAY;
+        tap(&mut game, keys::START);
+        assert_eq!((game.scene, game.cursor), (Scene::Map, 2), "the map opens on Sol City");
+        tap(&mut game, keys::A);
+        play_level(&mut game);
+        assert!(core::ptr::eq(game.world.level, &levels::sol_city::SOL_CITY));
+        clear_level(&mut game);
+        let file = game.files[0].expect("saved on clear");
         assert!(file.complete);
         assert_eq!(file.cleared, levels::ALL_CLEARED);
-        assert_eq!(game.fresh, Some(2), "level 3 shows unlocked, though not built");
-        assert_eq!(game.map_walk, Some((1, 2)), "the wassie walks on to it");
-        assert_eq!(levels::MAP[2].status(game.cleared), levels::PlaceStatus::Upcoming);
+        assert_eq!(game.fresh, Some(3), "Ethereum City shows unlocked, though not built");
+        assert_eq!(game.map_walk, Some((2, 3)), "the wassie walks on to it");
+        assert_eq!(levels::MAP[3].status(game.cleared), levels::PlaceStatus::Upcoming);
         assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "but it can't be played yet");
         tap(&mut game, keys::B);
         assert_eq!(game.scene, Scene::Title);
         tap(&mut game, keys::UP);
         tap(&mut game, keys::A);
         assert_eq!(game.scene, Scene::Map, "a finished file replays from the map");
+    }
+
+    #[test]
+    #[cfg(feature = "studio")]
+    fn the_cosmonauts_send_off_walks_the_wassie_into_the_portal() {
+        let mut game = at_title();
+        game.play_level(2);
+        play_level(&mut game);
+        let w = &mut game.world;
+        w.god = true;
+        w.player = crate::player::Player::new(crate::physics::Body::standing_on_tile(249, 35, crate::player::PLAYER_W, crate::player::PLAYER_H));
+        game.step(&Input::default());
+        assert_eq!((game.scene, game.talk), (Scene::Dialog, Talk::Npc(1)));
+        assert_eq!(game.talk_lines()[0].speaker, crate::talk::Speaker::Cosmo);
+        tap(&mut game, keys::START);
+        assert_eq!(game.scene, Scene::Play);
+        assert!(game.world.walk_in);
+        for _ in 0..240 {
+            game.step(&Input::default());
+        }
+        assert_eq!(game.scene, Scene::LevelClear);
+        assert!(levels::is_cleared(game.cleared, 2));
     }
 
     #[test]
@@ -1555,7 +1631,8 @@ mod tests {
         assert_eq!(game.wallet, 303, "the level's own diamonds are banked too");
         let file = game.files[0].unwrap();
         assert_eq!((file.wallet, file.purse, file.cleared), (303, 0, 0b11), "saved with the clear");
-        assert_eq!(levels::MAP[2].status(file.cleared), levels::PlaceStatus::Upcoming);
+        let sol_city = if cfg!(feature = "studio") { levels::PlaceStatus::Open } else { levels::PlaceStatus::Upcoming };
+        assert_eq!(levels::MAP[2].status(file.cleared), sol_city);
     }
 
     #[test]

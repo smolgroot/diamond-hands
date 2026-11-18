@@ -22,6 +22,10 @@ pub enum Speaker {
     Sam,
     /// The casino's penguin cashier.
     Penguin,
+    /// MagicEden's zookeeper, in Sol City.
+    Keeper,
+    /// The wassie in a cosmonaut suit who minds the Wormhole portal.
+    Cosmo,
 }
 
 impl Speaker {
@@ -32,6 +36,8 @@ impl Speaker {
             Speaker::Cl207 => "CL207",
             Speaker::Sam => "SAM",
             Speaker::Penguin => "WADDLES",
+            Speaker::Keeper => "ZOOKEEPER",
+            Speaker::Cosmo => "COSMO WASSIE",
         }
     }
 }
@@ -87,7 +93,7 @@ mod tests {
         let arrivals = (0..levels::ALL.len() as u8).filter_map(levels::arrival);
         let all = levels::ALL
             .iter()
-            .flat_map(|l| [l.boss_talk, l.call])
+            .flat_map(|l| [l.boss_talk, l.call].into_iter().chain(l.npcs.iter().copied()))
             .chain(arrivals.map(|a| a.lines))
             .chain(crate::game::MERCHANT_LINES);
         for lines in all {

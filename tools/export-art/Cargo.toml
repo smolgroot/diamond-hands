@@ -1,0 +1,12 @@
+[package]
+name = "export-art"
+version = "0.1.0"
+edition = "2024"
+description = "Runs the code-drawn art of game/src/art on the host and writes it as PNG files for GBA-Studio"
+license = "MIT"
+publish = false
+
+[dependencies]
+agb = { path = "agb-shim" }
+diamond_hands_logic = { path = "../../logic" }
+png = "0.17"
