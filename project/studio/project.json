@@ -277,5 +277,32 @@
       "sprite": "sentry",
       "props": []
     }
-  ]
+  ],
+  "physics": {
+    "mode": "platformer",
+    "platformer": {
+      "gravity": 56,
+      "fallGravity": 80,
+      "maxFallSpeed": 1280,
+      "runSpeed": 359,
+      "groundAcceleration": 64,
+      "groundFriction": 80,
+      "airAcceleration": 73,
+      "jumpSpeed": 1260,
+      "jumpCut": 320,
+      "airJumps": 0,
+      "coyoteFrames": 5,
+      "jumpBufferFrames": 5
+    },
+    "topDown": {
+      "movement": "free",
+      "speed": 320,
+      "acceleration": 64,
+      "friction": 80,
+      "directions": 8,
+      "normalizeDiagonal": true,
+      "cornerSlide": 4,
+      "gridSize": 16
+    }
+  }
 }

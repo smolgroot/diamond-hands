@@ -485,9 +485,10 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
     let sides = open(0, -1) | open(-1, 0) << 1 | open(1, 0) << 2 | open(0, 1) << 3;
     // Deep rock holds a crystal at one of two spots in some 32x24 blocks, scattered
     // by a hash of the block so they don't line up.
-    let (bx, by) = (tx >> 2, ty.div_euclid(3));
+    let (by, row3) = super::div_rem_3(ty);
+    let bx = tx >> 2;
     let kind = if kind == 1 && depth == 2 && sides == 0 {
-        let at = |i: usize| GEMS[i].0 == (tx & 3) && GEMS[i].1 == ty.rem_euclid(3);
+        let at = |i: usize| GEMS[i].0 == (tx & 3) && GEMS[i].1 == row3;
         let mut hash = (bx as u32).wrapping_mul(0x9E37_79B1) ^ (by as u32).wrapping_mul(0x85EB_CA77);
         hash ^= hash >> 15;
         let hash = hash.wrapping_mul(0x2C1B_3C6D) >> 28;
@@ -495,7 +496,7 @@ pub fn terrain_key(level: &Level, tx: i32, ty: i32) -> usize {
     } else {
         kind
     };
-    ((((kind * 3 + depth) * 16 + sides) * 4 + (tx & 3) as usize) * 3) + ty.rem_euclid(3) as usize
+    ((((kind * 3 + depth) * 16 + sides) * 4 + (tx & 3) as usize) * 3) + row3 as usize
 }
 
 /// Whether cell `(tx, ty)` is a pickup tucked into a false wall, drawn as the wall.

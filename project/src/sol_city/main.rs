@@ -19,9 +19,9 @@ mod music;
 #[path = "../sound.rs"]
 mod sound;
 
-gba_studio_rt::include_data!();
-gba_studio_rt::include_gfx!();
-gba_studio_rt::include_audio!();
+pecten_studio_rt::include_data!();
+pecten_studio_rt::include_gfx!();
+pecten_studio_rt::include_audio!();
 
 /// The level this ROM plays: Sol City.
 const LEVEL: u8 = 2;

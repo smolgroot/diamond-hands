@@ -35,7 +35,7 @@ use diamond_hands_logic::{
 
 use crate::{
     art::{
-        Common, SPRITE_PALETTE, TileCache,
+        Common, SPRITE_PALETTE, TileCache, has_spare_time,
         arrival::{self, ArrivalArt},
         badlands::{self, Bera, SENTRY_ANCHOR, SKY_PALETTES, SentryPose, Villains},
         casino::{self, ArenaArt, CasinoArt, FloorArt, NINJA_ANCHOR, NINJA_FLAME_X, NinjaPose, SamPose},
@@ -160,6 +160,8 @@ pub struct Renderer {
     /// The world map's layer, painted when the map opens and dropped when it closes:
     /// its tiles don't fit in background VRAM beside a level's.
     map: Option<RegularBackground>,
+    /// The map's painting while it is under way.
+    map_painter: Option<ui::MapPainter>,
     /// Map markers for places still being built and places still locked, and the badge
     /// on cleared ones.
     soon: SpriteVram,
@@ -186,7 +188,8 @@ pub struct Renderer {
     /// The level whose terrain tiles are being made ahead of time, and the next cell
     /// (row-major) to look at.
     warm_level: Option<&'static Level>,
-    warm_next: i32,
+    /// The next cell to look at, as column and row.
+    warm_next: (i32, i32),
     /// Level column held by each terrain map slot, and the rows of it loaded there
     /// (first, and the one after the last).
     columns: [(i32, i32, i32); TERRAIN_COLS as usize],
@@ -254,6 +257,7 @@ impl Renderer {
             dialog_text,
             dialog_painted: None,
             map: None,
+            map_painter: None,
             soon: ui::soon_marker(),
             locked: ui::lock_marker(),
             clear_badge: ui::clear_badge(),
@@ -276,7 +280,7 @@ impl Renderer {
             view_x: 0,
             view_y: 0,
             warm_level: None,
-            warm_next: 0,
+            warm_next: (0, 0),
             jetpack_seen: true,
             gear_until: 0,
             world_layer: Priority::P0,
@@ -299,14 +303,20 @@ impl Renderer {
         }
         if game.scene == Scene::Map {
             if self.map.is_none() {
-                let mut map = layer(Priority::P0, RegularBackgroundSize::Background32x32);
-                ui::paint_map(&mut map);
-                self.map = Some(map);
+                self.map = Some(layer(Priority::P0, RegularBackgroundSize::Background32x32));
+                self.map_painter = Some(ui::MapPainter::new());
+            }
+            // The map fills in from the top over its first frames.
+            if let (Some(map), Some(painter)) = (&mut self.map, &mut self.map_painter)
+                && painter.step(map, has_spare_time)
+            {
+                self.map_painter = None;
             }
             self.draw_map(game, frame);
             return;
         }
         self.map = None;
+        self.map_painter = None;
         let world = &game.world;
         // Big hits jolt the view a pixel or two; each ordinary shot, a pixel each way.
         let shake = match () {
@@ -376,7 +386,9 @@ impl Renderer {
         let level = world.level;
         let (left, top) = (cam.div_euclid(TILE), cam_y.div_euclid(TILE));
         let terrain_ready = self.stream_terrain(level, left..=left + WIDTH / TILE, top, top + VIEW_ROWS, CELLS_PER_FRAME);
-        if terrain_ready && in_menu {
+        if !has_spare_time() {
+            // A busy frame: what's off screen can wait for the next one.
+        } else if terrain_ready && in_menu {
             // Off screen, a little at a time, load the rows the level starts on, so the
             // first frame of play has nothing new to draw.
             let start = diamond_hands_logic::World::start_camera_y(level).div_euclid(TILE);
@@ -684,7 +696,7 @@ impl Renderer {
             *id = KEY_UNSET;
         }
         self.terrain_by_far_key.retain(|e| !gone(e.1));
-        self.warm_next = 0;
+        self.warm_next = (0, 0);
         self.sweep = Some((0, 0));
     }
 
@@ -735,21 +747,21 @@ impl Renderer {
     fn warm_terrain(&mut self, level: &'static Level, cells: i32, new: i32) {
         if !self.warm_level.is_some_and(|l| core::ptr::eq(l, level)) {
             self.warm_level = Some(level);
-            self.warm_next = 0;
+            self.warm_next = (0, 0);
         }
-        let (w, total) = (level.width(), level.width() * level.height());
+        let (w, h) = (level.width(), level.height());
         let mut made = 0;
         for _ in 0..cells {
-            if self.warm_next >= total {
+            let (col, ty) = self.warm_next;
+            if ty >= h || !has_spare_time() {
                 return;
             }
             // Only the camera's region: the other's tiles would be let go anyway.
-            let ty = self.warm_next / w;
             if Self::region(level, ty) != self.region.0 {
-                self.warm_next = (ty + 1) * w;
+                self.warm_next = (0, ty + 1);
                 continue;
             }
-            let key = Self::terrain_key(level, self.warm_next % w, ty);
+            let key = Self::terrain_key(level, col, ty);
             if self.terrain_tile_id(key) == KEY_UNSET {
                 if made == new {
                     return;
@@ -757,7 +769,7 @@ impl Renderer {
                 made += 1;
                 self.make_terrain_tile(level.theme, key, self.region.0);
             }
-            self.warm_next += 1;
+            self.warm_next = if col + 1 < w { (col + 1, ty) } else { (0, ty + 1) };
         }
     }
 

@@ -582,21 +582,6 @@ const MAP_H: i32 = 160;
 struct Land(alloc::vec::Vec<u8>);
 
 impl Land {
-    fn new() -> Self {
-        let mut land = vec![0; (WIDTH * MAP_H) as usize];
-        for (i, island) in ISLANDS.iter().enumerate() {
-            let (x0, y0, x1, y1) = island.bounds();
-            for y in y0.max(0)..=y1.min(MAP_H - 1) {
-                for x in x0.max(0)..=x1.min(WIDTH - 1) {
-                    if island.inside(x, y) {
-                        land[(y * WIDTH + x) as usize] = i as u8 + 1;
-                    }
-                }
-            }
-        }
-        Self(land)
-    }
-
     fn at(&self, x: i32, y: i32) -> u8 {
         if (0..WIDTH).contains(&x) && (0..MAP_H).contains(&y) {
             self.0[(y * WIDTH + x) as usize]
@@ -653,40 +638,100 @@ fn road(x: i32, y: i32) -> bool {
     })
 }
 
-/// The world map: islands for each place on a violet sea under a faint cyber grid,
-/// joined by a dashed gold road.
-pub fn paint_map(bg: &mut RegularBackground) {
-    let land = Land::new();
-    let sea = |x: i32, y: i32| if x & 15 == 8 || y & 15 == 8 { ix::PURPLE } else { ix::PURPLE_DARK };
-    let pixel = |x: i32, y: i32| {
-        if road(x, y) {
-            return ix::GOLD;
+/// Boxes around everything on the map that isn't open sea: the islands, then the road.
+const MAP_BOXES: usize = ISLANDS.len() + MAP.len() - 1;
+const MAP_COLS: i32 = 30;
+const MAP_ROWS: i32 = 20;
+
+/// Paints the world map a little at a time, so the music and the sprites keep running:
+/// first the islands' outlines, then the cells from the top down. The islands on a
+/// violet sea under a faint cyber grid, joined by a dashed gold road.
+pub struct MapPainter {
+    land: Land,
+    island: usize,
+    row: i32,
+    boxes: [(i32, i32, i32, i32); MAP_BOXES],
+    cache: TileCache,
+    cell: i32,
+}
+
+impl MapPainter {
+    pub fn new() -> Self {
+        let mut boxes = [(0, 0, 0, 0); MAP_BOXES];
+        for (b, island) in boxes.iter_mut().zip(&ISLANDS) {
+            let (x0, y0, x1, y1) = island.bounds();
+            *b = (x0 - 1, y0 - 1, x1 + 1, y1 + CLIFF + 1);
         }
-        land.pixel(x, y).unwrap_or_else(|| sea(x, y))
-    };
-    // Boxes around everything that isn't open sea: each island with its cliff, and
-    // each stretch of road. Cells clear of all of them are painted as plain sea.
-    let mut boxes = [(0, 0, 0, 0); ISLANDS.len() + MAP.len() - 1];
-    for (b, island) in boxes.iter_mut().zip(&ISLANDS) {
-        let (x0, y0, x1, y1) = island.bounds();
-        *b = (x0 - 1, y0 - 1, x1 + 1, y1 + CLIFF + 1);
+        for (b, pair) in boxes[ISLANDS.len()..].iter_mut().zip(MAP.windows(2)) {
+            let (a, z) = (&pair[0], &pair[1]);
+            *b = (a.x.min(z.x) - 2, a.y.min(z.y) - 2, a.x.max(z.x) + 2, a.y.max(z.y) + 2);
+        }
+        Self {
+            land: Land(vec![0; (WIDTH * MAP_H) as usize]),
+            island: 0,
+            row: ISLANDS[0].bounds().1.max(0),
+            boxes,
+            cache: TileCache::new(),
+            cell: 0,
+        }
     }
-    for (b, pair) in boxes[ISLANDS.len()..].iter_mut().zip(MAP.windows(2)) {
-        let (a, z) = (&pair[0], &pair[1]);
-        *b = (a.x.min(z.x) - 2, a.y.min(z.y) - 2, a.x.max(z.x) + 2, a.y.max(z.y) + 2);
-    }
-    let mut cache = TileCache::new();
-    for ty in 0..20 {
-        for tx in 0..30 {
-            let (x, y) = (tx * 8, ty * 8);
-            let busy = boxes
-                .iter()
-                .any(|&(x0, y0, x1, y1)| x + 7 >= x0 && x <= x1 && y + 7 >= y0 && y <= y1);
-            if busy {
-                cache.paint(bg, (tx, ty), UI_PALETTE, &pixel);
+
+    /// Does at least one step of the painting, and more while `more` says there is time.
+    /// Returns whether the map is finished.
+    pub fn step(&mut self, bg: &mut RegularBackground, more: impl Fn() -> bool) -> bool {
+        loop {
+            if self.island < ISLANDS.len() {
+                self.fill_land_row();
+            } else if self.cell < MAP_COLS * MAP_ROWS {
+                self.paint_cell(bg);
             } else {
-                cache.paint(bg, (tx, ty), UI_PALETTE, &sea);
+                return true;
             }
+            if !more() {
+                return false;
+            }
+        }
+    }
+
+    /// Marks one pixel row of the current island.
+    fn fill_land_row(&mut self) {
+        let island = &ISLANDS[self.island];
+        let (x0, _, x1, y1) = island.bounds();
+        let y = self.row;
+        if y <= y1.min(MAP_H - 1) {
+            for x in x0.max(0)..=x1.min(WIDTH - 1) {
+                if island.inside(x, y) {
+                    self.land.0[(y * WIDTH + x) as usize] = self.island as u8 + 1;
+                }
+            }
+            self.row += 1;
+        } else {
+            self.island += 1;
+            if let Some(next) = ISLANDS.get(self.island) {
+                self.row = next.bounds().1.max(0);
+            }
+        }
+    }
+
+    fn paint_cell(&mut self, bg: &mut RegularBackground) {
+        let (tx, ty) = (self.cell % MAP_COLS, self.cell / MAP_COLS);
+        self.cell += 1;
+        let (x, y) = (tx * 8, ty * 8);
+        let touches = |&(x0, y0, x1, y1): &(i32, i32, i32, i32)| x + 7 >= x0 && x <= x1 && y + 7 >= y0 && y <= y1;
+        let sea = |x: i32, y: i32| if x & 15 == 8 || y & 15 == 8 { ix::PURPLE } else { ix::PURPLE_DARK };
+        let (islands, roads) = self.boxes.split_at(ISLANDS.len());
+        let on_road = roads.iter().any(touches);
+        if on_road || islands.iter().any(touches) {
+            let land = &self.land;
+            let pixel = |x: i32, y: i32| {
+                if on_road && road(x, y) {
+                    return ix::GOLD;
+                }
+                land.pixel(x, y).unwrap_or_else(|| sea(x, y))
+            };
+            self.cache.paint(bg, (tx, ty), UI_PALETTE, &pixel);
+        } else {
+            self.cache.paint(bg, (tx, ty), UI_PALETTE, &sea);
         }
     }
 }

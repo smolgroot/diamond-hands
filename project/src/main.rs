@@ -21,9 +21,9 @@ mod save;
 mod sound;
 mod splash;
 
-gba_studio_rt::include_data!();
-gba_studio_rt::include_gfx!();
-gba_studio_rt::include_audio!();
+pecten_studio_rt::include_data!();
+pecten_studio_rt::include_gfx!();
+pecten_studio_rt::include_audio!();
 
 use diamond_hands_logic::{Events, Game, Input, Scene};
 

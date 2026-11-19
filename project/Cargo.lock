@@ -348,8 +348,8 @@ dependencies = [
  "agb",
  "agb_tracker",
  "diamond_hands_logic",
- "gba_studio_build",
- "gba_studio_rt",
+ "pecten_studio_build",
+ "pecten_studio_rt",
  "png",
  "serde",
 ]
@@ -419,22 +419,6 @@ checksum = "e796cb6894e6418daacea84b28dd4f98d3b32c74d5bb452ba1ecfbf5ad8e84ca"
 dependencies = [
  "hashbrown 0.15.5",
  "ttf-parser",
-]
-
-[[package]]
-name = "gba_studio_build"
-version = "0.1.0"
-dependencies = [
- "png",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "gba_studio_rt"
-version = "0.1.0"
-dependencies = [
- "agb",
 ]
 
 [[package]]
@@ -617,6 +601,22 @@ name = "pagination-packing"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fee2531e9fa461274702c7fca3ad82af33297de093c323ec36bbc2fb2091953b"
+
+[[package]]
+name = "pecten_studio_build"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pecten_studio_rt"
+version = "0.1.0"
+dependencies = [
+ "agb",
+]
 
 [[package]]
 name = "png"

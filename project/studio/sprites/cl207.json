@@ -17,6 +17,10 @@
         {
           "index": 0,
           "duration": 8
+        },
+        {
+          "index": 0,
+          "duration": 8
         }
       ],
       "loop": true
