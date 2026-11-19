@@ -549,7 +549,7 @@ fn own_key(level: &Level, tx: i32, ty: i32) -> usize {
     let base = 1 + look * LOOK_KEYS;
     // Background VRAM is tight: the casino's walls keep their twelve variants, the
     // sewers' bricks two (their courses repeat every cell anyway), slopes one.
-    let variant = if look == 1 { ((tx & 1) * 3) as usize } else { ((tx & 3) * 3 + ty.rem_euclid(3)) as usize };
+    let variant = if look == 1 { ((tx & 1) * 3) as usize } else { ((tx & 3) * 3 + super::div_rem_3(ty).1) as usize };
     match c {
         b'#' | b'%' => {
             if let Some(shape) = slope_at(level, tx, ty - 1) {

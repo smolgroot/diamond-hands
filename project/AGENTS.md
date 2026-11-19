@@ -2,7 +2,7 @@
 
 This game's rooms, world map, tilesets, sprites and audio are edited in GBA-Studio and
 kept as JSON under `studio/`. The game's behaviour is Rust code in this crate, built
-on [agb](https://agbrs.dev) with the `gba_studio_rt` runtime.
+on [agb](https://agbrs.dev) with the `pecten_studio_rt` runtime.
 
 ## Who owns what
 
@@ -71,13 +71,13 @@ Run `validate` after changing anything under `studio/`.
 ## In the game code
 
 ```rust
-gba_studio_rt::include_data!();   // data::WORLD, ROOMS, CLASSES, EntityKind, room and class constants
-gba_studio_rt::include_gfx!();    // gfx::ROOMS, TILESETS, SPRITE_<NAME>, ENTITY_SPRITES
-gba_studio_rt::include_audio!();  // audio::TRACKS, SFX (needs agb_tracker)
+pecten_studio_rt::include_data!();   // data::WORLD, ROOMS, CLASSES, EntityKind, room and class constants
+pecten_studio_rt::include_gfx!();    // gfx::ROOMS, TILESETS, SPRITE_<NAME>, ENTITY_SPRITES
+pecten_studio_rt::include_audio!();  // audio::TRACKS, SFX (needs agb_tracker)
 ```
 
-`gba_studio_rt::physics::Body` moves a box through the collision cells of the whole
-world (`body.step(&data::WORLD, drop_through)`), and `gba_studio_rt::gfx::WorldView`
+`pecten_studio_rt::physics::Body` moves a box through the collision cells of the whole
+world (`body.step(&data::WORLD, drop_through)`), and `pecten_studio_rt::gfx::WorldView`
 draws the rooms around a camera, with the backgrounds of one room behind them: call
 `view.set_backgrounds(room, &graphics)` when the player enters a room. The data
 and physics half of the runtime has no dependencies and runs on the host, so rules

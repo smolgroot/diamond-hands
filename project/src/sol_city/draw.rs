@@ -8,14 +8,14 @@ use agb::{
 };
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
-    enemy::{Actor, ActorKind, state},
+    enemy::{Actor, ActorKind, DINO_ROAR_FRAMES, state},
     fx::FxKind,
     player::{Aim, HOVER_FRAMES},
     shot::ShotKind,
     talk::Speaker,
     world::{CHARGE_FRAMES, WARP_FRAMES},
 };
-use gba_studio_rt::gfx::{SpriteSheet, WorldView};
+use pecten_studio_rt::gfx::{SpriteSheet, WorldView};
 
 use crate::{
     data::{WORLD, room},
@@ -479,13 +479,14 @@ impl Screen {
             ActorKind::Dino => {
                 let s = &gfx::SPRITE_CLAY_DINO;
                 let index = match a.state {
-                    _ if a.calm() => anim(s, "walk", tick / 4),
-                    state::AIM => anim(s, "roar", 0),
-                    state::LUNGE => anim(s, "walk", tick * 2),
+                    _ if a.flash > 0 => anim(s, "hit", 6u32.saturating_sub(a.flash as u32)),
+                    _ if a.calm() => anim(s, "idle", tick),
+                    state::AIM => anim(s, "roar", DINO_ROAR_FRAMES.saturating_sub(a.timer) as u32),
+                    state::LUNGE => anim(s, "run", tick * 2),
                     _ => anim(s, "walk", walk * 2),
                 };
-                // The clay dino faces left in its sheet.
-                at(frame, s, index, x, feet, a.facing > 0);
+                // The clay dino faces right in its sheet.
+                at(frame, s, index, x, feet, a.facing < 0);
             }
             ActorKind::Npc => {
                 let (s, name): (&'static SpriteSheet, &str) = match speaker {

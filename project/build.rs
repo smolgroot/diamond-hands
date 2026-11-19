@@ -10,7 +10,7 @@ use std::{env, fs, path::PathBuf};
 const FONT: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!:/-+.<>,'?";
 
 fn main() {
-    gba_studio_build::build();
+    pecten_studio_build::build();
     let sheet = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets/sprites/font.png");
     println!("cargo:rerun-if-changed={}", sheet.display());
     let mut decoder = png::Decoder::new(fs::File::open(&sheet).unwrap_or_else(|e| panic!("{}: {e}", sheet.display())));

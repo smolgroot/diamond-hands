@@ -14,6 +14,8 @@ use crate::audio::{TRACKS, track};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cue {
     Title,
+    /// Level 1 (the Badlands): "Micro-Game Rush", converted from the author's MIDI.
+    Rush,
     Level,
     Boss,
     /// From the boss going down through the level-clear screen.
@@ -40,6 +42,8 @@ impl Cue {
                     Cue::Clear
                 } else if (game.scene == Scene::Dialog && game.talk == Talk::Boss) || world.boss.is_active() {
                     Cue::Boss
+                } else if world.level_index == 0 {
+                    Cue::Rush
                 } else {
                     Cue::Level
                 }
@@ -51,7 +55,9 @@ impl Cue {
         match self {
             // The studio's tracks (`studio/audio.json`).
             Cue::Title => &TRACKS[track::TITLE],
-            // Every level shares the Badlands theme for now; a level's own song would go by `world.level_index`.
+            // Written by `game/music/src/micro_game_rush.py` from the MIDI stems.
+            Cue::Rush => &TRACKS[track::MICRO_GAME_RUSH],
+            // The other levels keep the Badlands theme for now.
             Cue::Level => &TRACKS[track::BADLANDS],
             Cue::Boss => &TRACKS[track::BOSS],
             Cue::Clear => &TRACKS[track::CLEAR],

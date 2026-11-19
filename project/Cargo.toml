@@ -31,15 +31,22 @@ agb = "0.25.0"
 agb_tracker = "0.25.0"
 diamond_hands_logic = { path = "../logic" }
 serde = { version = "1", default-features = false, features = ["derive"] }
-gba_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
+pecten_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
 
 [build-dependencies]
 png = "0.17"
-gba_studio_build = { path = "/home/user/repos/gba-studio/codegen" }
+pecten_studio_build = { path = "/home/user/repos/gba-studio/codegen" }
 
+# Both builds are optimized for speed, without debug info or debug strings; the matching
+# nightly flags are in `.cargo/config.toml`.
 [profile.dev]
 opt-level = 3
-debug = true
+debug = false
+strip = true
+lto = "fat"
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
 
 [profile.dev.build-override]
 opt-level = 3
@@ -47,4 +54,6 @@ opt-level = 3
 [profile.release]
 opt-level = 3
 lto = "fat"
-debug = true
+codegen-units = 1
+debug = false
+strip = true

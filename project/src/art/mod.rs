@@ -258,6 +258,33 @@ impl Common {
 /// Body cells in the life bar, 8px of fill each.
 pub const LIFE_CELLS: usize = 7;
 
+/// Scanlines left before the next vblank, counted from anywhere in the frame. The main
+/// loop starts just after a vblank, so a frame on time starts with about 228.
+pub fn lines_to_vblank() -> i32 {
+    const VCOUNT: *const u16 = 0x0400_0006 as *const u16;
+    // SAFETY: VCOUNT is a read-only hardware register, always mapped.
+    let line = i32::from(unsafe { VCOUNT.read_volatile() });
+    if line >= 160 { 388 - line } else { 160 - line }
+}
+
+/// Whether the frame can still afford work that could wait for a later one. The margin
+/// leaves room for the rest of the frame, and for cartridge and EWRAM wait states.
+pub fn has_spare_time() -> bool {
+    const RESERVED_LINES: i32 = 96;
+    lines_to_vblank() > RESERVED_LINES
+}
+
+/// Euclidean `n / 3` and `n % 3`. The ARM7 has no divide instruction, and terrain asks
+/// for these for every cell, so the usual range is done with a multiply.
+pub fn div_rem_3(n: i32) -> (i32, i32) {
+    if (0..0x1_0000).contains(&n) {
+        let quotient = ((n as u32 * 43_691) >> 17) as i32;
+        (quotient, n - quotient * 3)
+    } else {
+        (n.div_euclid(3), n.rem_euclid(3))
+    }
+}
+
 /// Interns 8x8 tiles by their pixels, so identical cells share VRAM.
 pub struct TileCache {
     /// Each tile's place in `tiles`, sorted by a hash of its pixels; a hash match is

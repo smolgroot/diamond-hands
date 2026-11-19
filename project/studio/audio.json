@@ -30,7 +30,19 @@
       "name": "Down",
       "file": "assets/audio/down.xm",
       "format": "xm"
+    },
+    {
+      "id": "micro-game-rush",
+      "name": "Micro-Game Rush",
+      "file": "assets/audio/micro-game-rush.xm",
+      "format": "xm"
     }
   ],
-  "sfx": []
+  "sfx": [
+    {
+      "id": "micro-game-rush",
+      "name": "micro game rush",
+      "file": "assets/audio/micro-game-rush.wav"
+    }
+  ]
 }
