@@ -38,7 +38,8 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut mixer = gba.mixer.mixer(agb::sound::mixer::Frequency::Hz32768);
     let mut music = music::Music::new();
     let mut sfx = sound::Sfx::new();
-    let mut screen = boxed(|| draw::Screen::new(&mut graphics));
+    let world: &'static _ = Box::leak(boxed(data::world));
+    let mut screen = boxed(|| draw::Screen::new(world, &mut graphics));
     let mut previous = 0;
     let mut bot = diamond_hands_logic::bot::Bot::default();
 

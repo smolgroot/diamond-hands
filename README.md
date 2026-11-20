@@ -20,7 +20,7 @@ with a boss.
    the vault, armoured guard bots). The boss is **SAM**, a cyborg exchange founder with a
    cucumber. The casino pays in **gold coins**, which the penguin cashier changes into
    diamonds after the fight.
-3. **Sol City** (playable in its own studio ROM): the morning after the casino, a Miami of the
+3. **Sol City** (playable in the studio ROM, `project/`): the morning after the casino, a Miami of the
    Solana ecosystem. Beach, cafés and palms, then **MagicEden**, a dinosaur zoo hit by a
    power cut: its clay dinos are loose. The zookeeper explains; the breaker is down in the
    service tunnels under the paddocks. Thrown, the fences hold the dinos again and the
@@ -261,9 +261,13 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
 
 ## Known limitations
 
-- Both ROMs play the first two levels. Sol City is only in its own ROM
-  (`project/`, `--features sol-city --bin sol-city`), with no title, map or saving; Ethereum
-  City shows on the map once unlocked but can't be played yet. The Trenches and Sol City
+- Both ROMs play the first two levels. Sol City plays in the studio ROM only (`project/`;
+  the code-drawn ROM shows it as coming soon). The studio's dev build (its `dev` build
+  command, `--features dev`) opens it on the map without beating the first two bosses;
+  it is also in a ROM of its own (`--features sol-city --bin sol-city`). Its pause menu
+  and the map come from the code-drawn renderer; switching to or from them shows one
+  blank frame.
+  Ethereum City shows on the map once unlocked but can't be played yet. The Trenches and Sol City
   borrow the Badlands' music.
 - Still drawn in code in the studio ROM: terrain tiles and the day-to-night lighting, the
   sky and city backdrops, the dialogue box, the world map, the pause menu's icons and the

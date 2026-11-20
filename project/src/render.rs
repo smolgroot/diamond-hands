@@ -56,7 +56,7 @@ enum LevelArt {
 impl LevelArt {
     fn new(theme: Theme) -> Self {
         match theme {
-            // Sol City is drawn by the studio ROM only; this one never starts it.
+            // Sol City in play is drawn by the studio screen (`sol_city/draw.rs`), not here.
             Theme::Badlands | Theme::SolCity => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
             Theme::Trenches => LevelArt::Trenches(CasinoArt::new()),
         }

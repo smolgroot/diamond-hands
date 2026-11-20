@@ -15,12 +15,12 @@ use diamond_hands_logic::{
     talk::Speaker,
     world::{CHARGE_FRAMES, WARP_FRAMES},
 };
-use pecten_studio_rt::gfx::{SpriteSheet, WorldView};
-
-use crate::{
-    data::{WORLD, room},
-    gfx,
+use pecten_studio_rt::{
+    data::World,
+    gfx::{SpriteSheet, WorldView},
 };
+
+use crate::{data::room, gfx};
 
 /// The font's characters, in the order of the `ui` sheet's first frames.
 const FONT: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!:/-+.<>,'?";
@@ -86,7 +86,7 @@ const JETPACK_AT: (i32, i32) = (1, 15);
 const FLAME_AT: (i32, i32) = (1, 29);
 
 pub struct Screen {
-    view: WorldView,
+    view: WorldView<'static>,
     /// The room's top-left in world pixels: the level's coordinates start there.
     origin: (i32, i32),
     /// Where the view's camera was last put, in world pixels; `None` before the first frame.
@@ -144,9 +144,10 @@ fn number(frame: &mut GraphicsFrame, mut n: u32, right: i32, y: i32) {
 }
 
 impl Screen {
-    pub fn new(graphics: &mut Graphics) -> Self {
-        let view = WorldView::new(&gfx::ROOMS, room::SOL_CITY, graphics);
-        let origin = WORLD.origin(room::SOL_CITY).unwrap_or((0, 0));
+    /// `world` is the studio's map, read once at boot (`data::world()`).
+    pub fn new(world: &'static World<'static>, graphics: &mut Graphics) -> Self {
+        let view = WorldView::new(world, gfx::ART, room::SOL_CITY, graphics);
+        let origin = world.origin(room::SOL_CITY).unwrap_or((0, 0));
         Self { view, origin, camera: None }
     }
 

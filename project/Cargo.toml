@@ -12,8 +12,8 @@ name = "diamond-hands-studio"
 path = "src/main.rs"
 
 [[bin]]
-# Sol City, the level painted in the studio, on its own: the full game's renderer can't
-# draw it yet. `cargo build --features sol-city --bin sol-city`
+# Sol City, the level painted in the studio, on its own (the full game plays it too).
+# `cargo build --features sol-city --bin sol-city`
 name = "sol-city"
 path = "src/sol_city/main.rs"
 required-features = ["sol-city"]
@@ -29,7 +29,8 @@ demo = ["sol-city"]
 [dependencies]
 agb = "0.25.0"
 agb_tracker = "0.25.0"
-diamond_hands_logic = { path = "../logic" }
+# `studio`: levels painted in GBA-Studio (Sol City) are playable in this ROM.
+diamond_hands_logic = { path = "../logic", features = ["studio"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 pecten_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
 

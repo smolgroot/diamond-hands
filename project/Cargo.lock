@@ -606,6 +606,7 @@ checksum = "fee2531e9fa461274702c7fca3ad82af33297de093c323ec36bbc2fb2091953b"
 name = "pecten_studio_build"
 version = "0.1.0"
 dependencies = [
+ "pecten_studio_rt",
  "png",
  "serde",
  "serde_json",
