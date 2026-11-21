@@ -22,11 +22,11 @@ use diamond_hands_logic::{
     controls::{self, BINDINGS},
     enemy::{ActorKind, GUARD_BURST_GAP, GUARD_RECOIL_FRAMES, SENTRY_MUZZLE, SENTRY_RECOIL_FRAMES, state},
     fx::FxKind,
-    game::{CLEAR_LOCK_FRAMES, Deal, FILES, MAP_WALK_FRAMES, PAYOUT_FRAMES, PENGUIN_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
+    game::{Deal, FILES, MAP_WALK_FRAMES, PAYOUT_FRAMES, PENGUIN_WALK_FRAMES, file_menu, options_menu, pause_menu, title_menu},
     inventory::SHIELD_CELLS,
     level::{Theme, Tile},
     levels::{MAP, PlaceStatus},
-    player::{Aim, HOVER_FRAMES, MAX_HP, PlayerState},
+    player::{Aim, HOVER_FRAMES, PlayerState},
     shot::ShotKind,
     arrival::{GUIDE_W, Gear},
     talk::{self, Speaker},
@@ -44,6 +44,7 @@ use crate::{
         wassie::{self, Wassie},
     },
     font::{self, Font},
+    screens,
 };
 
 /// Art only one level uses, loaded while that level is on screen: sprite VRAM holds
@@ -135,9 +136,6 @@ const FAR_TERRAIN_KEYS: usize = 256;
 const KEY_BLANK: u16 = u16::MAX - 1;
 /// Integer sine for 16 directions, scaled by 64.
 const SIN16: [i32; 16] = [0, 24, 45, 59, 64, 59, 45, 24, 0, -24, -45, -59, -64, -59, -45, -24];
-/// Diamonds thrown out in the level-clear burst, and those raining after it.
-const BURST: i32 = 8;
-const RAIN: i32 = 6;
 /// How far BERA 3000's head lifts through one breath, a step every few frames.
 const BERA_BREATH: [i32; 8] = [0, 1, 2, 2, 2, 1, 0, 0];
 
@@ -790,28 +788,22 @@ impl Renderer {
     }
 
     fn draw_overlay(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let blink_on = (game.frame / 30).is_multiple_of(2);
-        let level = game.world.level;
         match game.scene {
             Scene::Title => self.draw_title(game, frame),
             Scene::Options => self.draw_options(game, frame),
             Scene::Files => self.draw_files(game, frame),
             Scene::FileChoice => self.draw_file_choice(game, frame),
-            Scene::Intro => {
-                let mut buf = [0; 10];
-                let n = font::number(game.world.level_index as u32 + 1, &mut buf);
-                let x = (WIDTH - Font::width("LEVEL ", true) - Font::width(n, true)) / 2;
-                self.font.draw(frame, "LEVEL ", x, 36, true);
-                self.font.draw(frame, n, x + Font::width("LEVEL ", true), 36, true);
-                self.font.draw_centred(frame, level.name, 55, true);
-                self.font.draw_centred(frame, level.subtitle, 76, false);
-            }
+            Scene::Intro => screens::level_card(&self.font, game, frame),
             Scene::Play | Scene::Map | Scene::Splash | Scene::Paused => {}
             Scene::Arrival if game.talking() => self.draw_dialog(game, frame),
             Scene::Arrival => {}
             Scene::Dialog if game.ringing() => self.draw_ringing(game, frame),
             Scene::Dialog => self.draw_dialog(game, frame),
-            Scene::LevelClear => self.draw_clear(game, frame, blink_on),
+            Scene::LevelClear => {
+                let r = game.world.player.body.rect();
+                let at = (r.centre_x() - self.view_x, r.centre_y() - self.view_y);
+                screens::level_clear(&self.font, &self.common.diamond, game, frame, at);
+            }
             Scene::Exchange => self.draw_exchange(game, frame),
         }
         if game.scene == Scene::Play && game.frame < self.notice_until {
@@ -912,87 +904,6 @@ impl Renderer {
     /// The level-clear sequence: the screen fades down, a ring of diamonds bursts off
     /// the wassie, the banner drops in and the tally counts up row by row, then
     /// diamonds rain until the world map opens.
-    fn draw_clear(&self, game: &Game, frame: &mut GraphicsFrame, blink_on: bool) {
-        let world = &game.world;
-        let t = game.scene_frames() as i32;
-        const BOUNCE: [i32; 6] = [0, -3, -4, -3, -1, 0];
-        let banner_y = match t {
-            0..16 => 26 - (16 - t) * 3,
-            16..22 => 26 + BOUNCE[(t - 16) as usize],
-            _ => 26,
-        };
-        self.font.draw_centred(frame, "LEVEL CLEAR!", banner_y, true);
-        // One row of the tally every few frames once the banner lands.
-        let rows = ((t - 18) / 6).max(0);
-        if world.level.coins {
-            // A casino's tally: coins too, and the wallet after the exchange.
-            let lines = [
-                ("DIAMONDS ", world.diamonds),
-                ("GOLD COINS ", world.coins),
-                ("BOUNTIES ", world.kills),
-                ("SCORE ", game.score()),
-                ("WALLET ", game.wallet),
-            ];
-            for (i, (label, n)) in lines.into_iter().enumerate() {
-                if rows > i as i32 {
-                    self.label_number(frame, label, n, 44 + 8 * i as i32);
-                }
-            }
-            if rows > 5 {
-                self.label_time(frame, world.frames / 60, 84);
-            }
-        } else {
-            if rows > 0 {
-                self.label_number(frame, "DIAMONDS ", world.diamonds, 48);
-            }
-            if rows > 1 {
-                self.label_number(frame, "BOUNTIES ", world.kills, 58);
-            }
-            if rows > 2 {
-                self.label_time(frame, world.frames / 60, 68);
-            }
-            if rows > 3 {
-                self.label_number(frame, "SCORE ", game.score(), 80);
-                self.label_number(frame, "BEST ", game.best, 90);
-            }
-        }
-        if rows > 4 {
-            if game.new_best && blink_on {
-                self.font.draw_centred(frame, "NEW BEST!", 100, false);
-            }
-            if let Some(place) = game.fresh.map(|i| &MAP[i as usize]) {
-                self.font.draw_centred(frame, "NEW PLACE UNLOCKED", 110, false);
-                self.font.draw_centred(frame, place.name, 118, false);
-            } else if game.replay {
-                self.font.draw_centred(frame, "REPLAY: NO SCORE BANKED", 112, false);
-            }
-        }
-        if t >= CLEAR_LOCK_FRAMES as i32 {
-            self.font.draw_centred(frame, "A: WORLD MAP", 132, false);
-        }
-
-        // The burst: a spinning ring off the wassie, flying out and away.
-        let r = world.player.body.rect();
-        let (cx, cy) = (r.centre_x() - self.view_x, r.centre_y() - self.view_y);
-        if t < 48 {
-            let radius = t * 5 / 2;
-            for i in 0..BURST {
-                let a = (i * 2 + t / 4) as usize;
-                let (dx, dy) = (SIN16[(a + 4) % 16], SIN16[a % 16]);
-                let glint = ((t / 3 + i) % 4 == 0) as usize;
-                show(frame, &self.common.diamond[glint], cx - 8 + dx * radius / 64, cy - 8 + dy * radius / 64);
-            }
-        } else {
-            // Then a gentle rain of diamonds, each at its own pace.
-            for i in 0..RAIN {
-                let x = 14 + i * 38 + (i * 13) % 17;
-                let y = ((t - 48) * (2 + i % 3) / 2 + i * 47) % 200 - 24;
-                let glint = ((t / 4 + i) % 6 == 0) as usize;
-                show(frame, &self.common.diamond[glint], x, y);
-            }
-        }
-    }
-
     fn draw_title(&self, game: &Game, frame: &mut GraphicsFrame) {
         self.font.draw_centred(frame, "DIAMOND HANDS", 6, true);
         self.font.draw_centred(frame, "A WASSIE ADVENTURE", 23, false);
@@ -1346,24 +1257,9 @@ impl Renderer {
 
     fn draw_hud(&self, game: &Game, frame: &mut GraphicsFrame) {
         let world = &game.world;
-        let hp = world.player.hp.clamp(0, MAX_HP);
-        show(frame, &self.common.life_caps[0], 4, 4);
-        for (i, cell) in self.common.life[hp as usize].iter().enumerate() {
-            show(frame, cell, 8 + 8 * i as i32, 4);
-        }
-        show(frame, &self.common.life_caps[1], 64, 4);
-
-        let mut buf = [0; 10];
-        show(frame, &self.common.diamond[0], 70, 0);
-        self.font
-            .draw(frame, font::number(world.diamonds, &mut buf), 86, 5, false);
-        if let Some(casino) = self.level_art.as_ref().and_then(LevelArt::casino) {
-            show(frame, &casino.coin[0], 114, 4);
-            self.font.draw(frame, font::number(world.coins, &mut buf), 125, 5, false);
-        }
-        let score = font::number(game.score(), &mut buf);
-        self.font
-            .draw(frame, score, WIDTH - 4 - Font::width(score, false), 5, false);
+        let art = screens::HudArt { life_caps: &self.common.life_caps, life: &self.common.life, diamond: &self.common.diamond };
+        let coin = self.level_art.as_ref().and_then(LevelArt::casino).map(|c| &c.coin[0]);
+        screens::hud(&self.font, &art, coin, game, frame);
 
         if world.boss.is_active() && !world.boss.is_beaten() {
             let y = 148;
@@ -1379,13 +1275,7 @@ impl Renderer {
     }
 
     fn label_number(&self, frame: &mut GraphicsFrame, label: &str, n: u32, y: i32) {
-        let mut buf = [0; 10];
-        let digits = font::number(n, &mut buf);
-        let width = Font::width(label, false) + Font::width(digits, false);
-        let x = (WIDTH - width) / 2;
-        self.font.draw(frame, label, x, y, false);
-        self.font
-            .draw(frame, digits, x + Font::width(label, false), y, false);
+        screens::label_number(&self.font, frame, label, n, y);
     }
 
     /// `label` then `n`, from (x, y).
@@ -1393,16 +1283,6 @@ impl Renderer {
         let mut buf = [0; 10];
         self.font.draw(frame, label, x, y, false);
         self.font.draw(frame, font::number(n, &mut buf), x + Font::width(label, false), y, false);
-    }
-
-    fn label_time(&self, frame: &mut GraphicsFrame, seconds: u32, y: i32) {
-        let mut text = *b"TIME 00:00";
-        let (m, s) = ((seconds / 60).min(99), seconds % 60);
-        for (i, d) in [m / 10, m % 10, s / 10, s % 10].into_iter().enumerate() {
-            text[5 + i + (i >= 2) as usize] = b'0' + d as u8;
-        }
-        let text = core::str::from_utf8(&text).unwrap_or("");
-        self.font.draw_centred(frame, text, y, false);
     }
 
     fn draw_player(&self, game: &Game, frame: &mut GraphicsFrame) {
@@ -2104,7 +1984,7 @@ impl Renderer {
                     (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
                 }
                 // Sol City's people and creatures: the studio ROM draws that level.
-                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade => continue,
+                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) => continue,
                 ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;

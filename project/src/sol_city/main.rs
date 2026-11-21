@@ -14,8 +14,17 @@ use alloc::boxed::Box;
 
 use diamond_hands_logic::{Events, Game, Input, Scene, levels};
 
+// The full game's font, art and text screens, which Sol City's screen shares.
+#[path = "../art/mod.rs"]
+#[allow(dead_code)]
+mod art;
 mod draw;
+#[path = "../font.rs"]
+#[allow(dead_code)]
+mod font;
 mod music;
+#[path = "../screens.rs"]
+mod screens;
 #[path = "../sound.rs"]
 mod sound;
 
@@ -39,7 +48,7 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut music = music::Music::new();
     let mut sfx = sound::Sfx::new();
     let world: &'static _ = Box::leak(boxed(data::world));
-    let mut screen = boxed(|| draw::Screen::new(world, &mut graphics));
+    let mut screen = boxed(|| draw::Screen::new(world));
     let mut previous = 0;
     let mut bot = diamond_hands_logic::bot::Bot::default();
 
@@ -60,6 +69,7 @@ fn main(mut gba: agb::Gba) -> ! {
         music.play(&game, &mut mixer);
         mixer.frame();
 
+        screen.prepare(&game, &mut graphics);
         let mut frame = graphics.frame();
         screen.draw(&game, &mut frame);
         frame.commit();

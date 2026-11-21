@@ -9,6 +9,7 @@ use crate::{
     enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
     game::{Progress, keys},
+    block::{Blocks, Map},
     level::Level,
     levels,
     physics::Body,
@@ -89,6 +90,10 @@ pub fn cells(parts: u16) -> u16 {
 const WAKE_MARGIN: i32 = 16;
 /// Frames between jetpack exhaust puffs.
 const PUFF_EVERY: u32 = 6;
+/// Most shots that can strike a block in one frame.
+const MAX_BLOCK_HITS: usize = 8;
+/// Damage a falling block does to whoever it lands on.
+const CRUSH_DAMAGE: i32 = 2;
 /// Frames between dust puffs kicked up by running and braking.
 const DUST_EVERY: u32 = 10;
 const SKID_EVERY: u32 = 4;
@@ -205,6 +210,8 @@ impl Events {
     pub const WARP: Events = Events(1 << 28);
     /// The wassie fell in the water.
     pub const SPLASH: Events = Events(1 << 29);
+    /// A block, a crate or a clod of soil was shot apart.
+    pub const BREAK: Events = Events(1 << 30);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -369,6 +376,8 @@ pub struct World {
     pub player: Player,
     /// On the heap, filled there: see `new_actors`.
     pub actors: Box<[Actor; MAX_ACTORS]>,
+    /// The breakable blocks among the actors, and which are broken.
+    pub blocks: Blocks,
     /// Slots of `actors` the map filled, from the first; those after stay empty. The
     /// per-frame loops stop there instead of walking all of them in slow EWRAM.
     used: usize,
@@ -383,6 +392,8 @@ pub struct World {
     pub camera_x: i32,
     /// Top edge of the screen in level pixels: 0 in a level one screen tall.
     pub camera_y: i32,
+    /// The camera zone ([`Level::zones`]) the camera is kept in; `None` in a level without zones.
+    pub zone: Option<usize>,
     /// Where the camera's top settles in the boss arena.
     pub arena_y: i32,
     /// The level hides the jetpack: the wassie starts without it.
@@ -430,6 +441,7 @@ impl World {
         // One pass over the map's markers for its actors and the places that matter.
         let mut actors = new_actors();
         let mut count = 0;
+        let mut blocks = Blocks::EMPTY;
         let (mut start, mut car, mut dest, mut jetpack, mut boss_row) = (None, None, None, false, None);
         for (c, tx, ty) in level.markers() {
             match c {
@@ -443,6 +455,13 @@ impl World {
             if let Some(kind) = ActorKind::from_marker(c)
                 && count < MAX_ACTORS
             {
+                if let ActorKind::Block(_) = kind
+                    && !blocks.add(tx, ty, count)
+                {
+                    // More than the list holds: leave it as rock rather than a block
+                    // that never breaks.
+                    continue;
+                }
                 actors[count] = Actor::spawn(kind, tx, ty);
                 count += 1;
             }
@@ -477,6 +496,7 @@ impl World {
             difficulty,
             player: Player::new(Body::standing_on_tile(start.0, start.1, PLAYER_W, PLAYER_H)),
             actors,
+            blocks,
             used: count,
             shots: [Shot::EMPTY; MAX_SHOTS],
             boss: Boss::new(level),
@@ -485,6 +505,7 @@ impl World {
             kick: 0,
             camera_x: 0,
             camera_y: 0,
+            zone: None,
             arena_y: 0,
             jetpack_here: jetpack,
             checkpoint: start,
@@ -515,6 +536,28 @@ impl World {
         }
         world.snap_camera();
         world
+    }
+
+    /// Marks the blocks whose actors are broken, so they are air to everything that
+    /// moves.
+    fn sync_blocks(&mut self) {
+        for i in 0..self.blocks.len() {
+            let slot = self.blocks.slots()[i] as usize;
+            self.blocks.set_broken(i, self.actors[slot].killed);
+        }
+    }
+
+    /// Puts each block's actor where its block is now.
+    fn place_blocks(&mut self) {
+        for i in 0..self.blocks.len() {
+            let slot = self.blocks.slots()[i] as usize;
+            self.actors[slot].body.y_fx = self.blocks.rect(i).y * FX;
+        }
+    }
+
+    /// The level as it stands now, with the blocks the wassie has broken gone.
+    pub fn map(&self) -> Map<'_> {
+        Map { level: self.level, blocks: &self.blocks }
     }
 
     /// The actors the map placed: every slot that can hold one.
@@ -583,6 +626,10 @@ impl World {
     pub fn resume(progress: &Progress, difficulty: Difficulty) -> Self {
         let mut world = Self::new(progress.level, difficulty);
         world.pick_up(progress);
+        world.sync_blocks();
+        // Blocks broken under others: those come down before the level shows.
+        world.blocks.settle(world.level);
+        world.place_blocks();
         world
     }
 
@@ -687,7 +734,7 @@ impl World {
         let walk;
         let input = if self.walk_in { walk = self.walk_in_keys(); &walk } else { input };
 
-        self.player.update(input, self.level, &mut events);
+        self.player.update(input, &Map { level: self.level, blocks: &self.blocks }, &mut events);
         self.hold_gates();
         if self.player.hovering && self.frames % PUFF_EVERY == 0 {
             let r = self.player.body.rect();
@@ -733,12 +780,22 @@ impl World {
                 self.fx.spawn(FxKind::CoinPop, x, y);
             }
         }
+        // Shots into a standing block, to be dealt once the shots have all moved.
+        let mut block_hits = [(0u8, 0i32); MAX_BLOCK_HITS];
+        let mut block_hit_count = 0;
+        let map = Map { level: self.level, blocks: &self.blocks };
         for s in self.shots.iter_mut().filter(|s| s.active) {
-            s.update(self.level);
+            s.update(&map);
             let r = s.rect();
             if !s.active && s.kind.from_player() && s.life > 0 {
-                // Ran into rock.
+                // Ran into rock, or into a block.
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
+                if let Some(b) = self.blocks.at_px(r.centre_x(), r.centre_y())
+                    && block_hit_count < MAX_BLOCK_HITS
+                {
+                    block_hits[block_hit_count] = (b as u8, s.kind.damage());
+                    block_hit_count += 1;
+                }
             }
             if !s.active && matches!(s.kind, ShotKind::Cucumber | ShotKind::MegaCucumber) {
                 self.fx.spawn(FxKind::Splat, r.centre_x(), r.centre_y());
@@ -750,6 +807,10 @@ impl World {
                 s.active = false;
             }
         }
+        for &(b, damage) in &block_hits[..block_hit_count] {
+            self.hit_block(b as usize, damage, &mut events);
+        }
+        self.drop_blocks(&mut events);
         self.collide(&mut events);
         self.hazards(&mut events);
         self.meet_people(input);
@@ -1075,7 +1136,19 @@ impl World {
         let (ax, ay) = p.aim.dir();
         let (dx, dy) = (ax * p.facing, ay);
         let speed = |base: i32| if p.aim.diagonal() { base * DIAGONAL / FX } else { base };
-        let muzzle = p.muzzle();
+        // The muzzle reaches past the body: pressed against a wall or a block, a shot
+        // starts where the barrel meets it rather than on its far side.
+        let muzzle = {
+            let (mx, my) = p.muzzle();
+            let r = p.body.rect();
+            let (sx, sy) = (r.centre_x(), if dy == 0 { my } else { r.centre_y() });
+            let map = Map { level: self.level, blocks: &self.blocks };
+            let steps = ((mx - sx).abs().max((my - sy).abs()) / 2).max(1);
+            (1..=steps)
+                .map(|k| (sx + (mx - sx) * k / steps, sy + (my - sy) * k / steps))
+                .find(|&(x, y)| crate::level::Terrain::solid_px(&map, x, y))
+                .unwrap_or((mx, my))
+        };
 
         if input.fire_held() {
             p.charge = p.charge.saturating_add(1);
@@ -1130,7 +1203,24 @@ impl World {
         let (tx, ty) = level.find(b'P').unwrap_or((2, level.height() - 2));
         let r = Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H).rect();
         let (lo, hi) = Self::camera_y_range(level, r.centre_y());
-        (r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2).clamp(lo, hi)
+        let y = (r.centre_y() - (CAMERA_BAND_Y.0 + CAMERA_BAND_Y.1) / 2).clamp(lo, hi);
+        match level.zone_at(r.centre_x(), r.centre_y()) {
+            Some(z) => Self::clamp_to_zone(level, z, 0, y).1,
+            None => y,
+        }
+    }
+
+    /// `(x, y)` as a camera's top-left kept inside zone `z` of `level`.
+    fn clamp_to_zone(level: &Level, z: usize, x: i32, y: i32) -> (i32, i32) {
+        let (l, t, r, b) = level.zones[z];
+        let (l, t, r, b) = (l * TILE, t * TILE, r * TILE, b * TILE);
+        (x.clamp(l, (r - SCREEN_W).max(l)), y.clamp(t, (b - SCREEN_H).max(t)))
+    }
+
+    /// The zone the wassie is in, kept when it stands where no zone is.
+    fn zone_now(&self) -> Option<usize> {
+        let r = self.player.body.rect();
+        self.level.zone_at(r.centre_x(), r.centre_y()).or(self.zone)
     }
 
     /// The tops the camera may take with the wassie's centre at pixel row `y`: the
@@ -1175,6 +1265,10 @@ impl World {
         let max = (hi - SCREEN_W).max(lo);
         self.camera_x = self.camera_x.clamp(lo, max);
         self.camera_y = self.camera_y.clamp(0, self.max_camera_y());
+        if let Some(z) = self.zone_now() {
+            self.zone = Some(z);
+            (self.camera_x, self.camera_y) = Self::clamp_to_zone(self.level, z, self.camera_x, self.camera_y);
+        }
     }
 
     fn update_camera(&mut self) {
@@ -1182,6 +1276,11 @@ impl World {
             let target = self.boss.arena.0;
             self.camera_x += (target - self.camera_x).clamp(-3, 3);
             self.camera_y += (self.arena_y - self.camera_y).clamp(-3, 3);
+            return;
+        }
+        // Through a doorway into another zone, the camera cuts there.
+        if self.zone_now() != self.zone {
+            self.snap_camera();
             return;
         }
         let r = self.player.body.rect();
@@ -1209,6 +1308,7 @@ impl World {
         let power = self.powered();
         let mut ctx = Ctx {
             level: self.level,
+            map: Map { level: self.level, blocks: &self.blocks },
             player: self.player.body.rect(),
             shots: &mut self.shots,
             difficulty: self.difficulty,
@@ -1230,6 +1330,70 @@ impl World {
                 || r.y > view_y.1 + SCREEN_H / 2;
             if a.awake && !far {
                 a.update(&mut ctx);
+            }
+        }
+    }
+
+    /// A shot struck block `b`: it cracks, or comes apart in a burst of dust and
+    /// becomes air.
+    fn hit_block(&mut self, b: usize, damage: i32, events: &mut Events) {
+        if self.blocks.is_broken(b) {
+            return;
+        }
+        if self.actors[self.blocks.slots()[b] as usize].damage(damage) {
+            self.break_block(b, events);
+        }
+    }
+
+    /// Block `b` comes apart in a burst of dust and becomes air; whatever stood on it
+    /// falls.
+    fn break_block(&mut self, b: usize, events: &mut Events) {
+        let a = &mut self.actors[self.blocks.slots()[b] as usize];
+        a.alive = false;
+        a.killed = true;
+        self.blocks.set_broken(b, true);
+        let r = self.blocks.rect(b);
+        self.fx.spawn(FxKind::Explosion, r.centre_x(), r.centre_y());
+        self.fx.spawn(FxKind::Dust, r.x + 4, r.bottom() - 4);
+        self.fx.spawn(FxKind::Dust, r.right() - 4, r.bottom() - 4);
+        self.shake = self.shake.max(4);
+        events.insert(Events::BREAK);
+    }
+
+    /// Gravity for the blocks: those with nothing under them fall. One that comes
+    /// down on the wassie or a villain shatters on them and hurts them.
+    fn drop_blocks(&mut self, events: &mut Events) {
+        if self.blocks.is_empty() {
+            return;
+        }
+        let mut moved = 0u32;
+        self.blocks.fall(self.level, |i| moved |= 1 << i);
+        self.place_blocks();
+        for i in 0..self.blocks.len() {
+            if self.blocks.is_broken(i) {
+                continue;
+            }
+            let r = self.blocks.rect(i);
+            if moved & (1 << i) != 0 && self.blocks.falling(i) {
+                let mut shatter = false;
+                if !self.player.is_dead() && r.overlaps(&self.player.body.rect()) {
+                    self.knock_player(CRUSH_DAMAGE, r.centre_x(), false, events);
+                    shatter = true;
+                }
+                for a in self.actors[..self.used].iter_mut() {
+                    if a.alive && a.kind.is_enemy() && a.kind != ActorKind::Blockade && r.overlaps(&a.rect()) {
+                        shatter = true;
+                        let ar = a.rect();
+                        if a.damage(CRUSH_DAMAGE) {
+                            self.kills += 1;
+                            self.fx.spawn(FxKind::Explosion, ar.centre_x(), ar.centre_y());
+                            events.insert(Events::ENEMY_DOWN);
+                        }
+                    }
+                }
+                if shatter {
+                    self.break_block(i, events);
+                }
             }
         }
     }
@@ -1358,7 +1522,7 @@ impl World {
                     self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
                     events.insert(Events::GEAR);
                 }
-                ActorKind::Terminal | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate => {}
+                ActorKind::Terminal | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Block(_) => {}
                 ActorKind::Checkpoint => {
                     if a.state != enemy::state::LIT {
                         a.state = enemy::state::LIT;
@@ -1451,7 +1615,7 @@ impl World {
         if was_down {
             body.vx_fx = crate::player::approach(body.vx_fx, 0, DEAD_SKID_FX);
         }
-        let contacts = body.step(level);
+        let contacts = body.step(&Map { level, blocks: &self.blocks });
         if self.arena && body.x() < self.boss.arena.0 {
             body.x_fx = self.boss.arena.0 * FX;
             body.vx_fx = 0;
@@ -2353,8 +2517,85 @@ mod tests {
     }
 
     #[test]
+    fn shots_break_a_sand_block_and_a_saved_run_keeps_it_broken() {
+        use crate::level::{Terrain, Tile};
+        // The sand castle a few steps from the start of the beach.
+        let mut w = sol_city_on(11, 35);
+        w.god = true;
+        let b = w.blocks.at_px(14 * TILE + 4, 35 * TILE + 4).expect("a block at the castle's foot");
+        assert_eq!(w.map().tile(14, 35), Tile::Solid, "a block is rock while it stands");
+        let mut events = Events::default();
+        for _ in 0..12 {
+            events.insert(tap(&mut w, keys::B));
+            events.insert(hold(&mut w, 0, 12));
+        }
+        assert!(w.blocks.is_broken(b) && events.contains(Events::BREAK), "a few bolts bring it down");
+        assert_eq!(w.map().tile(14, 35), Tile::Empty, "and it is air");
+        hold(&mut w, keys::RIGHT, 30);
+        assert!(w.player.body.rect().right() > 14 * TILE, "the wassie walks into the gap");
+        let progress = Progress { level: 2, checkpoint: Some(w.checkpoint), taken: w.taken(), ..Progress::default() };
+        let again = World::resume(&progress, Difficulty::Normal);
+        assert!(again.blocks.is_broken(b), "a saved run keeps it broken");
+        assert_eq!(again.map().tile(15, 34), Tile::Empty);
+    }
+
+    /// The crate tower on the dock: two crates stacked at columns 168-169.
+    fn dock_tower(w: &World) -> (usize, usize) {
+        let bottom = w.blocks.at_px(168 * TILE + 4, 35 * TILE + 4).expect("the tower's bottom crate");
+        let top = w.blocks.at_px(168 * TILE + 4, 33 * TILE + 4).expect("the crate on top");
+        (bottom, top)
+    }
+
+    #[test]
+    fn a_crate_with_nothing_under_it_falls_and_lands() {
+        use crate::level::{Terrain, Tile};
+        let mut w = sol_city_on(150, 35);
+        let (bottom, top) = dock_tower(&w);
+        hold(&mut w, 0, 10);
+        assert_eq!(w.blocks.rect(top).y, 32 * TILE, "held up by the crate under it");
+        let mut events = Events::default();
+        w.hit_block(bottom, 99, &mut events);
+        assert!(events.contains(Events::BREAK));
+        hold(&mut w, 0, 2);
+        assert!(w.blocks.falling(top), "it drops");
+        hold(&mut w, 0, 40);
+        assert!(!w.blocks.falling(top));
+        assert_eq!(w.blocks.rect(top).bottom(), 36 * TILE, "on the quay");
+        assert_eq!((w.map().tile(168, 35), w.map().tile(168, 33)), (Tile::Solid, Tile::Empty));
+        assert_eq!(w.actors[w.blocks.slots()[top] as usize].body.y(), 34 * TILE, "drawn where it is");
+        // And a saved run puts it there straight away.
+        let progress = Progress { level: 2, checkpoint: Some(w.checkpoint), taken: w.taken(), ..Progress::default() };
+        let again = World::resume(&progress, Difficulty::Normal);
+        assert_eq!(again.blocks.rect(top).bottom(), 36 * TILE);
+    }
+
+    #[test]
+    fn every_sol_city_block_starts_at_rest() {
+        let mut w = sol_city_on(150, 35);
+        let before: alloc::vec::Vec<_> = (0..w.blocks.len()).map(|i| w.blocks.rect(i)).collect();
+        hold(&mut w, 0, 5);
+        for (i, r) in before.iter().enumerate() {
+            assert_eq!(w.blocks.rect(i), *r, "block {i} at {r:?} has nothing under it");
+        }
+    }
+
+    #[test]
+    fn a_falling_crate_shatters_on_the_wassie() {
+        let mut w = sol_city_on(150, 35);
+        let (bottom, top) = dock_tower(&w);
+        let mut events = Events::default();
+        w.hit_block(bottom, 99, &mut events);
+        // The wassie steps in where the bottom crate stood.
+        w.player = Player::new(Body::standing_on_tile(168, 35, PLAYER_W, PLAYER_H));
+        let hp = w.player.hp;
+        let events = hold(&mut w, 0, 30);
+        assert!(w.blocks.is_broken(top) && events.contains(Events::BREAK), "it comes apart on impact");
+        assert!(events.contains(Events::HIT) && w.player.hp < hp, "and it hurts");
+    }
+
+    #[test]
     fn falling_in_the_water_is_a_pit() {
-        let mut w = sol_city_on(106, 35);
+        let mut w = sol_city_on(176, 35);
         w.player.body.y_fx += 12 * FX;
         let hp = w.player.hp;
         let events = w.step(&Input::default());
@@ -2377,12 +2618,12 @@ mod tests {
 
     #[test]
     fn the_portal_waits_for_its_keeper_then_takes_the_wassie() {
-        let mut w = sol_city_on(262, 35);
+        let mut w = sol_city_on(264, 57);
         w.god = true;
         assert!(w.keeps_portal(1) && !w.portal_open(), "the cosmonaut minds it");
         hold(&mut w, keys::LEFT, 30);
         assert_eq!(w.warp, 0, "shut until it has spoken");
-        let mut w = sol_city_on(249, 35);
+        let mut w = sol_city_on(252, 57);
         w.god = true;
         hold(&mut w, 0, 2);
         assert_eq!(w.npc_due.take(), Some(1));

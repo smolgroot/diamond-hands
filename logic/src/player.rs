@@ -3,7 +3,6 @@
 
 use crate::{
     FX,
-    level::Level,
     physics::{Body, Contacts},
     world::{Events, Input},
 };
@@ -185,7 +184,7 @@ impl Player {
     }
 
     /// One frame of movement. Ignores input while hurt.
-    pub fn update(&mut self, input: &Input, level: &Level, events: &mut Events) -> Contacts {
+    pub fn update(&mut self, input: &Input, level: &impl crate::level::Terrain, events: &mut Events) -> Contacts {
         let control = self.hurt == 0;
         let body = &mut self.body;
 
@@ -332,6 +331,7 @@ pub(crate) fn approach(value: i32, target: i32, step: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::level::Level;
     use crate::{
         game::keys,
         physics::Body,

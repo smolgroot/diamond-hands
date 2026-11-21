@@ -10,6 +10,7 @@
 extern crate alloc;
 
 pub mod arrival;
+pub mod block;
 pub mod boss;
 pub mod bot;
 pub mod controls;

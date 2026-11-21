@@ -1,7 +1,7 @@
 //! Projectiles: the wassie's blaster bolts and charged beams, and everything the bad
 //! guys throw back.
 
-use crate::{FX, level::Level, physics::Rect};
+use crate::{FX, physics::Rect};
 
 pub const MAX_SHOTS: usize = 24;
 /// Gravity on a thrown cucumber, per frame.
@@ -140,7 +140,8 @@ impl Shot {
     }
 
     /// Moves one frame; fizzles on running out of life or into rock.
-    pub fn update(&mut self, level: &Level) {
+    pub fn update(&mut self, map: &crate::block::Map) {
+        let level = map.level;
         if let Some((g, max)) = self.kind.gravity() {
             self.vy_fx = (self.vy_fx + g).min(max);
         }
@@ -148,7 +149,7 @@ impl Shot {
         self.y_fx += self.vy_fx;
         self.life = self.life.saturating_sub(1);
         let r = self.rect();
-        let blocked = level.solid_px(r.centre_x(), r.centre_y());
+        let blocked = crate::level::Terrain::solid_px(map, r.centre_x(), r.centre_y());
         let below_map = r.y > level.px_height();
         if self.life == 0 || blocked || below_map {
             self.active = false;

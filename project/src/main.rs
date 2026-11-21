@@ -18,6 +18,7 @@ mod music;
 mod probe;
 mod render;
 mod save;
+mod screens;
 mod sound;
 mod splash;
 /// Sol City's screen, drawn from its studio room: shared with the `sol-city` ROM.
@@ -83,8 +84,11 @@ fn main(mut gba: agb::Gba) -> ! {
         } else if splash.is_none() && drawer.is_none() {
             drawer = Some(match want {
                 DrawerKind::Classic => Drawer::Classic(boxed(|| render::Renderer::new(&mut gfx))),
-                DrawerKind::Studio => Drawer::Studio(boxed(|| studio_screen::Screen::new(studio_world, &mut gfx))),
+                DrawerKind::Studio => Drawer::Studio(boxed(|| studio_screen::Screen::new(studio_world))),
             });
+        }
+        if let Some(Drawer::Studio(screen)) = &mut drawer {
+            screen.prepare(&game, &mut gfx);
         }
         let mut frame = gfx.frame();
         if game.scene == Scene::Splash {

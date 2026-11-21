@@ -146,9 +146,24 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
   - The pause menu's state is in `logic/src/game.rs`; what it lists comes from
     `logic/src/controls.rs` (button bindings) and `logic/src/inventory.rs` (the bag's items).
     A new item needs an entry there and an icon in `game/src/art/menu.rs`.
-  - Sol City is painted in GBA-Studio, not in ASCII: `logic/build.rs` reads
-    `project/studio/rooms/sol-city.json` (collision and entities, and the zookeeper's and
-    cosmonaut's `talk` properties) and writes the map rows and dialogue at compile time.
+  - Sol City is painted in GBA-Studio, not in ASCII, as six rooms in `project/studio/rooms/`:
+    `beach` and `harbor` (the quay's shops) in the painted `sol-city` tileset, the
+    `jurassic-zoo`, the `service-tunnels` and the `wormhole-hq` building, and the `marina`.
+    The zoo, the tunnels and the Wormhole building were made with the studio's
+    `tileset_generate` and `room_generate` tools (pictures under `project/generated/`),
+    then given their doorways, girders and entities by hand. Blocks the wassie can shoot
+    apart are entities too: `sand-block`, `dock-crate` and `soil-block` (16x16, feet on
+    the 8 px grid, over air). `build.rs` puts only their marker in the map;
+    `logic/src/block.rs` makes them solid wherever they are now, drops any with nothing
+    under them (rock, or another block it overlaps by a tile), and shatters one that
+    lands on the wassie or a villain. A band of light sweeps across each one every two
+    seconds, as on a loading skeleton: the `<block>-sheen` sprites, derived from the
+    blocks' own art by `python3 tools/block-sheen.py` (it never overwrites a sheet that
+    is already there unless given `--force`, so a hand-repainted one stays). `logic/build.rs` stitches them where
+    they sit on the world map (collision and entities, and the zookeeper's and cosmonaut's
+    `talk` properties) and writes the map rows, dialogue and camera zones at compile time.
+    The camera stays inside a room and cuts to the next at a doorway, where the screen goes
+    black for a frame while the next room's tileset loads.
     Edit it in the studio; the tests and the route bot then play exactly what the ROM draws.
   - The `studio` feature marks the build as the studio ROM: only it can play studio-made
     levels. Without it (the code-drawn ROM), Sol City shows on the map as coming soon.
@@ -266,7 +281,8 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   command, `--features dev`) opens it on the map without beating the first two bosses;
   it is also in a ROM of its own (`--features sol-city --bin sol-city`). Its pause menu
   and the map come from the code-drawn renderer; switching to or from them shows one
-  blank frame.
+  blank frame. Its dialogue box is made of sprites (the room's four layers leave no
+  background for it), and the scene behind it isn't dimmed as in the other levels.
   Ethereum City shows on the map once unlocked but can't be played yet. The Trenches and Sol City
   borrow the Badlands' music.
 - Still drawn in code in the studio ROM: terrain tiles and the day-to-night lighting, the

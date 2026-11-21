@@ -276,6 +276,27 @@
       "colour": "#c03050",
       "sprite": "sentry",
       "props": []
+    },
+    {
+      "id": "sand-block",
+      "name": "Sand block (shoot to break)",
+      "colour": "#f2d48a",
+      "sprite": "sand-block-sheen",
+      "props": []
+    },
+    {
+      "id": "dock-crate",
+      "name": "Dock crate (shoot to break)",
+      "colour": "#9a5a2a",
+      "sprite": "dock-crate-sheen",
+      "props": []
+    },
+    {
+      "id": "soil-block",
+      "name": "Soil block (shoot to break)",
+      "colour": "#6a4a2a",
+      "sprite": "soil-block-sheen",
+      "props": []
     }
   ],
   "physics": {

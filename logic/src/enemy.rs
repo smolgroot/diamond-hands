@@ -3,7 +3,8 @@
 
 use crate::{
     FX, TILE,
-    level::Level,
+    block::{BlockLook, Map},
+    level::{Level, Terrain},
     physics::{Body, Rect},
     player::GRAVITY_FX,
     shot::{self, MAX_SHOTS, Shot, ShotKind},
@@ -52,6 +53,9 @@ pub enum ActorKind {
     Gate,
     /// A blockade bot at the Wormhole terminal's door: armoured, it can't be beaten.
     Blockade,
+    /// A block of sand, a crate or a clod of soil that the wassie can shoot apart: solid
+    /// terrain until it breaks (see [`crate::block`]).
+    Block(BlockLook),
 }
 
 impl ActorKind {
@@ -75,6 +79,7 @@ impl ActorKind {
             b'w' => ActorKind::Portal,
             b'h' => ActorKind::Gate,
             b'm' => ActorKind::Blockade,
+            b'n' | b'u' | b'y' => ActorKind::Block(BlockLook::from_marker(c)?),
             _ => return None,
         })
     }
@@ -99,6 +104,7 @@ impl ActorKind {
             ActorKind::Portal => (16, 52),
             ActorKind::Gate => (16, 32),
             ActorKind::Blockade => (16, 26),
+            ActorKind::Block(_) => (16, 16),
         }
     }
 
@@ -139,6 +145,7 @@ impl ActorKind {
         match self {
             ActorKind::Guard => 6,
             ActorKind::Dino => 4,
+            ActorKind::Block(look) => look.hp(),
             ActorKind::Sentry | ActorKind::Dealer => 3,
             ActorKind::Crawler | ActorKind::Drone => 2,
             _ => 1,
@@ -258,7 +265,16 @@ impl Actor {
     /// bottom edge, fliers and pickups are centred in it.
     pub fn spawn(kind: ActorKind, tx: i32, ty: i32) -> Actor {
         let (w, h) = kind.size();
-        let body = if kind.flies() && kind != ActorKind::Checkpoint {
+        let body = if let ActorKind::Block(_) = kind {
+            // The marker is the block's bottom-left tile.
+            Body {
+                x_fx: tx * TILE * FX,
+                y_fx: ((ty + 1) * TILE - h) * FX,
+                w,
+                h,
+                ..Body::default()
+            }
+        } else if kind.flies() && kind != ActorKind::Checkpoint {
             let x = tx * TILE + TILE / 2 - w / 2;
             let y = ty * TILE + TILE / 2 - h / 2;
             Body {
@@ -344,6 +360,8 @@ impl Actor {
 /// What an enemy can see and touch during its update.
 pub struct Ctx<'a> {
     pub level: &'a Level,
+    /// The level with the blocks the wassie has broken: what villains walk on.
+    pub map: Map<'a>,
     pub player: Rect,
     pub shots: &'a mut [Shot; MAX_SHOTS],
     pub difficulty: Difficulty,
@@ -377,11 +395,12 @@ impl Actor {
             | ActorKind::Coin
             | ActorKind::Part
             | ActorKind::Jetpack
-            | ActorKind::Terminal => {}
+            | ActorKind::Terminal
+            | ActorKind::Block(_) => {}
         }
     }
 
-    fn fall(&mut self, level: &Level) -> crate::physics::Contacts {
+    fn fall(&mut self, level: &impl Terrain) -> crate::physics::Contacts {
         self.body.vy_fx = (self.body.vy_fx + GRAVITY_FX).min(4 * FX);
         self.body.step(level)
     }
@@ -401,7 +420,7 @@ impl Actor {
         match self.state {
             state::AIM => {
                 self.body.vx_fx = 0;
-                self.fall(ctx.level);
+                self.fall(&ctx.map);
                 if self.timer == 0 {
                     let r = self.rect();
                     shot::spawn(
@@ -418,7 +437,7 @@ impl Actor {
             }
             state::RECOIL => {
                 self.body.vx_fx = 0;
-                self.fall(ctx.level);
+                self.fall(&ctx.map);
                 if self.timer == 0 {
                     self.state = state::IDLE;
                     self.timer = ctx.difficulty.fire_interval(110) - SENTRY_RECOIL_FRAMES;
@@ -426,10 +445,10 @@ impl Actor {
             }
             _ => {
                 self.body.vx_fx = self.facing * FX / 2;
-                let contacts = self.fall(ctx.level);
+                let contacts = self.fall(&ctx.map);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
+                let ledge = contacts.ground && !ctx.map.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -472,7 +491,7 @@ impl Actor {
                 }
             }
         }
-        let contacts = self.fall(ctx.level);
+        let contacts = self.fall(&ctx.map);
         if contacts.wall() && self.state == state::LUNGE {
             self.state = state::RETURN;
         }
@@ -496,7 +515,7 @@ impl Actor {
 
     fn mine(&mut self, ctx: &mut Ctx) {
         self.body.vx_fx = -FX;
-        let contacts = self.fall(ctx.level);
+        let contacts = self.fall(&ctx.map);
         if contacts.ground {
             self.body.vy_fx = -2 * FX;
         }
@@ -511,7 +530,7 @@ impl Actor {
         match self.state {
             state::AIM => {
                 self.body.vx_fx = 0;
-                self.fall(ctx.level);
+                self.fall(&ctx.map);
                 if self.timer == 0 {
                     let r = self.rect();
                     let x = r.centre_x() + self.facing * 8;
@@ -528,10 +547,10 @@ impl Actor {
                     self.facing = -self.facing;
                 }
                 self.body.vx_fx = self.facing * FX / 3;
-                let contacts = self.fall(ctx.level);
+                let contacts = self.fall(&ctx.map);
                 let r = self.rect();
                 let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-                let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
+                let ledge = contacts.ground && !ctx.map.ground_ahead(front, r.bottom());
                 if contacts.wall() || ledge {
                     self.facing = -self.facing;
                 }
@@ -556,7 +575,7 @@ impl Actor {
                 self.state = state::CALM;
             }
             self.body.vx_fx = 0;
-            self.fall(ctx.level);
+            self.fall(&ctx.map);
             return;
         }
         match self.state {
@@ -583,10 +602,10 @@ impl Actor {
                 }
             }
         }
-        let contacts = self.fall(ctx.level);
+        let contacts = self.fall(&ctx.map);
         let r = self.rect();
         let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-        let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
+        let ledge = contacts.ground && !ctx.map.ground_ahead(front, r.bottom());
         if contacts.wall() || ledge {
             if ledge {
                 self.body.x_fx -= self.body.vx_fx;
@@ -602,7 +621,7 @@ impl Actor {
     /// Holds its post at the door, facing the wassie, and fires a round now and then.
     fn blockade(&mut self, ctx: &mut Ctx) {
         self.body.vx_fx = 0;
-        self.fall(ctx.level);
+        self.fall(&ctx.map);
         self.face_player(&ctx.player);
         if self.timer == 0 && self.in_line(&ctx.player, 120, 24) {
             let r = self.rect();
@@ -669,10 +688,10 @@ impl Actor {
                 }
             }
         }
-        let contacts = self.fall(ctx.level);
+        let contacts = self.fall(&ctx.map);
         let r = self.rect();
         let front = if self.facing > 0 { r.right() } else { r.x - 1 };
-        let ledge = contacts.ground && !ctx.level.ground_ahead(front, r.bottom());
+        let ledge = contacts.ground && !ctx.map.ground_ahead(front, r.bottom());
         if ledge {
             // Never walk off the floor it guards.
             self.body.x_fx -= self.facing * FX;

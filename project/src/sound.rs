@@ -221,6 +221,12 @@ impl Sfx {
                 SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
             }
+            if events.contains(Events::BREAK) && !events.contains(Events::BEAM) {
+                // A short, gritty crunch on the noise channel: divider 1 and shift 2
+                // sit higher than the beam's rumble.
+                SOUND4CNT_L.write_volatile(tone(0, 0, 1, 12));
+                SOUND4CNT_H.write_volatile(1 | 2 << 4 | RESTART);
+            }
         }
     }
 

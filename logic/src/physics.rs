@@ -9,7 +9,7 @@
 //! looked for above that. Walking down one, a body that was standing is pulled down
 //! onto it rather than stepping off into the air.
 
-use crate::{FX, TILE, level::Level, level::Tile};
+use crate::{FX, TILE, level::Terrain, level::Tile};
 
 /// How far over the feet a slope's floor may be and still be stepped up onto, in
 /// pixels: more than a frame's climb at the fastest walk or lunge.
@@ -123,7 +123,7 @@ impl Body {
 
     /// Moves by the velocity, stopping at walls, floors, ceilings and the tops of
     /// one-way planks. Velocity on a blocked axis is zeroed.
-    pub fn step(&mut self, level: &Level) -> Contacts {
+    pub fn step(&mut self, level: &impl Terrain) -> Contacts {
         let mut contacts = Contacts::default();
         let standing = self.vy_fx >= 0 && self.standing(level);
         self.move_x(level, &mut contacts);
@@ -133,7 +133,7 @@ impl Body {
         contacts
     }
 
-    fn move_x(&mut self, level: &Level, contacts: &mut Contacts) {
+    fn move_x(&mut self, level: &impl Terrain, contacts: &mut Contacts) {
         if self.vx_fx == 0 {
             return;
         }
@@ -162,7 +162,7 @@ impl Body {
         }
     }
 
-    fn move_y(&mut self, level: &Level, contacts: &mut Contacts, standing: bool) {
+    fn move_y(&mut self, level: &impl Terrain, contacts: &mut Contacts, standing: bool) {
         let old_bottom = self.bottom();
         self.y_fx += self.vy_fx;
         let r = self.rect();
@@ -209,7 +209,7 @@ impl Body {
     }
 
     /// Whether there is floor directly under the body (without moving it).
-    pub fn on_floor(&self, level: &Level) -> bool {
+    pub fn on_floor(&self, level: &impl Terrain) -> bool {
         let r = self.rect();
         let ty = r.bottom().div_euclid(TILE);
         (r.x.div_euclid(TILE)..=(r.right() - 1).div_euclid(TILE))
@@ -218,7 +218,7 @@ impl Body {
 
     /// Whether the body stands on something: a slope's floor under its centre, to the
     /// pixel, or else flat floor directly under it.
-    pub fn standing(&self, level: &Level) -> bool {
+    pub fn standing(&self, level: &impl Terrain) -> bool {
         let r = self.rect();
         match level.slope_floor(r.centre_x(), r.bottom()) {
             Some(y) => (y - r.bottom()).abs() <= 1,
@@ -237,6 +237,7 @@ pub fn tiles_in(r: &Rect) -> impl Iterator<Item = (i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::level::Level;
 
     const ROOM: Level = Level {
         rows: &[

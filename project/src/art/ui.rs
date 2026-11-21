@@ -4,12 +4,15 @@
 //! painted once at boot from flat fills and repeating patterns, so most of their cells
 //! share tiles.
 
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
-use agb::display::{
-    Palette16, WIDTH,
-    object::SpriteVram,
-    tiled::{DynamicTile16, RegularBackground, TileEffect},
+use agb::{
+    display::{
+        GraphicsFrame, Palette16, Priority, WIDTH,
+        object::{DynamicSprite16, Object, Size, SpriteVram},
+        tiled::{DynamicTile16, RegularBackground, TileEffect},
+    },
+    fixnum::vec2,
 };
 use diamond_hands_logic::{levels::MAP, talk};
 
@@ -273,6 +276,102 @@ pub struct DialogText {
     shown: Vec<u8>,
     /// The page in `next`, and which side it was painted for.
     last: Option<(bool, Page<'static>)>,
+    /// Set when the box is drawn as sprites ([`DialogText::for_sprites`]): the text's
+    /// tiles go into them instead of `tiles`.
+    sprites: Option<Box<BoxSprites>>,
+}
+
+/// Sprites across the box: 64 pixels wide each, as many as cover the screen.
+const BOX_SPRITES: usize = (WIDTH as usize).div_ceil(64);
+
+/// The box's columns outside the text cells: the portrait frame's strip.
+const STRIP_W: usize = WIDTH as usize - TEXT_W;
+
+/// The dialogue box as a row of 64x64 sprites over the top of the screen, for a level
+/// whose backgrounds are all taken (a room painted in the studio fills all four). Only
+/// the portrait frame's strip is kept here; [`DialogText`] writes the text cells.
+struct BoxSprites {
+    /// The portrait frame's strip, on the left then on the right, a pixel a byte.
+    strips: [Vec<u8>; 2],
+    /// The box as it should show now, and the side its frame is on.
+    now: [DynamicSprite16; BOX_SPRITES],
+    side: Option<bool>,
+    /// Each sprite in VRAM, re-sent when its bit in `dirty` is set.
+    vram: [Option<SpriteVram>; BOX_SPRITES],
+    dirty: u8,
+}
+
+/// The screen column the portrait frame's strip starts at.
+const fn strip_x(right: bool) -> usize {
+    if right { TEXT_W } else { 0 }
+}
+
+/// Writes one 4-bit pixel into a 64x64 sprite's tiles.
+fn sprite_pixel(sprite: &mut DynamicSprite16, x: usize, y: usize, colour: u8) {
+    let byte = ((y / 8) * 8 + x / 8) * 32 + (y % 8) * 4 + (x % 8) / 2;
+    let shift = (x % 2) * 4;
+    let data = sprite.data_mut();
+    data[byte] = (data[byte] & !(0xF << shift)) | (colour << shift);
+}
+
+impl BoxSprites {
+    fn new() -> Self {
+        let strips = [false, true].map(|right| {
+            let mut pixels = vec![0; STRIP_W * BOX_HEIGHT as usize];
+            for (i, p) in pixels.iter_mut().enumerate() {
+                let (x, y) = (strip_x(right) + i % STRIP_W, i / STRIP_W);
+                *p = box_pixel(x as i32, y as i32, right);
+            }
+            pixels
+        });
+        let now = core::array::from_fn(|_| DynamicSprite16::new(Size::S64x64));
+        Self { strips, now, side: None, vram: [const { None }; BOX_SPRITES], dirty: 0 }
+    }
+
+    /// Turns the box to the side with the frame `right`: clears it and paints that
+    /// side's frame strip, leaving the text cells to be written. Returns whether it
+    /// changed.
+    fn turn(&mut self, right: bool) -> bool {
+        if self.side == Some(right) {
+            return false;
+        }
+        for sprite in &mut self.now {
+            sprite.clear(pal::CLEAR as usize);
+        }
+        let x0 = strip_x(right);
+        for (i, &colour) in self.strips[right as usize].iter().enumerate() {
+            let (x, y) = (x0 + i % STRIP_W, i / STRIP_W);
+            sprite_pixel(&mut self.now[x / 64], x % 64, y, colour);
+        }
+        self.side = Some(right);
+        self.dirty = u8::MAX;
+        true
+    }
+
+    /// Writes the 8x8 tile at screen cell `(tx, ty)`, as words of a row each.
+    fn write_tile(&mut self, tx: usize, ty: usize, rows: impl Iterator<Item = u32>) {
+        let (index, col) = (tx / 8, tx % 8);
+        let Some(sprite) = self.now.get_mut(index) else {
+            return;
+        };
+        let start = (ty * 8 + col) * 32;
+        for (row, word) in rows.enumerate() {
+            sprite.data_mut()[start + row * 4..start + row * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        self.dirty |= 1 << index;
+    }
+
+    fn show(&mut self, frame: &mut GraphicsFrame) {
+        for (i, (vram, sprite)) in self.vram.iter_mut().zip(&self.now).enumerate() {
+            if self.dirty & (1 << i) != 0 || vram.is_none() {
+                *vram = Some(sprite.to_vram(&DIALOG_PALETTE));
+            }
+            if let Some(vram) = vram {
+                Object::new(vram.clone()).set_pos(vec2(i as i32 * 64, 0)).set_priority(Priority::P0).show(frame);
+            }
+        }
+        self.dirty = 0;
+    }
 }
 
 /// Points every text cell, in both copies of the box, at `tile(index)`.
@@ -300,7 +399,23 @@ fn text_tiles(bg: &mut RegularBackground) -> Vec<DynamicTile16> {
 
 impl DialogText {
     pub fn new(bg: &mut RegularBackground) -> Self {
-        let tiles = text_tiles(bg);
+        Self::with_tiles(text_tiles(bg), None)
+    }
+
+    /// The box and its text as sprites, shown with [`Self::show_sprites`]: for a level
+    /// with no background layer to spare. Painting the box takes a few frames' work.
+    pub fn for_sprites() -> Self {
+        Self::with_tiles(Vec::new(), Some(Box::new(BoxSprites::new())))
+    }
+
+    /// Shows the box made by [`Self::for_sprites`], with the page last painted.
+    pub fn show_sprites(&mut self, frame: &mut GraphicsFrame) {
+        if let Some(sprites) = &mut self.sprites {
+            sprites.show(frame);
+        }
+    }
+
+    fn with_tiles(tiles: Vec<DynamicTile16>, sprites: Option<Box<BoxSprites>>) -> Self {
         let base = [false, true].map(|right| {
             let x0 = first_col(right) * 8;
             let mut pixels = vec![0; TEXT_W * TEXT_H];
@@ -317,6 +432,7 @@ impl DialogText {
             // Matches no colour, so the first paint writes every tile.
             shown: vec![u8::MAX; TEXT_W * TEXT_H],
             last: None,
+            sprites,
         }
     }
 
@@ -392,8 +508,12 @@ impl DialogText {
     /// new line or speaker repaints everything. Either way, only the tiles whose pixels
     /// changed are written.
     pub fn paint(&mut self, right: bool, page: &Page<'static>) {
-        if self.tiles.is_empty() {
+        if self.tiles.is_empty() && self.sprites.is_none() {
             return;
+        }
+        if self.sprites.as_mut().is_some_and(|s| s.turn(right)) {
+            // The sprites went back to the empty box: every text tile is new.
+            self.shown.fill(u8::MAX);
         }
         let text_x = layout(right).text_x - first_col(right) * 8;
         let follows = self.last.as_ref().is_some_and(|(was_right, old)| {
@@ -468,12 +588,18 @@ impl DialogText {
                 if rows.clone().all(|r| self.next[r.clone()] == self.shown[r]) {
                     continue;
                 }
-                let tile = &mut self.tiles[ty as usize * cols + tx as usize];
                 // A whole row of the tile per word, a nibble a pixel, leftmost lowest.
-                for (word, r) in tile.data_mut().iter_mut().zip(rows) {
+                let mut words = [0u32; 8];
+                for (word, r) in words.iter_mut().zip(rows) {
                     let pixels = &self.next[r.clone()];
                     *word = pixels.iter().rev().fold(0, |acc, &p| acc << 4 | u32::from(p));
                     self.shown[r.clone()].copy_from_slice(pixels);
+                }
+                if let Some(sprites) = &mut self.sprites {
+                    let right = self.last.is_some_and(|(right, _)| right);
+                    sprites.write_tile((first_col(right) + tx) as usize, ty as usize, words.into_iter());
+                } else {
+                    self.tiles[ty as usize * cols + tx as usize].data_mut().copy_from_slice(&words);
                 }
             }
         }

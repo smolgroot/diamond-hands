@@ -1,7 +1,12 @@
 //! Reads the levels painted in GBA-Studio (`../project/studio/`) and writes them out as
 //! the map rows and dialogue `logic` plays: one character per 8x8 cell, in the legend of
-//! `src/level.rs`. The studio room is the only place such a level is edited; this keeps
+//! `src/level.rs`. The studio rooms are the only place such a level is edited; this keeps
 //! the rules, the host tests and the route bot on exactly the map the ROM draws.
+//!
+//! A level is several rooms, stitched into one map where they sit on the studio's world
+//! map; cells no room covers are rock. Each room, or each run of side-by-side rooms of one
+//! tileset and height, is a camera zone: the camera stays inside it, and cuts to the next
+//! zone when the wassie walks through a doorway (`ZONES`, in tiles).
 //!
 //! A cell's character comes from its collision, resolved as the studio's build does (a
 //! painted override, else the frontmost tile that has a class). An entity becomes its
@@ -13,8 +18,8 @@ use std::{collections::HashMap, env, fmt::Write, fs, path::PathBuf};
 
 use serde_json::Value;
 
-/// Studio rooms played as levels: room id, and the name of the generated module.
-const ROOMS: &[(&str, &str)] = &[("sol-city", "sol_city")];
+/// Levels made in the studio: the name of the generated module, and its rooms.
+const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
 
 /// Entity type to map marker.
 const MARKERS: &[(&str, u8)] = &[
@@ -40,6 +45,11 @@ const MARKERS: &[(&str, u8)] = &[
     ("power-gate", b'h'),
     ("bot-blockade", b'm'),
 ];
+
+/// Breakable blocks: entity type to the marker of its bottom-left tile. A block is 16x16
+/// pixels with its feet at the middle of its bottom edge, on the 8 px grid, over 2x2
+/// cells of air; only its marker goes in the map, since it moves (see `src/block.rs`).
+const BLOCKS: &[(&str, u8)] = &[("sand-block", b'n'), ("dock-crate", b'u'), ("soil-block", b'y')];
 
 /// The speaker of an entity type's lines.
 const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo")];
@@ -86,51 +96,81 @@ fn main() {
         }
     };
 
-    for &(id, module) in ROOMS {
-        let room = read(&studio.join(format!("rooms/{id}.json")));
-        let tileset = read(&studio.join(format!("tilesets/{}.json", room["tileset"].as_str().unwrap())));
-        let tile_class: HashMap<u32, usize> = tileset["collision"]
-            .as_object()
-            .unwrap()
+    let world = read(&studio.join("world.json"));
+    for &(module, ids) in LEVELS {
+        // Each room's screen on the world map, then the box around them all.
+        let placed: Vec<(&str, Value, i64, i64)> = ids
             .iter()
-            .map(|(tile, class)| {
-                let class = classes.iter().position(|c| c.0 == class.as_str().unwrap()).expect("known class");
-                (tile.parse::<u32>().unwrap(), class)
+            .map(|&id| {
+                let room = read(&studio.join(format!("rooms/{id}.json")));
+                let place = world["rooms"].as_array().unwrap().iter().find(|p| p["room"] == id).unwrap_or_else(|| panic!("{id} is not on the world map"));
+                (id, room, place["x"].as_i64().unwrap(), place["y"].as_i64().unwrap())
             })
             .collect();
-        let (cols, rows) = (room["width"].as_u64().unwrap() as usize * 30, room["height"].as_u64().unwrap() as usize * 20);
-        let cells = cols * rows;
-        let layers: Vec<Vec<u32>> = room["layers"].as_array().unwrap().iter().map(|l| decode(&l["data"], cells)).collect();
-        let overrides = room.get("collision").filter(|v| !v.is_null()).map(|d| decode(d, cells));
-
-        let mut map: Vec<Vec<u8>> = (0..rows)
-            .map(|row| {
-                (0..cols)
-                    .map(|col| {
-                        let i = row * cols + col;
-                        let class = match overrides.as_ref().map(|o| o[i]).filter(|&o| o > 0) {
-                            Some(o) => o as usize - 1,
-                            None => layers
-                                .iter()
-                                .rev()
-                                .filter(|layer| layer[i] > 0)
-                                .filter_map(|layer| tile_class.get(&(layer[i] - 1)).copied())
-                                .find(|&c| classes[c].1 != "empty")
-                                .unwrap_or(0),
-                        };
-                        class_char(&classes[class].0, &classes[class].1)
-                    })
-                    .collect()
-            })
-            .collect();
-
-        // People, in map order (row by row) as `logic` numbers them: (row, col, lines).
+        let sx0 = placed.iter().map(|p| p.2).min().unwrap();
+        let sy0 = placed.iter().map(|p| p.3).min().unwrap();
+        let sx1 = placed.iter().map(|p| p.2 + p.1["width"].as_i64().unwrap()).max().unwrap();
+        let sy1 = placed.iter().map(|p| p.3 + p.1["height"].as_i64().unwrap()).max().unwrap();
+        let (cols, rows) = ((sx1 - sx0) as usize * 30, (sy1 - sy0) as usize * 20);
+        let mut map = vec![vec![b'#'; cols]; rows];
         let mut people: Vec<(usize, usize, Vec<String>)> = Vec::new();
-        for entity in room["entities"].as_array().unwrap() {
+        // Zones as (left, top, right, bottom) in tiles, right and bottom exclusive, with
+        // the tileset they are drawn in.
+        let mut zones: Vec<(usize, usize, usize, usize, String)> = Vec::new();
+
+        for (id, room, sx, sy) in &placed {
+            let (left, top) = ((*sx - sx0) as usize * 30, (*sy - sy0) as usize * 20);
+            let tileset_id = room["tileset"].as_str().unwrap();
+            let tileset = read(&studio.join(format!("tilesets/{tileset_id}.json")));
+            let tile_class: HashMap<u32, usize> = tileset["collision"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(tile, class)| {
+                    let class = classes.iter().position(|c| c.0 == class.as_str().unwrap()).expect("known class");
+                    (tile.parse::<u32>().unwrap(), class)
+                })
+                .collect();
+            let (room_cols, room_rows) = (room["width"].as_u64().unwrap() as usize * 30, room["height"].as_u64().unwrap() as usize * 20);
+            let cells = room_cols * room_rows;
+            let layers: Vec<Vec<u32>> = room["layers"].as_array().unwrap().iter().map(|l| decode(&l["data"], cells)).collect();
+            let overrides = room.get("collision").filter(|v| !v.is_null()).map(|d| decode(d, cells));
+            for row in 0..room_rows {
+                for col in 0..room_cols {
+                    let i = row * room_cols + col;
+                    let class = match overrides.as_ref().map(|o| o[i]).filter(|&o| o > 0) {
+                        Some(o) => o as usize - 1,
+                        None => layers
+                            .iter()
+                            .rev()
+                            .filter(|layer| layer[i] > 0)
+                            .filter_map(|layer| tile_class.get(&(layer[i] - 1)).copied())
+                            .find(|&c| classes[c].1 != "empty")
+                            .unwrap_or(0),
+                    };
+                    map[top + row][left + col] = class_char(&classes[class].0, &classes[class].1);
+                }
+            }
+            zones.push((left, top, left + room_cols, top + room_rows, tileset_id.to_owned()));
+            // People, in map order (row by row) as `logic` numbers them: (row, col, lines).
+            for entity in room["entities"].as_array().unwrap() {
             let kind = entity["type"].as_str().unwrap();
+            if let Some(&(_, marker)) = BLOCKS.iter().find(|b| b.0 == kind) {
+                let (x, y) = (entity["x"].as_i64().unwrap(), entity["y"].as_i64().unwrap());
+                assert!(x % 8 == 0 && y % 8 == 0, "{id}: {kind} at {x},{y} is off the 8 px grid");
+                let (col, row) = (left + (x as usize - 8) / 8, top + (y as usize - 16) / 8);
+                for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let cell = &mut map[row + dy][col + dx];
+                    assert_eq!(*cell, b'.', "{id}: {kind} at {x},{y} overlaps a cell that isn't air ({})", *cell as char);
+                    if (dy, dx) == (1, 0) {
+                        *cell = marker;
+                    }
+                }
+                continue;
+            }
             let &(_, marker) = MARKERS.iter().find(|m| m.0 == kind).unwrap_or_else(|| panic!("{id}: entity type {kind} has no marker"));
             let (x, y) = (entity["x"].as_i64().unwrap(), entity["y"].as_i64().unwrap());
-            let (col, row) = (x.div_euclid(8) as usize, (y - 1).div_euclid(8) as usize);
+            let (col, row) = (left + x.div_euclid(8) as usize, top + (y - 1).div_euclid(8) as usize);
             let cell = &mut map[row][col];
             assert_eq!(*cell, b'.', "{id}: {kind} at {x},{y} stands in a cell that isn't air ({})", *cell as char);
             *cell = marker;
@@ -148,7 +188,17 @@ fn main() {
                 people.push((row, col, lines));
             }
         }
+        }
         people.sort_by_key(|p| (p.0, p.1));
+        // Side-by-side zones of one tileset and the same rows scroll as one.
+        zones.sort_by_key(|z| (z.1, z.0));
+        let mut merged: Vec<(usize, usize, usize, usize, String)> = Vec::new();
+        for z in zones {
+            match merged.iter_mut().find(|m| m.2 == z.0 && m.1 == z.1 && m.3 == z.3 && m.4 == z.4) {
+                Some(m) => m.2 = z.2,
+                None => merged.push(z),
+            }
+        }
         let mut talks = String::new();
         let mut talk_names = Vec::new();
         for (n, (_, _, lines)) in people.iter().enumerate() {
@@ -157,7 +207,7 @@ fn main() {
         }
 
         let mut code = String::new();
-        writeln!(code, "// Generated by logic/build.rs from project/studio/rooms/{id}.json. Do not edit.").unwrap();
+        writeln!(code, "// Generated by logic/build.rs from the studio rooms {}. Do not edit.", ids.join(", ")).unwrap();
         writeln!(code, "const ROWS: &[&str] = &[").unwrap();
         for row in &map {
             writeln!(code, "    {:?},", String::from_utf8(row.clone()).unwrap()).unwrap();
@@ -165,6 +215,8 @@ fn main() {
         writeln!(code, "];").unwrap();
         code.push_str(&talks);
         writeln!(code, "static TALKS: [&[Line]; {}] = [{}];", talk_names.len(), talk_names.iter().map(|n| format!("&{n}")).collect::<Vec<_>>().join(", ")).unwrap();
+        let zones: Vec<String> = merged.iter().map(|z| format!("({}, {}, {}, {})", z.0, z.1, z.2, z.3)).collect();
+        writeln!(code, "static ZONES: [(i32, i32, i32, i32); {}] = [{}];", zones.len(), zones.join(", ")).unwrap();
         fs::write(out.join(format!("{module}.rs")), code).unwrap();
     }
 }

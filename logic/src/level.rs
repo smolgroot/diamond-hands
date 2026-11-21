@@ -40,6 +40,7 @@
 //! | `w`  | the Wormhole portal: stepping in ends the level |
 //! | `h`  | a gate that stays shut until a terminal (`E`) brings the power back |
 //! | `m`  | a blockade bot: armoured, it can't be beaten, only gone around |
+//! | `n`, `u`, `y` | the bottom-left tile of a 2x2 block the wassie can shoot apart, which falls when nothing holds it up: sand on the beach, a crate on the dock, soil in the zoo (see [`crate::block`]) |
 //!
 //! Studio levels (Sol City) are painted in GBA-Studio; `build.rs` writes their rows in
 //! this legend.
@@ -268,6 +269,10 @@ pub struct Level {
     /// stays inside the storey the wassie is in, and pans when it moves to another.
     /// Empty to follow it anywhere.
     pub bands: &'static [i32],
+    /// A level made of rooms: the rectangles the camera keeps inside, as (left, top,
+    /// right, bottom) in tiles, right and bottom exclusive. Walking from one into the
+    /// next, the camera cuts across instead of scrolling. Empty to roam the whole map.
+    pub zones: &'static [(i32, i32, i32, i32)],
     /// Rows where each deeper stratum of terrain starts, drawn in its own tileset and
     /// palette: the renderer's business. Empty for one stratum.
     pub strata: &'static [i32],
@@ -307,6 +312,7 @@ impl Level {
         sky_rows: 0,
         route: &[],
         bands: &[],
+        zones: &[],
         strata: &[],
         areas: &[],
         backdrop_y: 0,
@@ -318,6 +324,12 @@ impl Level {
 
     pub fn width(&self) -> i32 {
         self.rows[0].len() as i32
+    }
+
+    /// The zone holding pixel `(x, y)`, if the level has zones and one holds it.
+    pub fn zone_at(&self, x: i32, y: i32) -> Option<usize> {
+        let (tx, ty) = (x.div_euclid(TILE), y.div_euclid(TILE));
+        self.zones.iter().position(|&(l, t, r, b)| (l..r).contains(&tx) && (t..b).contains(&ty))
     }
 
     pub fn height(&self) -> i32 {
@@ -369,44 +381,27 @@ impl Level {
 
     /// Tile at a pixel position.
     pub fn tile_at_px(&self, x: i32, y: i32) -> Tile {
-        self.tile(x.div_euclid(TILE), y.div_euclid(TILE))
+        Terrain::tile_at_px(self, x, y)
     }
 
     /// Whether something can stand on tile `(tx, ty)`: rock, a plank or a slope.
     pub fn is_floor(&self, tx: i32, ty: i32) -> bool {
-        matches!(self.tile(tx, ty), Tile::Solid | Tile::OneWay | Tile::Slope(_))
+        Terrain::is_floor(self, tx, ty)
     }
 
-    /// The floor of the slope under pixel column `x` near feet at `bottom`, as a pixel
-    /// row: looks down from the tile above the feet to the one below them, stopping at
-    /// flat floor. `None` where there is no slope there.
+    /// See [`Terrain::slope_floor`].
     pub fn slope_floor(&self, x: i32, bottom: i32) -> Option<i32> {
-        let (tx, lx) = (x.div_euclid(TILE), x.rem_euclid(TILE));
-        let first = (bottom - TILE).div_euclid(TILE);
-        for ty in first..=first + 2 {
-            match self.tile(tx, ty) {
-                Tile::Slope(s) => return Some((ty + 1) * TILE - s.height(lx)),
-                Tile::Solid | Tile::OneWay => return None,
-                _ => {}
-            }
-        }
-        None
+        Terrain::slope_floor(self, x, bottom)
     }
 
-    /// Whether pixel `(x, y)` is inside rock: a solid tile, or under a slope's floor.
+    /// See [`Terrain::solid_px`].
     pub fn solid_px(&self, x: i32, y: i32) -> bool {
-        match self.tile_at_px(x, y) {
-            Tile::Solid => true,
-            Tile::Slope(s) => y.rem_euclid(TILE) >= TILE - s.height(x.rem_euclid(TILE)),
-            _ => false,
-        }
+        Terrain::solid_px(self, x, y)
     }
 
-    /// Whether a walker with its leading foot at pixel column `x` and its feet at
-    /// `bottom` has ground ahead: a floor under the foot, or a slope going on down.
+    /// See [`Terrain::ground_ahead`].
     pub fn ground_ahead(&self, x: i32, bottom: i32) -> bool {
-        let (tx, ty) = (x.div_euclid(TILE), bottom.div_euclid(TILE));
-        self.is_floor(tx, ty) || matches!(self.tile(tx, ty + 1), Tile::Slope(_))
+        Terrain::ground_ahead(self, x, bottom)
     }
 
     /// The top row of the lightning curtain over a fence emitter at `(tx, ty)`: it rises
@@ -538,5 +533,61 @@ impl Level {
     /// Left edge of the boss arena, in pixels.
     pub fn arena_px(&self) -> i32 {
         self.find(b'X').map_or(self.px_width() - crate::SCREEN_W, |(x, _)| x * TILE)
+    }
+}
+
+/// Collision as bodies and shots meet it: the map as drawn, or the map with what the
+/// wassie has broken since ([`crate::block::Map`]). Everything here follows from
+/// [`Terrain::tile`].
+pub trait Terrain {
+    /// Collision at a tile.
+    fn tile(&self, tx: i32, ty: i32) -> Tile;
+
+    /// Tile at a pixel position.
+    fn tile_at_px(&self, x: i32, y: i32) -> Tile {
+        self.tile(x.div_euclid(TILE), y.div_euclid(TILE))
+    }
+
+    /// Whether something can stand on tile `(tx, ty)`: rock, a plank or a slope.
+    fn is_floor(&self, tx: i32, ty: i32) -> bool {
+        matches!(self.tile(tx, ty), Tile::Solid | Tile::OneWay | Tile::Slope(_))
+    }
+
+    /// The floor of the slope under pixel column `x` near feet at `bottom`, as a pixel
+    /// row: looks down from the tile above the feet to the one below them, stopping at
+    /// flat floor. `None` where there is no slope there.
+    fn slope_floor(&self, x: i32, bottom: i32) -> Option<i32> {
+        let (tx, lx) = (x.div_euclid(TILE), x.rem_euclid(TILE));
+        let first = (bottom - TILE).div_euclid(TILE);
+        for ty in first..=first + 2 {
+            match self.tile(tx, ty) {
+                Tile::Slope(s) => return Some((ty + 1) * TILE - s.height(lx)),
+                Tile::Solid | Tile::OneWay => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Whether pixel `(x, y)` is inside rock: a solid tile, or under a slope's floor.
+    fn solid_px(&self, x: i32, y: i32) -> bool {
+        match self.tile_at_px(x, y) {
+            Tile::Solid => true,
+            Tile::Slope(s) => y.rem_euclid(TILE) >= TILE - s.height(x.rem_euclid(TILE)),
+            _ => false,
+        }
+    }
+
+    /// Whether a walker with its leading foot at pixel column `x` and its feet at
+    /// `bottom` has ground ahead: a floor under the foot, or a slope going on down.
+    fn ground_ahead(&self, x: i32, bottom: i32) -> bool {
+        let (tx, ty) = (x.div_euclid(TILE), bottom.div_euclid(TILE));
+        self.is_floor(tx, ty) || matches!(self.tile(tx, ty + 1), Tile::Slope(_))
+    }
+}
+
+impl Terrain for Level {
+    fn tile(&self, tx: i32, ty: i32) -> Tile {
+        Level::tile(self, tx, ty)
     }
 }

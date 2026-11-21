@@ -175,6 +175,7 @@ pub static TRENCHES: Level = Level {
     sky_rows: 44,
     route: &ROUTE,
     bands: &[20, 44, 64],
+    zones: &[],
     // The underground casino, then the sewers.
     strata: &[44, 64],
     // The tower top looks out over the strip at night.

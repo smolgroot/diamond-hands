@@ -8,6 +8,7 @@ use agb::{
 };
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
+    block::BlockLook,
     enemy::{Actor, ActorKind, DINO_ROAR_FRAMES, state},
     fx::FxKind,
     player::{Aim, HOVER_FRAMES},
@@ -20,26 +21,24 @@ use pecten_studio_rt::{
     gfx::{SpriteSheet, WorldView},
 };
 
-use crate::{data::room, gfx};
+use agb::display::object::SpriteVram;
 
-/// The font's characters, in the order of the `ui` sheet's first frames.
-const FONT: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!:/-+.<>,'?";
-/// Pixels from one character to the next.
-const ADVANCE: i32 = 6;
+use crate::{
+    art::{LIFE_CELLS, studio, ui as box_ui},
+    data::room,
+    font::Font,
+    gfx,
+    screens::{self, HudArt},
+};
 
 /// Frames of the `ui` sheet after the font.
 mod ui {
-    pub const HEART_FULL: usize = 47;
-    pub const HEART_HALF: usize = 48;
-    pub const HEART_EMPTY: usize = 49;
-    pub const DIAMOND: usize = 50;
     pub const UP: usize = 51;
     pub const ALERT: usize = 52;
 }
 
 /// Frames of the `fx` sheet.
 mod fx {
-    pub const HEAL: usize = 4;
     pub const BOLT_H: usize = 6;
     pub const BOLT_DU: usize = 7;
     pub const BOLT_V: usize = 8;
@@ -86,7 +85,25 @@ const JETPACK_AT: (i32, i32) = (1, 15);
 const FLAME_AT: (i32, i32) = (1, 29);
 
 pub struct Screen {
-    view: WorldView<'static>,
+    /// The studio's map, and a view of its rooms that share the tileset of the room on
+    /// screen. `None` for the frame between dropping one tileset's view and making the
+    /// next: their tiles don't fit in VRAM together.
+    world: &'static World<'static>,
+    view: Option<WorldView<'static>>,
+    /// The room whose backgrounds are behind the view.
+    backdrop: usize,
+    /// The font, HUD, pickups and dialogue box every other level shows.
+    font: Font,
+    life_caps: [SpriteVram; 2],
+    life: [[SpriteVram; LIFE_CELLS]; 9],
+    diamond: [SpriteVram; 2],
+    heal: SpriteVram,
+    /// The wassie's portrait: bill shut, then half and wide open.
+    wassie_face: [SpriteVram; 3],
+    /// The dialogue box as sprites (the room's backgrounds use all four layers), made on
+    /// the level card or else when first needed, and the page last painted into it.
+    dialog: Option<box_ui::DialogText>,
+    dialog_painted: Option<(u8, u16, Option<i32>)>,
     /// The room's top-left in world pixels: the level's coordinates start there.
     origin: (i32, i32),
     /// Where the view's camera was last put, in world pixels; `None` before the first frame.
@@ -94,6 +111,11 @@ pub struct Screen {
 }
 
 /// A frame of a sheet with its top-left at screen pixel (x, y), unless well off screen.
+/// Frames between the sheen sweeps over a breakable block, and how long one lasts (its
+/// sprite's `sheen` animation: 8 steps of 3 frames).
+const SHEEN_EVERY: u32 = 120;
+const SHEEN_FRAMES: u32 = 24;
+
 fn put(frame: &mut GraphicsFrame, sheet: &'static SpriteSheet, index: usize, x: i32, y: i32, flip: bool) {
     let (w, h) = (sheet.width as i32, sheet.height as i32);
     if x + w < 0 || y + h < 0 || x >= SCREEN_W || y >= SCREEN_H {
@@ -117,42 +139,74 @@ fn anim(sheet: &'static SpriteSheet, name: &str, tick: u32) -> usize {
     sheet.animation(name).map_or(0, |a| a.frame_at(tick))
 }
 
-/// ASCII `text` with its top-left at (x, y); unknown characters and spaces are gaps.
-fn text(frame: &mut GraphicsFrame, s: &str, x: i32, y: i32) {
-    for (i, c) in s.bytes().enumerate() {
-        if let Some(glyph) = FONT.iter().position(|&f| f == c) {
-            put(frame, &gfx::SPRITE_UI, glyph, x + i as i32 * ADVANCE, y, false);
-        }
-    }
-}
-
-fn centred(frame: &mut GraphicsFrame, s: &str, y: i32) {
-    text(frame, s, (SCREEN_W - s.len() as i32 * ADVANCE) / 2, y);
-}
-
-/// A number in decimal, right to left from `right`.
-fn number(frame: &mut GraphicsFrame, mut n: u32, right: i32, y: i32) {
-    let mut x = right - ADVANCE;
-    loop {
-        put(frame, &gfx::SPRITE_UI, (n % 10) as usize, x, y, false);
-        n /= 10;
-        x -= ADVANCE;
-        if n == 0 {
-            break;
-        }
-    }
-}
-
 impl Screen {
     /// `world` is the studio's map, read once at boot (`data::world()`).
-    pub fn new(world: &'static World<'static>, graphics: &mut Graphics) -> Self {
-        let view = WorldView::new(world, gfx::ART, room::SOL_CITY, graphics);
-        let origin = world.origin(room::SOL_CITY).unwrap_or((0, 0));
-        Self { view, origin, camera: None }
+    pub fn new(world: &'static World<'static>) -> Self {
+        // The level's map starts at its first room's top-left, the beach.
+        let origin = world.origin(room::BEACH).unwrap_or((0, 0));
+        use studio::{hud_8x8 as hud, pickups, wassie_talk};
+        let [half, wide] = wassie_talk::portrait_talk();
+        Self {
+            world,
+            view: None,
+            backdrop: room::BEACH,
+            origin,
+            camera: None,
+            font: Font::new(),
+            life_caps: hud::life_caps(),
+            life: [
+                hud::life_0(),
+                hud::life_1(),
+                hud::life_2(),
+                hud::life_3(),
+                hud::life_4(),
+                hud::life_5(),
+                hud::life_6(),
+                hud::life_7(),
+                hud::life_8(),
+            ],
+            diamond: pickups::diamond(),
+            heal: pickups::heal(),
+            wassie_face: [wassie_talk::portrait(), half, wide],
+            dialog: None,
+            dialog_painted: None,
+        }
+    }
+
+    /// Puts the rooms the camera is in on the backgrounds: call before taking the
+    /// frame. Into a room of another tileset, the old view goes first, leaving a black
+    /// frame, and the new one is made on the next call; within a tileset, only the
+    /// backgrounds behind change.
+    pub fn prepare(&mut self, game: &Game, graphics: &mut Graphics) {
+        let world = &game.world;
+        let (x, y) = (self.origin.0 + world.camera_x + SCREEN_W / 2, self.origin.1 + world.camera_y + SCREEN_H / 2);
+        let Some(room) = self.world.room_at_screen(x.div_euclid(SCREEN_W), y.div_euclid(SCREEN_H)) else {
+            return;
+        };
+        match &mut self.view {
+            Some(view) if !view.shows(room) => {
+                self.view = None;
+                self.camera = None;
+            }
+            Some(view) if room != self.backdrop => {
+                view.set_backgrounds(room, graphics);
+                self.backdrop = room;
+            }
+            Some(_) => {}
+            None => {
+                self.view = Some(WorldView::new(self.world, gfx::ART, room, graphics));
+                self.backdrop = room;
+                self.camera = None;
+            }
+        }
     }
 
     pub fn draw(&mut self, game: &Game, frame: &mut GraphicsFrame) {
         let world = &game.world;
+        // Between two tilesets' views, the screen goes black for a frame.
+        let Some(view) = &mut self.view else {
+            return;
+        };
         // A shake jolts the whole picture a pixel or two.
         let jolt = if world.shake > 0 {
             ((game.frame % 2) as i32 * 2 - 1) * 2
@@ -166,34 +220,49 @@ impl Screen {
         match self.camera {
             Some(last) if (camera.0 - last.0).abs() < SCREEN_W && (camera.1 - last.1).abs() < SCREEN_H => {
                 if camera != last {
-                    self.view.set_camera(camera.0, camera.1);
+                    view.set_camera(camera.0, camera.1);
                 }
             }
-            // The first frame, or a jump (a respawn): fill the whole view at once.
-            _ => self.view.load(camera.0, camera.1),
+            // The first frame, or a jump (a respawn, a cut into another zone): fill the
+            // whole view at once.
+            _ => view.load(camera.0, camera.1),
         }
         self.camera = Some(camera);
 
         // Front to back.
+        let font = &self.font;
         match game.scene {
-            Scene::Intro => self.level_card(game, frame),
+            Scene::Intro => screens::level_card(font, game, frame),
+            // Only the standalone Sol City ROM gets here: the full game's renderer draws
+            // its pause menu and map.
             Scene::Paused => {
-                centred(frame, "PAUSED", 60);
-                centred(frame, "START TO PLAY ON", 76);
+                font.draw_centred(frame, "PAUSED", 60, true);
+                font.draw_centred(frame, "START TO PLAY ON", 80, false);
             }
-            Scene::LevelClear => self.clear_screen(game, frame),
+            Scene::LevelClear => {
+                let r = world.player.body.rect();
+                screens::level_clear(font, &self.diamond, game, frame, (r.centre_x() - cx, r.centre_y() - cy));
+            }
             Scene::Map => {
-                centred(frame, "NEXT STOP: ETHEREUM CITY", 56);
-                centred(frame, "COMING SOON", 72);
-                centred(frame, "START TO PLAY SOL CITY AGAIN", 96);
+                font.draw_centred(frame, "NEXT STOP: ETHEREUM CITY", 56, false);
+                font.draw_centred(frame, "COMING SOON", 72, false);
+                font.draw_centred(frame, "START TO PLAY SOL CITY AGAIN", 96, false);
             }
             _ => {}
         }
         if game.talking() {
             self.dialogue(game, frame);
+        } else {
+            self.dialog_painted = None;
+            // Making the box takes a good many frames' work: do it on the level card,
+            // where it can't be seen, rather than when someone first speaks.
+            if game.scene == Scene::Intro && game.scene_frames() > 8 && self.dialog.is_none() {
+                self.dialog = Some(box_ui::DialogText::for_sprites());
+            }
         }
-        if matches!(game.scene, Scene::Play | Scene::Dialog | Scene::Paused) {
-            self.hud(game, frame);
+        if matches!(game.scene, Scene::Play | Scene::Intro) {
+            let art = HudArt { life_caps: &self.life_caps, life: &self.life, diamond: &self.diamond };
+            screens::hud(&self.font, &art, None, game, frame);
         }
         // Title cards stand alone, on black.
         if !matches!(game.scene, Scene::Map | Scene::LevelClear | Scene::Intro) {
@@ -202,68 +271,54 @@ impl Screen {
             self.shots(game, frame, cx, cy);
             self.wassie(game, frame, cx, cy);
             self.actors(game, frame, cx, cy);
-            self.view.show(frame);
+            if let Some(view) = &self.view {
+                view.show(frame);
+            }
         }
     }
 
-    fn level_card(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let level = game.world.level;
-        centred(frame, "LEVEL 3", 52);
-        centred(frame, level.name, 68);
-        centred(frame, level.subtitle, 84);
-    }
-
-    fn clear_screen(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let world = &game.world;
-        centred(frame, "SOL CITY CLEARED", 40);
-        text(frame, "DIAMONDS", 64, 64);
-        number(frame, world.diamonds, 176, 64);
-        text(frame, "BOTS", 64, 76);
-        number(frame, world.kills, 176, 76);
-        text(frame, "SCORE", 64, 88);
-        number(frame, game.score(), 176, 88);
-        centred(frame, "INTO THE WORMHOLE...", 116);
-    }
-
-    /// Health as hearts of two points each, and the level's diamonds.
-    fn hud(&self, game: &Game, frame: &mut GraphicsFrame) {
-        let hp = game.world.player.hp.max(0);
-        for i in 0..diamond_hands_logic::player::MAX_HP / 2 {
-            let left = hp - i * 2;
-            let heart = match left {
-                2.. => ui::HEART_FULL,
-                1 => ui::HEART_HALF,
-                _ => ui::HEART_EMPTY,
-            };
-            put(frame, &gfx::SPRITE_UI, heart, 4 + i * 9, 4, false);
-        }
-        put(frame, &gfx::SPRITE_UI, ui::DIAMOND, SCREEN_W - 34, 4, false);
-        number(frame, game.world.diamonds, SCREEN_W - 4, 4);
-    }
-
-    /// The box at the bottom: the speaker's portrait and name, and the line typed out.
-    fn dialogue(&self, game: &Game, frame: &mut GraphicsFrame) {
+    /// The speaker's portrait in the dialogue box across the top, as every level shows
+    /// it: the wassie on the left, anyone else on the right.
+    fn dialogue(&mut self, game: &Game, frame: &mut GraphicsFrame) {
         let Some(line) = game.talk_lines().get(game.talk_line as usize) else {
             return;
         };
-        let top = SCREEN_H - 48;
-        let typing = (game.talk_shown as usize) < line.len();
-        let mouth = typing && (game.frame / 6).is_multiple_of(2);
-        text(frame, line.speaker.name(), 50, top + 6);
-        for (row, s) in line.visible(game.talk_shown as usize).enumerate() {
-            text(frame, s, 50, top + 18 + row as i32 * 9);
-        }
-        let (sheet, index): (&'static SpriteSheet, usize) = match line.speaker {
-            Speaker::Keeper => (&gfx::SPRITE_PORTRAITS, mouth as usize),
-            Speaker::Cosmo => (&gfx::SPRITE_PORTRAITS, 2 + mouth as usize),
-            _ => (&gfx::SPRITE_WASSIE_PORTRAIT, 0),
+        let shown = game.talk_shown as usize;
+        let typing = shown < line.len();
+        let right = line.speaker != Speaker::Wassie;
+        // The speaker bobs, and flaps their bill or jaw, while the words come out.
+        let bob = (typing && (game.frame / 4).is_multiple_of(2)) as i32;
+        let mouth = match (typing, (game.frame / 5) % 4) {
+            (true, 1 | 3) => 1,
+            (true, 2) => 2,
+            _ => 0,
         };
-        put(frame, sheet, index, 8, top + 8, false);
-        let box_sheet = &gfx::SPRITE_DIALOG_BOX;
-        put(frame, box_sheet, 0, 0, top - 16, false);
-        put(frame, box_sheet, 1, 64, top - 16, false);
-        put(frame, box_sheet, 1, 112, top - 16, false);
-        put(frame, box_sheet, 2, SCREEN_W - 64, top - 16, false);
+        let (px, py) = box_ui::portrait_pos(right);
+        match line.speaker {
+            Speaker::Wassie => screens::show(frame, &self.wassie_face[mouth], px, py - bob),
+            // The studio's portrait sheet: the zookeeper, then the cosmonaut, each shut
+            // then talking.
+            Speaker::Keeper => put(frame, &gfx::SPRITE_PORTRAITS, (mouth > 0) as usize, px, py - bob, false),
+            Speaker::Cosmo => put(frame, &gfx::SPRITE_PORTRAITS, 2 + (mouth > 0) as usize, px, py - bob, false),
+            Speaker::Cl207 => put(frame, &gfx::SPRITE_CL207_PORTRAIT, mouth, px, py - bob, false),
+            _ => {}
+        }
+
+        let arrow = (shown >= line.len()).then(|| ((game.frame / 8) % 2) as i32);
+        let key = (game.talk_line, game.talk_shown, arrow);
+        if self.dialog_painted != Some(key) {
+            self.dialog_painted = Some(key);
+            let mut rows = [""; diamond_hands_logic::talk::MAX_ROWS];
+            for (slot, row) in rows.iter_mut().zip(line.visible(shown)) {
+                *slot = row;
+            }
+            self.dialog
+                .get_or_insert_with(box_ui::DialogText::for_sprites)
+                .paint(right, &box_ui::Page { name: line.speaker.name(), rows, arrow });
+        }
+        if let Some(dialog) = &mut self.dialog {
+            dialog.show_sprites(frame);
+        }
     }
 
     /// "^" where Up does something, and "!" over a villain about to attack.
@@ -442,22 +497,36 @@ impl Screen {
                 continue;
             }
             let r = a.rect();
+            // Off screen first: the console wraps sprite positions, so one far away
+            // would show up somewhere on screen.
             if r.right() < cx - 32 || r.x > cx + SCREEN_W + 32 || r.bottom() < cy - 64 || r.y > cy + SCREEN_H + 64 {
                 continue;
             }
-            self.actor(game, frame, a, speaker, r.centre_x() - cx, r.bottom() - cy, r.centre_y() - cy);
+            match a.kind {
+                // Mostly still, with a glint now and then, as in every level.
+                ActorKind::Diamond => {
+                    let glint = (game.frame + r.x as u32) % 48 < 6;
+                    screens::show(frame, &self.diamond[glint as usize], r.x - 4 - cx, r.y - 4 - cy);
+                    continue;
+                }
+                ActorKind::Heal => {
+                    screens::show(frame, &self.heal, r.x - 3 - cx, r.y - 3 - cy);
+                    continue;
+                }
+                _ => {}
+            }
+            self.actor(game, frame, a, speaker, r.centre_x() - cx, r.bottom() - cy);
         }
     }
 
-    /// One actor, with its feet at (x, feet) on screen and its middle at row `mid`.
+    /// One actor, with its feet at (x, feet) on screen.
     #[allow(clippy::too_many_arguments)]
-    fn actor(&self, game: &Game, frame: &mut GraphicsFrame, a: &Actor, speaker: Option<Speaker>, x: i32, feet: i32, mid: i32) {
+    fn actor(&self, game: &Game, frame: &mut GraphicsFrame, a: &Actor, speaker: Option<Speaker>, x: i32, feet: i32) {
         let tick = game.frame;
         let walk = (a.body.x().unsigned_abs() / 4) as u32;
         let lit = a.state == state::LIT;
         match a.kind {
-            ActorKind::Diamond => at(frame, &gfx::SPRITE_FX, anim(&gfx::SPRITE_FX, "diamond", tick), x, mid, false),
-            ActorKind::Heal => at(frame, &gfx::SPRITE_FX, fx::HEAL + (tick / 20 % 2) as usize, x, mid, false),
+            ActorKind::Diamond | ActorKind::Heal => {}
             ActorKind::Checkpoint => {
                 let s = &gfx::SPRITE_BEACON;
                 at(frame, s, anim(s, if lit { "lit" } else { "off" }, tick), x, feet, false);
@@ -509,6 +578,20 @@ impl Screen {
             ActorKind::Gate => {
                 let s = &gfx::SPRITE_POWER_GATE;
                 at(frame, s, if lit { 2 } else { 0 }, x, feet, false);
+            }
+            ActorKind::Block(look) => {
+                let s = match look {
+                    BlockLook::Sand => &gfx::SPRITE_SAND_BLOCK_SHEEN,
+                    BlockLook::Crate => &gfx::SPRITE_DOCK_CRATE_SHEEN,
+                    BlockLook::Soil => &gfx::SPRITE_SOIL_BLOCK_SHEEN,
+                };
+                // A band of light sweeps across it now and then, as on a loading
+                // skeleton, to say it can be shot apart. Neighbours sweep at different
+                // times; where it stood, so a falling block keeps its rhythm.
+                let (hx, hy) = a.home;
+                let phase = (tick + (hx / 16 * 29 + hy / 16 * 13).unsigned_abs()) % SHEEN_EVERY;
+                let index = if phase < SHEEN_FRAMES { anim(s, "sheen", phase) } else { anim(s, "block", tick) };
+                at(frame, s, index, x, feet, false);
             }
             // Casino and Badlands things: not in Sol City.
             ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack | ActorKind::Dealer | ActorKind::Guard => {}
