@@ -71,6 +71,9 @@ pub enum ActorKind {
     Gate,
     /// A blockade bot at the Wormhole terminal's door: armoured, it can't be beaten.
     Blockade,
+    /// Someone locked up by a boss: speaks only once its jailer is beaten, then hands
+    /// over a reward (Smolsnip, in the Big Crab Bot's lair).
+    Prisoner,
     /// A crab bot on the beach and in the tunnels under it: scuttles sideways, raises its
     /// claws, then snaps forward.
     Crab,
@@ -101,6 +104,7 @@ impl ActorKind {
             b'h' => ActorKind::Gate,
             b'm' => ActorKind::Blockade,
             b'a' => ActorKind::Crab,
+            b'f' => ActorKind::Prisoner,
             b'n' | b'u' | b'y' => ActorKind::Block(BlockLook::from_marker(c)?),
             _ => return None,
         })
@@ -127,6 +131,7 @@ impl ActorKind {
             ActorKind::Gate => (16, 32),
             ActorKind::Blockade => (16, 26),
             ActorKind::Crab => (22, 16),
+            ActorKind::Prisoner => (20, 46),
             ActorKind::Block(_) => (16, 16),
         }
     }
@@ -192,7 +197,7 @@ impl ActorKind {
     /// Checkpoints stay lit, terminals on and gates open through a respawn, and a
     /// saved run brings them back that way.
     pub fn keeps_state(self) -> bool {
-        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate)
+        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate | ActorKind::Prisoner)
     }
 
     /// Picked up by touching it.
@@ -426,7 +431,7 @@ impl Actor {
                     self.state = state::LIT;
                 }
             }
-            ActorKind::Npc | ActorKind::Portal => self.face_player(&ctx.player),
+            ActorKind::Npc | ActorKind::Prisoner | ActorKind::Portal => self.face_player(&ctx.player),
             ActorKind::Diamond
             | ActorKind::Heal
             | ActorKind::Checkpoint

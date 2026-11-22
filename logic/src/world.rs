@@ -303,6 +303,12 @@ const PORTAL_KEEPER_REACH: i32 = 96;
 pub const WARP_FRAMES: u16 = 80;
 /// People a level may have, for the bits of [`World::heard`].
 const MAX_NPCS: usize = 16;
+/// Diamonds a prisoner hands over once freed and heard out.
+pub const PRISONER_REWARD: u32 = 50;
+/// The bit of [`World::taken`] that says the boss is beaten, in a level it doesn't end:
+/// the last one, past every actor slot.
+const BOSS_BEATEN: usize = crate::enemy::ActorSet::CAPACITY - 1;
+const _: () = assert!(BOSS_BEATEN >= MAX_ACTORS);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -584,6 +590,9 @@ impl World {
                 taken.insert(i);
             }
         }
+        if self.boss.present && self.boss.state == crate::boss::BossState::Defeated {
+            taken.insert(BOSS_BEATEN);
+        }
         taken
     }
 
@@ -652,6 +661,9 @@ impl World {
                     a.alive = false;
                     a.killed = true;
                 }
+            }
+            if progress.taken.contains(BOSS_BEATEN) && self.boss.present {
+                self.boss.state = crate::boss::BossState::Defeated;
             }
             i32::MIN
         } else {
@@ -761,6 +773,10 @@ impl World {
             self.cleared = true;
             return events;
         }
+        if self.arena && self.boss.state == crate::boss::BossState::Defeated {
+            // A boss that doesn't end the level: its arena opens again.
+            self.arena = false;
+        }
         if events.contains(Events::SLAM) {
             self.shake = self.shake.max(10);
         }
@@ -787,6 +803,8 @@ impl World {
         let mut block_hits = [(0u8, 0i32); MAX_BLOCK_HITS];
         let mut block_hit_count = 0;
         let map = Map { level: self.level, blocks: &self.blocks };
+        // While a boss fight is on, the blocks hold (a prisoner's cell stays shut).
+        let blocks_hold = self.arena && !self.boss.is_beaten();
         for s in self.shots.iter_mut().filter(|s| s.active) {
             s.update(&map);
             let r = s.rect();
@@ -795,6 +813,7 @@ impl World {
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
                 if let Some(b) = self.blocks.at_px(r.centre_x(), r.centre_y())
                     && block_hit_count < MAX_BLOCK_HITS
+                    && !blocks_hold
                 {
                     block_hits[block_hit_count] = (b as u8, s.kind.damage());
                     block_hit_count += 1;
@@ -828,7 +847,39 @@ impl World {
 
     /// The people on the map, in the order of [`Level::npcs`].
     pub fn people(&self) -> impl Iterator<Item = &Actor> {
-        self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Npc)
+        self.actors[..self.used].iter().filter(|a| matches!(a.kind, ActorKind::Npc | ActorKind::Prisoner))
+    }
+
+    /// Whether person `a` can speak: a prisoner says nothing while its jailer stands.
+    fn free_to_talk(&self, a: &Actor) -> bool {
+        a.kind != ActorKind::Prisoner || !self.boss.present || self.boss.state == crate::boss::BossState::Defeated
+    }
+
+    /// Person `n` has had their say. A freed prisoner hands over its reward, once:
+    /// saved with the run, so it is never paid twice.
+    /// Returns whether it paid, so the run can be saved.
+    pub fn heard_out(&mut self, n: u8, events: &mut Events) -> bool {
+        let Some(i) = self.actors[..self.used]
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| matches!(a.kind, ActorKind::Npc | ActorKind::Prisoner))
+            .nth(n as usize)
+            .map(|(i, _)| i)
+        else {
+            return false;
+        };
+        let a = &mut self.actors[i];
+        if a.kind != ActorKind::Prisoner || a.state == enemy::state::LIT {
+            return false;
+        }
+        a.state = enemy::state::LIT;
+        self.diamonds += PRISONER_REWARD;
+        let r = a.rect();
+        for (dx, dy) in [(-12, -8), (0, -16), (12, -8), (-6, -24), (6, -24)] {
+            self.fx.spawn(FxKind::Glint, r.centre_x() + dx, r.y + dy);
+        }
+        events.insert(Events::PICKUP);
+        true
     }
 
     /// Whether the wassie stands near person `a`, on their floor.
@@ -843,7 +894,11 @@ impl World {
         if self.player.is_dead() || self.player.hurt > 0 || self.walk_in {
             return;
         }
-        let found = self.people().enumerate().find(|(_, a)| self.beside(a)).map(|(n, _)| n.min(MAX_NPCS - 1));
+        let found = self
+            .people()
+            .enumerate()
+            .find(|(_, a)| self.beside(a) && self.free_to_talk(a))
+            .map(|(n, _)| n.min(MAX_NPCS - 1));
         if let Some(n) = found
             && (self.heard & (1 << n) == 0 || input.up_pressed())
             && n < self.level.npcs.len()
@@ -1119,7 +1174,7 @@ impl World {
         // the wassie up on its own floor.
         let centre = self.player.body.rect().centre_y();
         let level_with_it = (self.arena_y..self.arena_y + SCREEN_H).contains(&centre);
-        if !self.arena && level_with_it && self.player.body.x() >= left + 2 * TILE {
+        if !self.arena && !self.boss.is_beaten() && level_with_it && self.player.body.x() >= left + 2 * TILE {
             self.arena = true;
             self.talk_due = !self.talked && !self.level.boss_talk.is_empty();
             self.boss.wake();
@@ -1570,7 +1625,7 @@ impl World {
         }
 
         if let Some((damage, heavy)) = self.boss.contact()
-            && player.overlaps(&self.boss.rect().inset(2))
+            && player.overlaps(&self.boss.hurt_zone())
         {
             hurt = Some((damage, self.boss.rect().centre_x(), heavy));
         }
@@ -2714,6 +2769,174 @@ mod tests {
         let events = w.step(&Input::default());
         assert!(events.contains(Events::SPLASH) && w.player.is_dead());
         assert_eq!(w.player.hp, hp - PIT_DAMAGE);
+    }
+
+    /// The crab lair: the map's tiles of its arena edge, the boss, the sand wall and
+    /// Smolsnip (lair column c is map column 30 + c, lair row r is map row 60 + r).
+    const LAIR_FLOOR: i32 = 75;
+    const LAIR_WALL: i32 = 72;
+
+    /// In the crab lair's arena, the fight on: the boss awake and its lines said.
+    fn crab_fight() -> World {
+        let mut w = sol_city_on(46, LAIR_FLOOR);
+        w.god = true;
+        let events = hold(&mut w, 0, 2);
+        assert!(w.arena && events.contains(Events::BOSS_START), "the arena closes");
+        assert_eq!(w.boss.kind, crate::level::BossKind::Crab);
+        w
+    }
+
+    fn crab_beaten(w: &mut World) {
+        w.boss.hp = 1;
+        w.boss.state = BossState::Walk;
+        let mut events = Events::default();
+        w.boss.damage(1, &mut events);
+        assert_eq!(w.boss.state, BossState::Dying);
+        for _ in 0..crate::boss::CRAB_DYING_FRAMES + 2 {
+            events.insert(w.step(&Input::default()));
+        }
+        assert_eq!(w.boss.state, BossState::Defeated);
+        assert!(!events.contains(Events::LEVEL_CLEAR) && !w.cleared, "the level goes on");
+    }
+
+    #[test]
+    fn the_big_crab_bot_rushes_sprays_and_crackles() {
+        let mut w = crab_fight();
+        let (mut stalled, mut sprayed, mut haloed) = (false, false, false);
+        let mut halo_wider = false;
+        for _ in 0..2400 {
+            w.step(&Input::default());
+            let b = &w.boss;
+            stalled |= b.state == BossState::Stunned && b.dazed();
+            sprayed |= w.shots.iter().any(|s| s.active && s.kind == ShotKind::Cucumber);
+            if b.halo_live() {
+                haloed = true;
+                halo_wider = b.hurt_zone().w > b.rect().w;
+            }
+        }
+        assert!(stalled, "the Rush ends against the wall, dazed");
+        assert!(sprayed, "the Water Cannons lob jets");
+        assert!(haloed && halo_wider, "the Electric Halo reaches past its shell");
+        assert!(w.arena, "still locked in");
+    }
+
+    #[test]
+    fn the_blaster_wears_the_crab_down() {
+        let mut w = crab_fight();
+        // Wait out its intro, then fire at it from the arena's west end.
+        hold(&mut w, 0, 100);
+        let hp = w.boss.hp;
+        for _ in 0..30 {
+            w.player.facing = if w.boss.rect().centre_x() > w.player.body.rect().centre_x() { 1 } else { -1 };
+            let toward = if w.player.facing > 0 { keys::RIGHT } else { keys::LEFT };
+            press(&mut w, toward | keys::B, toward, 1);
+            hold(&mut w, 0, 10);
+        }
+        assert!(w.boss.hp < hp, "hp {} of {hp}", w.boss.hp);
+    }
+
+    #[test]
+    fn beating_the_crab_opens_its_arena_and_frees_smolsnip() {
+        let mut w = crab_fight();
+        let wall = w.blocks.at_px(LAIR_WALL * TILE + 4, LAIR_FLOOR * TILE + 4).expect("the cell's sand wall");
+        // Mid-fight, the wall shrugs off the blaster.
+        w.player = Player::new(Body::standing_on_tile(LAIR_WALL - 3, LAIR_FLOOR, PLAYER_W, PLAYER_H));
+        for _ in 0..12 {
+            press(&mut w, keys::RIGHT | keys::B, keys::RIGHT, 1);
+            hold(&mut w, 0, 12);
+        }
+        assert!(!w.blocks.is_broken(wall), "it holds while the crab stands");
+        crab_beaten(&mut w);
+        assert!(!w.arena, "beaten, its arena opens");
+        assert!(w.taken().contains(BOSS_BEATEN), "and the save keeps it beaten");
+        // Now the blaster breaks the wall.
+        w.player = Player::new(Body::standing_on_tile(LAIR_WALL - 3, LAIR_FLOOR, PLAYER_W, PLAYER_H));
+        for _ in 0..20 {
+            press(&mut w, keys::B, 0, 1);
+            hold(&mut w, 0, 12);
+        }
+        assert!(w.blocks.is_broken(wall), "the wall comes down");
+        // Smolsnip speaks up, and pays once.
+        let n = w.people().position(|a| a.kind == ActorKind::Prisoner).unwrap() as u8;
+        hold(&mut w, keys::RIGHT, 40);
+        assert_eq!(w.npc_due.take(), Some(n), "Smolsnip has something to say");
+        let before = w.diamonds;
+        let mut events = Events::default();
+        assert!(w.heard_out(n, &mut events));
+        assert_eq!(w.diamonds, before + PRISONER_REWARD);
+        assert!(!w.heard_out(n, &mut events), "only once");
+        assert_eq!(w.diamonds, before + PRISONER_REWARD);
+    }
+
+    #[test]
+    fn smolsnip_says_nothing_while_the_crab_stands() {
+        let mut w = crab_fight();
+        let p = w.people().position(|a| a.kind == ActorKind::Prisoner).unwrap();
+        // Even beside it (as if the wall were gone), mid-fight.
+        let r = w.people().nth(p).unwrap().rect();
+        w.player = Player::new(Body::standing_on_tile(r.centre_x() / TILE - 1, LAIR_FLOOR, PLAYER_W, PLAYER_H));
+        hold(&mut w, 0, 5);
+        assert_eq!(w.npc_due, None);
+    }
+
+    #[test]
+    fn a_saved_run_keeps_the_crab_beaten_and_smolsnip_paid() {
+        let mut w = crab_fight();
+        crab_beaten(&mut w);
+        let n = w.people().position(|a| a.kind == ActorKind::Prisoner).unwrap() as u8;
+        let mut events = Events::default();
+        w.heard_out(n, &mut events);
+        let progress = Progress {
+            level: 2,
+            checkpoint: Some((35, LAIR_FLOOR)),
+            diamonds: w.diamonds,
+            taken: w.taken(),
+            ..Progress::default()
+        };
+        let mut again = World::resume(&progress, Difficulty::Normal);
+        assert_eq!(again.boss.state, BossState::Defeated);
+        assert!(!again.heard_out(n, &mut events), "no second reward");
+        again.god = true;
+        again.player = Player::new(Body::standing_on_tile(46, LAIR_FLOOR, PLAYER_W, PLAYER_H));
+        hold(&mut again, 0, 5);
+        assert!(!again.arena, "the arena never closes again");
+    }
+
+    #[test]
+    fn the_crab_lair_is_dropped_into_and_climbed_back_out_of() {
+        // Down the hole in the tunnels' floor (33-41): the planks catch the fall and
+        // the wassie ends up at the foot of the shaft, before the arena.
+        let mut w = sol_city_on(37, 55);
+        w.god = true;
+        hold(&mut w, 0, 120);
+        hold(&mut w, keys::LEFT, 40);
+        hold(&mut w, 0, 120);
+        assert!(w.player.grounded && w.player.body.rect().bottom() >= 60 * TILE, "down in the lair: {:?}", w.player.body.rect());
+        let mut w = sol_city_on(36, LAIR_FLOOR);
+        w.god = true;
+        hold(&mut w, 0, 5);
+        // Up the zigzag of planks (rows 72, 68, 64, 60) and out onto the tunnels' floor
+        // west of the hole (row 56), steering toward each landing.
+        let hops = [(38 * TILE, 42 * TILE, 72), (33 * TILE, 37 * TILE, 68), (38 * TILE, 42 * TILE, 64), (33 * TILE, 37 * TILE, 60), (26 * TILE, 32 * TILE, 56)];
+        let mut previous = 0;
+        for (x0, x1, row) in hops {
+            let mut landed = false;
+            for _ in 0..240 {
+                let r = w.player.body.rect();
+                let on = w.player.grounded && r.bottom() == row * TILE && r.x >= x0 && r.right() <= x1;
+                if on {
+                    landed = true;
+                    break;
+                }
+                let target = (x0 + x1) / 2;
+                let dir = if r.centre_x() < target - 3 { keys::RIGHT } else if r.centre_x() > target + 3 { keys::LEFT } else { 0 };
+                // Jump from the ground; in the air, keep A held to hover up to the ledge.
+                let keys = if w.player.grounded && previous & keys::A != 0 { dir } else { dir | keys::A };
+                w.step(&Input::from_keys(keys, previous));
+                previous = keys;
+            }
+            assert!(landed, "stuck under row {row}: at {:?}", w.player.body.rect());
+        }
     }
 
     #[test]

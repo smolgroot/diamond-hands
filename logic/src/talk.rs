@@ -26,6 +26,10 @@ pub enum Speaker {
     Keeper,
     /// The wassie in a cosmonaut suit who minds the Wormhole portal.
     Cosmo,
+    /// The Big Crab Bot, the boss of the lair under Sol City's beach.
+    CrabBot,
+    /// Smolsnip, half crab and half wassie, the Big Crab Bot's prisoner.
+    Smolsnip,
 }
 
 impl Speaker {
@@ -38,6 +42,8 @@ impl Speaker {
             Speaker::Penguin => "WADDLES",
             Speaker::Keeper => "ZOOKEEPER",
             Speaker::Cosmo => "COSMO WASSIE",
+            Speaker::CrabBot => "BIG CRAB BOT",
+            Speaker::Smolsnip => "SMOLSNIP",
         }
     }
 }

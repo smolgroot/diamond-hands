@@ -23,7 +23,10 @@ with a boss.
 3. **Sol City** (playable in the studio ROM, `project/`): the morning after the casino, a Miami of the
    Solana ecosystem. A long beach where crab bots scuttle over the sand: shoot apart
    the sand blocks plugging its shafts to drop into the tunnels underneath, a gallery
-   of diamonds that climbs back out up a stack of planks. Then cafés and palms, then
+   of diamonds that climbs back out up a stack of planks. A hole in the tunnels' floor
+   drops down a zigzag of planks into the **crab lair**, where the **Big Crab Bot** keeps
+   Smolsnip, half crab and half wassie, behind a wall of sand for its experiments. Then
+   cafés and palms, then
    **MagicEden**, a dinosaur zoo hit by a
    power cut: its clay dinos are loose. The zookeeper explains; the breaker is down in the
    service tunnels under the paddocks. Thrown, the fences hold the dinos again and the
@@ -109,6 +112,15 @@ with a boss.
   double damage), lobs arcing cucumbers, and calls a **Market Crash** (the screens go red,
   candles rain, magenta energy flies). At half health his implants overload: faster, three
   cucumbers a volley, and the Cucumber Hit ends in shockwaves.
+- **The Big Crab Bot:** Sol City's optional boss, under the beach tunnels. It scuttles
+  after you and works through the **Rush** (it crouches, then charges along the floor:
+  jump it or stand on a plank; it stalls against the wall and takes double damage), the
+  **Water Cannons** (two jets lobbed at you and just past you) and the **Electric Halo**
+  (a ring that hurts anyone close: back off). At half health it speeds up, sprays three
+  volleys and its halo throws sparks along the floor. It doesn't end the level: beaten,
+  its arena opens. Shoot apart the sand wall at the east end and Smolsnip hands over
+  **50 diamonds**; the wall holds while the fight is on. A beacon waits at the foot of
+  the shaft, and the save keeps the crab beaten and the reward paid.
 - **Electric fences:** pylons on the ground throw up a curtain of lightning that reaches the
   rock above (or the sky), so it can't be jumped. They cycle: dead, a blinking warning with
   sparks, then live for about 2.5 seconds. Touching a live curtain shocks you and throws you

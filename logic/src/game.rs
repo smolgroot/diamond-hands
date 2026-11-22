@@ -519,26 +519,7 @@ impl Game {
                 }
                 events = self.world.step(input);
                 if events.contains(Events::CHECKPOINT) {
-                    let world = &self.world;
-                    self.save_run(
-                        Progress {
-                            level: world.level_index,
-                            checkpoint: Some(world.checkpoint),
-                            beacons: world.checkpoints_lit,
-                            banked: self.banked,
-                            diamonds: world.diamonds,
-                            kills: world.kills,
-                            frames: world.frames,
-                            complete: self.cleared == levels::ALL_CLEARED,
-                            cleared: self.cleared,
-                            coins: world.coins,
-                            wallet: self.wallet,
-                            purse: self.purse,
-                            parts: world.parts,
-                            taken: world.taken(),
-                        },
-                        &mut events,
-                    );
+                    self.save_at_beacon(&mut events);
                 }
                 if events.contains(Events::LEVEL_CLEAR) {
                     if self.world.level.coins {
@@ -581,11 +562,15 @@ impl Game {
                     || self.talk(input, lines, lines.len())
                 {
                     self.enter(Scene::Play);
-                    // The portal's keeper sends the wassie in.
-                    if let Talk::Npc(n) = self.talk
-                        && self.world.keeps_portal(n)
-                    {
-                        self.world.start_walk_in();
+                    if let Talk::Npc(n) = self.talk {
+                        // The portal's keeper sends the wassie in.
+                        if self.world.keeps_portal(n) {
+                            self.world.start_walk_in();
+                        }
+                        // A freed prisoner pays up, and the run is saved with it.
+                        if self.world.heard_out(n, &mut events) {
+                            self.save_at_beacon(&mut events);
+                        }
                     }
                     // The A that closed the box doesn't also jump.
                     self.latch = input.held;
@@ -930,6 +915,30 @@ impl Game {
         self.files[self.file as usize] = Some(progress);
         self.resume = true;
         events.insert(Events::SAVE);
+    }
+
+    /// Saves the run as it stands, to start again at the last beacon lit.
+    fn save_at_beacon(&mut self, events: &mut Events) {
+        let world = &self.world;
+        self.save_run(
+            Progress {
+                level: world.level_index,
+                checkpoint: Some(world.checkpoint),
+                beacons: world.checkpoints_lit,
+                banked: self.banked,
+                diamonds: world.diamonds,
+                kills: world.kills,
+                frames: world.frames,
+                complete: self.cleared == levels::ALL_CLEARED,
+                cleared: self.cleared,
+                coins: world.coins,
+                wallet: self.wallet,
+                purse: self.purse,
+                parts: world.parts,
+                taken: world.taken(),
+            },
+            events,
+        );
     }
 
     /// Marks the level cleared, which unlocks the next, and saves. A replay of a cleared

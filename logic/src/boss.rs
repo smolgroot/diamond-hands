@@ -14,6 +14,15 @@
 //! energy). At half health his implants overload: he gets faster, throws in volleys,
 //! and his Cucumber Hit sends shockwaves along the floor too.
 //!
+//! The Big Crab Bot waits under Sol City's beach, in a lair below the tunnels, with
+//! a prisoner. It scuttles after the wassie and works through three attacks: the Rush
+//! (it crouches, then charges along the floor into the arena wall and stalls there,
+//! taking double damage), the Water Cannons (two jets lobbed from the cannons on its
+//! back to come down on the wassie) and the Electric Halo (a crackling ring around its
+//! shell that hurts anyone close). At half health it speeds up, fires three volleys a
+//! spray, and its halo sends sparks running along the floor. It is the only boss that
+//! doesn't end its level: beaten, its arena opens again.
+//!
 //! Every step is on timers, so the fights are deterministic.
 
 use crate::{
@@ -53,6 +62,26 @@ const SAM_PATTERN: [[BossState; 6]; 2] = [
     [BossState::Windup, BossState::Throw, BossState::Throw, BossState::Crash, BossState::Throw, BossState::Windup],
     [BossState::Windup, BossState::Crash, BossState::Throw, BossState::Windup, BossState::Throw, BossState::Crash],
 ];
+/// The Big Crab Bot: wide and low, its shell under the height of a jump.
+pub const CRAB_W: i32 = 44;
+pub const CRAB_H: i32 = 26;
+pub const CRAB_HP: i32 = 36;
+pub const CRAB_DYING_FRAMES: u16 = 110;
+const CRAB_WALK_FX: i32 = 2 * FX / 3;
+const CRAB_RUSH_FX: i32 = 5 * FX / 2;
+/// How far the Electric Halo reaches past its shell: across, and up.
+pub const HALO_REACH: (i32, i32) = (16, 18);
+/// The Electric Halo: frames it takes to come on, then how long it crackles.
+pub const HALO_CHARGE_FRAMES: u16 = 28;
+pub const HALO_LIVE_FRAMES: u16 = 64;
+/// The Water Cannons: frames of the tell before a volley, and between volleys.
+pub const SPRAY_TELL_FRAMES: u16 = 26;
+const SPRAY_GAP_FRAMES: u16 = 18;
+/// The Big Crab Bot's attacks, in order, before and after it reaches half health.
+const CRAB_PATTERN: [[BossState; 6]; 2] = [
+    [BossState::Telegraph, BossState::Spray, BossState::Halo, BossState::Telegraph, BossState::Spray, BossState::Spray],
+    [BossState::Telegraph, BossState::Halo, BossState::Spray, BossState::Telegraph, BossState::Spray, BossState::Halo],
+];
 const WALK_FX: i32 = 3 * FX / 4;
 const CHARGE_FX: i32 = 3 * FX;
 const BULLET_FX: i32 = 2 * FX;
@@ -87,6 +116,10 @@ pub enum BossState {
     Barrage,
     /// Half health: the implants overload. Invulnerable for a moment.
     Overload,
+    /// The Big Crab Bot's Water Cannons: the tell, then a volley lobbed at the wassie.
+    Spray,
+    /// The Big Crab Bot's Electric Halo: it charges, then crackles around its shell.
+    Halo,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +184,7 @@ impl Boss {
         match kind {
             BossKind::Bera => (BOSS_W, BOSS_H),
             BossKind::Sam => (SAM_W, SAM_H),
+            BossKind::Crab => (CRAB_W, CRAB_H),
         }
     }
 
@@ -158,6 +192,7 @@ impl Boss {
         match kind {
             BossKind::Bera => BOSS_HP,
             BossKind::Sam => SAM_HP,
+            BossKind::Crab => CRAB_HP,
         }
     }
 
@@ -214,6 +249,7 @@ impl Boss {
         let lasts = match self.kind {
             BossKind::Bera => self.hp * 3 > BOSS_HP,
             BossKind::Sam => self.hp * 2 > SAM_HP,
+            BossKind::Crab => self.hp * 2 > CRAB_HP,
         };
         if lasts { 1 } else { 2 }
     }
@@ -227,6 +263,23 @@ impl Boss {
             BossState::Swing => (SWING_DAMAGE, true),
             _ => (CONTACT_DAMAGE, false),
         })
+    }
+
+    /// Where touching it hurts: its shell, or the whole ring while the Electric Halo
+    /// crackles.
+    pub fn hurt_zone(&self) -> Rect {
+        let r = self.rect();
+        if self.halo_live() {
+            let (x, y) = HALO_REACH;
+            Rect::new(r.x - x, r.y - y, r.w + 2 * x, r.h + y)
+        } else {
+            r.inset(2)
+        }
+    }
+
+    /// The Electric Halo is on: past its charge, before it dies down.
+    pub fn halo_live(&self) -> bool {
+        self.state == BossState::Halo && self.timer <= HALO_LIVE_FRAMES && self.timer > 0
     }
 
     pub fn vulnerable(&self) -> bool {
@@ -261,6 +314,7 @@ impl Boss {
             self.timer = match self.kind {
                 BossKind::Bera => 120,
                 BossKind::Sam => SAM_DYING_FRAMES,
+                BossKind::Crab => CRAB_DYING_FRAMES,
             };
             events.insert(Events::BOSS_DOWN);
             return true;
@@ -299,13 +353,16 @@ impl Boss {
         if self.state == BossState::Dying {
             if self.timer == 0 {
                 self.state = BossState::Defeated;
-                events.insert(Events::LEVEL_CLEAR);
+                if self.kind.ends_level() {
+                    events.insert(Events::LEVEL_CLEAR);
+                }
             }
             return events;
         }
         match self.kind {
             BossKind::Bera => self.bera(ctx, &mut events),
             BossKind::Sam => self.sam(ctx, &mut events),
+            BossKind::Crab => self.crab(ctx, &mut events),
         }
 
         self.body.vy_fx = (self.body.vy_fx + GRAVITY_FX).min(5 * FX);
@@ -533,6 +590,110 @@ impl Boss {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// One frame of the Big Crab Bot. Timers run shorter past half health.
+    fn crab(&mut self, ctx: &mut BossCtx, events: &mut Events) {
+        let player = ctx.player;
+        let fast = self.phase() == 2;
+        let pick = |slow: u16, quick: u16| if fast { quick } else { slow };
+        match self.state {
+            BossState::Intro => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, 60);
+                }
+            }
+            BossState::Walk => {
+                // Scuttles after the wassie, stopping just short of it.
+                self.face(&player);
+                let dist = (player.centre_x() - self.rect().centre_x()).abs();
+                let speed = if fast { CRAB_WALK_FX * 3 / 2 } else { CRAB_WALK_FX };
+                self.body.vx_fx = if dist > 40 { self.facing * speed } else { 0 };
+                if self.timer == 0 {
+                    self.body.vx_fx = 0;
+                    let next = CRAB_PATTERN[fast as usize][self.step as usize % CRAB_PATTERN[0].len()];
+                    self.step = self.step.wrapping_add(1);
+                    match next {
+                        BossState::Telegraph => self.go(BossState::Telegraph, pick(34, 24)),
+                        BossState::Spray => {
+                            self.shots_left = if fast { 3 } else { 1 };
+                            self.go(BossState::Spray, SPRAY_TELL_FRAMES);
+                        }
+                        _ => self.go(BossState::Halo, HALO_CHARGE_FRAMES + HALO_LIVE_FRAMES),
+                    }
+                }
+            }
+            BossState::Telegraph => {
+                // Crouched, claws back, kicking up sand: the Rush is coming.
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.body.vx_fx = self.facing * if fast { CRAB_RUSH_FX * 6 / 5 } else { CRAB_RUSH_FX };
+                    self.go(BossState::Charge, 150);
+                }
+            }
+            BossState::Charge => {
+                let r = self.rect();
+                let wall = (self.facing < 0 && r.x <= self.arena.0 + 4) || (self.facing > 0 && r.right() >= self.arena.1 - 4);
+                if wall || self.timer == 0 {
+                    // Into the wall: it stalls there, dazed.
+                    self.body.vx_fx = 0;
+                    events.insert(Events::SLAM);
+                    self.go(BossState::Stunned, pick(70, 50));
+                }
+            }
+            BossState::Stunned => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(50, 30));
+                }
+            }
+            BossState::Spray => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.spray(ctx);
+                    self.shots_left = self.shots_left.saturating_sub(1);
+                    if self.shots_left > 0 {
+                        self.timer = SPRAY_GAP_FRAMES;
+                    } else {
+                        self.go(BossState::Walk, ctx.difficulty.fire_interval(pick(56, 36)));
+                    }
+                }
+            }
+            BossState::Halo => {
+                self.body.vx_fx = 0;
+                if fast && self.timer == HALO_LIVE_FRAMES {
+                    // Past half health, the halo throws sparks along the floor.
+                    let r = self.rect();
+                    for dir in [-1, 1] {
+                        shot::spawn(ctx.shots, ShotKind::Shockwave, r.centre_x() + dir * (CRAB_W / 2 + 8), r.bottom() - 6, dir * 2 * FX, 0);
+                    }
+                    events.insert(Events::SLAM);
+                }
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(40, 24));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Water Cannons: one jet from each cannon, lobbed to come down on the wassie and
+    /// a little beyond it, so standing still is never safe.
+    fn spray(&mut self, ctx: &mut BossCtx) {
+        let r = self.rect();
+        let (tx, ty) = (ctx.player.centre_x(), ctx.player.centre_y());
+        for (cannon, miss) in [(-12, 0), (12, 32)] {
+            let (x, y) = (r.centre_x() + cannon, r.y - 4);
+            let target = (tx + self.facing * miss).clamp(self.arena.0 + 8, self.arena.1 - 8);
+            let n = THROW_FRAMES;
+            let vx = ((target - x) * FX / n).clamp(-3 * FX, 3 * FX);
+            let vy = (ty - y) * FX / n - shot::GRAVITY_FX_SHOT * n / 2;
+            shot::spawn(ctx.shots, ShotKind::Cucumber, x, y, vx, vy);
         }
     }
 

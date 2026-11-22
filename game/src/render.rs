@@ -2094,7 +2094,7 @@ impl Renderer {
                     (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
                 }
                 // Sol City's people and creatures: the studio ROM draws that level.
-                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) | ActorKind::Crab => continue,
+                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) | ActorKind::Crab | ActorKind::Prisoner => continue,
                 ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;

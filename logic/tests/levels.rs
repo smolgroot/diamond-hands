@@ -28,10 +28,15 @@ fn maps_are_well_formed() {
         assert_eq!(count(b'P'), 1, "{name}: one start");
         // A level ends at its boss, or else at the Wormhole portal.
         let boss = count(b'B') > 0;
+        // A boss in a side lair (the Big Crab Bot) leaves the level to end at a portal.
+        let side_boss = boss && !level.boss.ends_level();
         if boss {
             assert_eq!(count(b'X'), 1, "{name}: one arena");
             assert_eq!(count(b'B'), 1, "{name}: one boss");
-        } else {
+        }
+        if side_boss {
+            assert_eq!(count(b'w'), 1, "{name}: a level whose boss is aside ends at one portal");
+        } else if !boss {
             assert_eq!(count(b'w'), 1, "{name}: a level without a boss ends at one portal");
             assert_eq!(count(b'X'), 0, "{name}: no arena without a boss");
         }
@@ -43,16 +48,24 @@ fn maps_are_well_formed() {
 
         if boss {
             let (arena_x, _) = level.find(b'X').unwrap();
-            assert_eq!(width - arena_x, ARENA_TILES, "{name}: the arena is one screen wide");
-            let (boss_x, _) = level.find(b'B').unwrap();
+            let (boss_x, boss_y) = level.find(b'B').unwrap();
+            if side_boss {
+                // Walled at both ends, one screen apart: the floor runs from the edge to
+                // the far wall (a prisoner's blocks may stand in it, which are air here).
+                let wall = (arena_x..width).find(|&x| level.tile(x, boss_y) != Tile::Empty).unwrap();
+                assert!(wall - arena_x >= ARENA_TILES, "{name}: the arena is one screen wide");
+                assert!(boss_x < arena_x + ARENA_TILES, "{name}: boss inside the arena");
+            } else {
+                assert_eq!(width - arena_x, ARENA_TILES, "{name}: the arena is one screen wide");
+            }
             assert!(boss_x > arena_x, "{name}: boss inside the arena");
         }
-        let people = level.markers().filter(|&(c, _, _)| matches!(c, b'e' | b'c')).count();
+        let people = level.markers().filter(|&(c, _, _)| matches!(c, b'e' | b'c' | b'f')).count();
         assert_eq!(people, level.npcs.len(), "{name}: lines for everyone on the map");
 
         for (c, tx, ty) in level.markers() {
             assert_eq!(level.tile(tx, ty), Tile::Empty, "{name}: {} at ({tx},{ty}) is in rock", c as char);
-            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm' | b'a');
+            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm' | b'a' | b'f');
             if grounded {
                 assert!(level.is_floor(tx, ty + 1), "{name}: {} at ({tx},{ty}) floats", c as char);
             }
@@ -139,7 +152,7 @@ fn bot_clears_every_level_in_god_mode() {
                 break;
             }
         }
-        if world.level.find(b'B').is_none() {
+        if world.level.find(b'B').is_none() || !world.level.boss.ends_level() {
             // A level without a boss is cleared by stepping into its portal.
             assert!(world.cleared, "{}: stuck at x={} y={} after waypoint {}", level.name, world.player.body.x(), world.player.body.y(), bot.step());
             assert_eq!(bot.step(), level.route.len(), "{}: waypoints left", level.name);

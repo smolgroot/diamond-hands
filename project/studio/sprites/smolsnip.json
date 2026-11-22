@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "Smolsnip",
+  "image": "assets/sprites/smolsnip.png",
+  "frame": {
+    "width": 64,
+    "height": 64
+  },
+  "anchor": {
+    "x": 32,
+    "y": 58
+  },
+  "hitbox": {
+    "x": 22,
+    "y": 12,
+    "width": 20,
+    "height": 46
+  },
+  "animations": [
+    {
+      "name": "idle",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "name": "Crab bot boss",
+  "image": "generated/sprites/crab-bot-boss.png",
+  "frame": {
+    "width": 64,
+    "height": 64
+  },
+  "anchor": {
+    "x": 32,
+    "y": 64
+  },
+  "hitbox": {
+    "x": 10,
+    "y": 38,
+    "width": 44,
+    "height": 26
+  },
+  "animations": [
+    {
+      "name": "idle",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 12
+        },
+        {
+          "index": 1,
+          "duration": 12
+        },
+        {
+          "index": 2,
+          "duration": 12
+        },
+        {
+          "index": 3,
+          "duration": 12
+        },
+        {
+          "index": 1,
+          "duration": 12
+        },
+        {
+          "index": 1,
+          "duration": 12
+        },
+        {
+          "index": 1,
+          "duration": 12
+        },
+        {
+          "index": 1,
+          "duration": 12
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "move",
+      "frames": [
+        {
+          "index": 6,
+          "duration": 6
+        },
+        {
+          "index": 7,
+          "duration": 6
+        },
+        {
+          "index": 8,
+          "duration": 6
+        },
+        {
+          "index": 9,
+          "duration": 6
+        },
+        {
+          "index": 10,
+          "duration": 6
+        },
+        {
+          "index": 11,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "rush",
+      "frames": [
+        {
+          "index": 12,
+          "duration": 5
+        },
+        {
+          "index": 13,
+          "duration": 5
+        },
+        {
+          "index": 14,
+          "duration": 5
+        },
+        {
+          "index": 15,
+          "duration": 5
+        },
+        {
+          "index": 16,
+          "duration": 5
+        },
+        {
+          "index": 17,
+          "duration": 5
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "halo",
+      "frames": [
+        {
+          "index": 18,
+          "duration": 8
+        },
+        {
+          "index": 19,
+          "duration": 8
+        },
+        {
+          "index": 20,
+          "duration": 8
+        },
+        {
+          "index": 21,
+          "duration": 8
+        },
+        {
+          "index": 22,
+          "duration": 8
+        },
+        {
+          "index": 23,
+          "duration": 8
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "water",
+      "frames": [
+        {
+          "index": 24,
+          "duration": 6
+        },
+        {
+          "index": 25,
+          "duration": 6
+        },
+        {
+          "index": 26,
+          "duration": 6
+        },
+        {
+          "index": 27,
+          "duration": 6
+        },
+        {
+          "index": 28,
+          "duration": 6
+        },
+        {
+          "index": 29,
+          "duration": 6
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "hit",
+      "frames": [
+        {
+          "index": 30,
+          "duration": 3
+        },
+        {
+          "index": 31,
+          "duration": 3
+        },
+        {
+          "index": 32,
+          "duration": 3
+        },
+        {
+          "index": 33,
+          "duration": 3
+        }
+      ],
+      "loop": false
+    },
+    {
+      "name": "death",
+      "frames": [
+        {
+          "index": 36,
+          "duration": 16
+        },
+        {
+          "index": 37,
+          "duration": 16
+        },
+        {
+          "index": 38,
+          "duration": 16
+        },
+        {
+          "index": 39,
+          "duration": 16
+        },
+        {
+          "index": 40,
+          "duration": 16
+        },
+        {
+          "index": 41,
+          "duration": 16
+        }
+      ],
+      "loop": false
+    }
+  ]
+}

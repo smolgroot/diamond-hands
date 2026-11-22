@@ -19,7 +19,7 @@ use std::{collections::HashMap, env, fmt::Write, fs, path::PathBuf};
 use serde_json::Value;
 
 /// Levels made in the studio: the name of the generated module, and its rooms.
-const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "beach-tunnels", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
+const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "beach-tunnels", "crab-lair", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
 
 /// Entity type to map marker.
 const MARKERS: &[(&str, u8)] = &[
@@ -45,6 +45,9 @@ const MARKERS: &[(&str, u8)] = &[
     ("power-gate", b'h'),
     ("bot-blockade", b'm'),
     ("crab-bot", b'a'),
+    ("arena-edge", b'X'),
+    ("crab-boss", b'B'),
+    ("smolsnip", b'f'),
 ];
 
 /// Breakable blocks: entity type to the marker of its bottom-left tile. A block is 16x16
@@ -53,7 +56,7 @@ const MARKERS: &[(&str, u8)] = &[
 const BLOCKS: &[(&str, u8)] = &[("sand-block", b'n'), ("dock-crate", b'u'), ("soil-block", b'y')];
 
 /// The speaker of an entity type's lines.
-const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo")];
+const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo"), ("smolsnip", "Smolsnip")];
 
 fn read(path: &PathBuf) -> Value {
     println!("cargo:rerun-if-changed={}", path.display());

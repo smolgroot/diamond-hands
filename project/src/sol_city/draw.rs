@@ -9,6 +9,7 @@ use agb::{
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
     block::BlockLook,
+    boss::{BossState, CRAB_DYING_FRAMES, HALO_LIVE_FRAMES, SPRAY_TELL_FRAMES},
     enemy::{Actor, ActorKind, CRAB_SNAP_FRAMES, DINO_ROAR_FRAMES, state},
     fx::FxKind,
     player::{Aim, HOVER_FRAMES},
@@ -263,6 +264,7 @@ impl Screen {
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             let art = HudArt { life_caps: &self.life_caps, life: &self.life, diamond: &self.diamond };
             screens::hud(&self.font, &art, None, game, frame);
+            self.boss_bar(game, frame);
         }
         // Title cards stand alone, on black.
         if !matches!(game.scene, Scene::Map | Scene::LevelClear | Scene::Intro) {
@@ -270,6 +272,7 @@ impl Screen {
             self.effects(game, frame, cx, cy);
             self.shots(game, frame, cx, cy);
             self.wassie(game, frame, cx, cy);
+            self.boss(game, frame, cx, cy);
             self.actors(game, frame, cx, cy);
             if let Some(view) = &self.view {
                 view.show(frame);
@@ -301,6 +304,10 @@ impl Screen {
             Speaker::Keeper => put(frame, &gfx::SPRITE_PORTRAITS, (mouth > 0) as usize, px, py - bob, false),
             Speaker::Cosmo => put(frame, &gfx::SPRITE_PORTRAITS, 2 + (mouth > 0) as usize, px, py - bob, false),
             Speaker::Cl207 => put(frame, &gfx::SPRITE_CL207_PORTRAIT, mouth, px, py - bob, false),
+            // Cut from their sprites (`tools/crab-boss-sheet.py`): one face each, so
+            // they only bob while they talk.
+            Speaker::CrabBot => put(frame, &gfx::SPRITE_CRAB_BOT_BOSS_PORTRAIT, 0, px, py - bob, false),
+            Speaker::Smolsnip => put(frame, &gfx::SPRITE_SMOLSNIP_PORTRAIT, 0, px, py - bob, false),
             _ => {}
         }
 
@@ -318,6 +325,73 @@ impl Screen {
         }
         if let Some(dialog) = &mut self.dialog {
             dialog.show_sprites(frame);
+        }
+    }
+
+    /// The boss's name and health along the bottom of the screen while it fights, as
+    /// every level shows it.
+    fn boss_bar(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let world = &game.world;
+        if !world.boss.is_active() || world.boss.is_beaten() {
+            return;
+        }
+        let y = 148;
+        let name = world.level.boss_name;
+        self.font.draw(frame, name, 4, y, false);
+        let bar_x = (8 + Font::width(name, false) + 4).max(56);
+        let full = world.boss.hp * 64 / world.boss.max_hp();
+        for i in 0..8 {
+            let filled = (full - i * 8).clamp(0, 8);
+            put(frame, &gfx::SPRITE_HUD_8X8_2, filled as usize, bar_x + i * 8, y, false);
+        }
+    }
+
+    /// The Big Crab Bot, from its sheet (`studio/sprites/crab-bot-boss.json`): one row
+    /// of the author's mockup per attack. It faces the wassie; the sheet rushes right.
+    fn boss(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
+        let boss = &game.world.boss;
+        if !boss.present {
+            return;
+        }
+        let s = &gfx::SPRITE_CRAB_BOT_BOSS;
+        let r = boss.rect();
+        if r.right() < cx - 32 || r.x > cx + SCREEN_W + 32 || r.bottom() < cy || r.y > cy + SCREEN_H + 48 {
+            return;
+        }
+        let tick = game.frame;
+        let first = |name| s.animation(name).map_or(0, |a| a.frame_at(0));
+        let index = match boss.state {
+            BossState::Dying => anim(s, "death", (CRAB_DYING_FRAMES - boss.timer) as u32),
+            // The wreck stays where it fell: the last frame of its death.
+            BossState::Defeated => first("death") + 5,
+            _ if boss.flash > 0 => first("hit") + (6 - boss.flash.min(6) as usize) / 2,
+            // Dazed against the wall after a Rush: its eyes gone orange.
+            BossState::Stunned => first("hit") + 2,
+            // Crouched, kicking up sand, then the charge itself.
+            BossState::Telegraph => first("rush") + (tick / 6 % 2) as usize,
+            BossState::Charge => first("rush") + 2 + (tick / 4 % 3) as usize,
+            // The cannons tilt, then the jets leave them as the volley goes.
+            BossState::Spray => match boss.timer {
+                0..=4 => first("water") + 4,
+                5..=8 => first("water") + 3,
+                t => first("water") + ((SPRAY_TELL_FRAMES.saturating_sub(t)) / 6).min(2) as usize,
+            },
+            // The ring gathers, crackles, then dies down.
+            BossState::Halo if boss.timer > HALO_LIVE_FRAMES => first("halo") + 1,
+            BossState::Halo if boss.timer > 8 => first("halo") + 2 + (tick / 4 % 3) as usize,
+            BossState::Halo => first("halo") + 5,
+            BossState::Walk if boss.body.vx_fx != 0 => anim(s, "move", (r.x.unsigned_abs() / 2) * 6),
+            _ => anim(s, "idle", tick),
+        };
+        if boss.flash > 0 && boss.state != BossState::Dying && (tick / 2).is_multiple_of(2) {
+            return;
+        }
+        at(frame, s, index, r.centre_x() - cx, r.bottom() - cy, boss.facing < 0);
+        // "!" over it when an attack is coming, as over any villain.
+        let tell = matches!(boss.state, BossState::Telegraph | BossState::Spray)
+            || (boss.state == BossState::Halo && boss.timer > HALO_LIVE_FRAMES);
+        if tell && game.scene == Scene::Play {
+            put(frame, &gfx::SPRITE_UI, ui::ALERT, r.centre_x() - 4 - cx, r.y - 22 - cy, false);
         }
     }
 
@@ -363,8 +437,10 @@ impl Screen {
                     at(frame, s, anim(s, "death", e.age as u32), e.x - cx, e.y - cy, false);
                     continue;
                 }
+                // The Big Crab Bot's water jets burst into droplets where they land.
+                FxKind::Splat => (fx::GLINT, 3),
                 // Casino effects: Sol City has none.
-                FxKind::CoinPop | FxKind::Splat | FxKind::NinjaWreck => continue,
+                FxKind::CoinPop | FxKind::NinjaWreck => continue,
             };
             at(frame, sheet, first + e.frame(count), e.x - cx, e.y - cy, false);
         }
@@ -401,6 +477,10 @@ impl Screen {
                     at(frame, sheet, head, x + sx, y + dy, left);
                 }
                 ShotKind::Bomb => at(frame, sheet, fx::BOMB, x, y, false),
+                // The Big Crab Bot's Water Cannons lob jets (the code's thrown kind, as
+                // SAM's cucumbers are), and its halo throws sparks along the floor.
+                ShotKind::Cucumber => at(frame, sheet, fx::GLINT + 1 + (game.frame / 4 % 2) as usize, x, y, false),
+                ShotKind::Shockwave => at(frame, sheet, fx::SPARKS + (game.frame / 3 % 2) as usize, x, y, false),
                 _ => at(frame, sheet, fx::BULLET, x, y, left),
             }
         }
@@ -580,6 +660,8 @@ impl Screen {
                 // Facing the wassie in its sheet; it snaps toward its facing side.
                 at(frame, s, index, x, feet, a.facing < 0);
             }
+            // Smolsnip, the Big Crab Bot's prisoner, facing out of its cell.
+            ActorKind::Prisoner => at(frame, &gfx::SPRITE_SMOLSNIP, 0, x, feet, false),
             ActorKind::Npc => {
                 let (s, name): (&'static SpriteSheet, &str) = match speaker {
                     Some(Speaker::Cosmo) => (&gfx::SPRITE_COSMONAUT_WASSIE, "idle"),

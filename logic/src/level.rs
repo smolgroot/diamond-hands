@@ -37,6 +37,7 @@
 //! | `B`  | the boss |
 //! | `x`  | a clay dino on the loose: charges; calms down once the power is back |
 //! | `e`, `c` | someone to talk to (the zookeeper, the cosmonaut wassie): their lines are [`Level::npcs`], in map order |
+//! | `f`  | a boss's prisoner (Smolsnip): someone to talk to too, but only once the boss is beaten, and they pay a reward |
 //! | `w`  | the Wormhole portal: stepping in ends the level |
 //! | `h`  | a gate that stays shut until a terminal (`E`) brings the power back |
 //! | `m`  | a blockade bot: armoured, it can't be beaten, only gone around |
@@ -136,6 +137,16 @@ pub enum BossKind {
     Bera,
     /// SAM, the cyborg exchange founder with a cucumber.
     Sam,
+    /// The Big Crab Bot, in its lair under Sol City's beach. Not the end of the level.
+    Crab,
+}
+
+impl BossKind {
+    /// Beating it clears the level. The Big Crab Bot guards a side lair, so beating it
+    /// only opens its arena again.
+    pub const fn ends_level(self) -> bool {
+        !matches!(self, BossKind::Crab)
+    }
 }
 
 /// Scenery pictures bigger than a tile: the letter fills the picture's whole block in

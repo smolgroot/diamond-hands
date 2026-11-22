@@ -39,7 +39,7 @@ impl Cue {
             Scene::Intro | Scene::Arrival | Scene::Play | Scene::Paused | Scene::Dialog => {
                 if world.player.is_dead() && world.player.hp <= 0 {
                     Cue::Down
-                } else if world.boss.is_beaten() {
+                } else if world.boss.is_beaten() && world.boss.kind.ends_level() {
                     Cue::Clear
                 } else if (game.scene == Scene::Dialog && game.talk == Talk::Boss) || world.boss.is_active() {
                     Cue::Boss

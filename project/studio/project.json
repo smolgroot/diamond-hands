@@ -333,6 +333,28 @@
       "sprite": "crab-bot",
       "props": [],
       "behaviours": []
+    },
+    {
+      "id": "crab-boss",
+      "name": "Big Crab Bot (boss)",
+      "colour": "#e0306a",
+      "sprite": "crab-bot-boss",
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "smolsnip",
+      "name": "Smolsnip (prisoner)",
+      "colour": "#f0c020",
+      "sprite": "smolsnip",
+      "props": [
+        {
+          "name": "talk",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "behaviours": []
     }
   ],
   "physics": {
