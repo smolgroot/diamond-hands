@@ -171,7 +171,7 @@ pub struct Progress {
     pub parts: u16,
     /// What the run had taken at its beacon, one bit per actor slot (see
     /// [`World::taken`]). Only an explorable level reads it back.
-    pub taken: u128,
+    pub taken: crate::enemy::ActorSet,
 }
 
 impl Progress {
@@ -1214,7 +1214,7 @@ mod tests {
         play_level(&mut game);
         let w = &mut game.world;
         w.god = true;
-        w.player = crate::player::Player::new(crate::physics::Body::standing_on_tile(249, 35, crate::player::PLAYER_W, crate::player::PLAYER_H));
+        w.player = crate::player::Player::new(crate::physics::Body::standing_on_tile(309, 35, crate::player::PLAYER_W, crate::player::PLAYER_H));
         game.step(&Input::default());
         assert_eq!((game.scene, game.talk), (Scene::Dialog, Talk::Npc(1)));
         assert_eq!(game.talk_lines()[0].speaker, crate::talk::Speaker::Cosmo);

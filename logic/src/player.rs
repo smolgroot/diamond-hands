@@ -70,7 +70,6 @@ pub enum PlayerState {
 }
 
 /// Where the blaster points, for a wassie facing right (mirrored when facing left).
-/// The down aims only work in the air.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Aim {
@@ -260,7 +259,7 @@ impl Player {
             Aim::Forward
         } else if input.up() {
             if dir != 0 { Aim::UpForward } else { Aim::Up }
-        } else if input.down() && !self.grounded {
+        } else if input.down() {
             if dir != 0 { Aim::DownForward } else { Aim::Down }
         } else {
             Aim::Forward
@@ -530,15 +529,18 @@ mod tests {
     }
 
     #[test]
-    fn aims_eight_ways_but_down_only_in_the_air() {
+    fn aims_eight_ways_on_the_ground_and_in_the_air() {
         let mut p = player();
         step(&mut p, keys::UP | keys::RIGHT, 0);
         assert_eq!(p.aim, Aim::UpForward);
         step(&mut p, keys::UP, keys::UP);
         assert_eq!(p.aim, Aim::Up);
         step(&mut p, keys::DOWN | keys::LEFT, 0);
-        assert_eq!(p.aim, Aim::Forward, "no down aim on the ground");
+        assert!(p.grounded);
+        assert_eq!(p.aim, Aim::DownForward, "down aims work standing too");
         assert_eq!(p.facing, -1);
+        step(&mut p, keys::DOWN, keys::DOWN);
+        assert_eq!(p.aim, Aim::Down);
         step(&mut p, keys::A, 0);
         step(&mut p, keys::DOWN | keys::RIGHT, 0);
         assert_eq!(p.aim, Aim::DownForward);

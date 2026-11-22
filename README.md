@@ -21,7 +21,10 @@ with a boss.
    cucumber. The casino pays in **gold coins**, which the penguin cashier changes into
    diamonds after the fight.
 3. **Sol City** (playable in the studio ROM, `project/`): the morning after the casino, a Miami of the
-   Solana ecosystem. Beach, cafés and palms, then **MagicEden**, a dinosaur zoo hit by a
+   Solana ecosystem. A long beach where crab bots scuttle over the sand: shoot apart
+   the sand blocks plugging its shafts to drop into the tunnels underneath, a gallery
+   of diamonds that climbs back out up a stack of planks. Then cafés and palms, then
+   **MagicEden**, a dinosaur zoo hit by a
    power cut: its clay dinos are loose. The zookeeper explains; the breaker is down in the
    service tunnels under the paddocks. Thrown, the fences hold the dinos again and the
    harbor gate opens. At the harbor, bots jam the **Wormhole Bridge**'s door and can't be
@@ -33,7 +36,7 @@ with a boss.
 
 | Button      | Action                                                          |
 | ----------- | --------------------------------------------------------------- |
-| D-pad       | Move and aim: Up, Up+forward; in the air also Down, Down+forward |
+| D-pad       | Move and aim: Up, Up+forward, Down, Down+forward |
 | A           | Jump (hold for higher); keep holding to hover on the jetpack    |
 | B           | Fire; hold and release for a charged beam                       |
 | L or R      | Hold to plant your feet, so the d-pad only aims                 |

@@ -30,6 +30,8 @@ pub enum FxKind {
     Wreck,
     /// A beaten Guard, the casino's ninja bot, going down the same way.
     NinjaWreck,
+    /// A beaten crab bot sputtering, slumping flat and smoking until it fades.
+    CrabWreck,
 }
 
 impl FxKind {
@@ -45,7 +47,7 @@ impl FxKind {
             FxKind::Kick => 12,
             FxKind::CoinPop => 24,
             FxKind::Splat => 12,
-            FxKind::Wreck | FxKind::NinjaWreck => 90,
+            FxKind::Wreck | FxKind::NinjaWreck | FxKind::CrabWreck => 90,
         }
     }
 }

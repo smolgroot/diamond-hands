@@ -19,7 +19,7 @@ use std::{collections::HashMap, env, fmt::Write, fs, path::PathBuf};
 use serde_json::Value;
 
 /// Levels made in the studio: the name of the generated module, and its rooms.
-const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
+const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "beach-tunnels", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
 
 /// Entity type to map marker.
 const MARKERS: &[(&str, u8)] = &[
@@ -44,6 +44,7 @@ const MARKERS: &[(&str, u8)] = &[
     ("portal", b'w'),
     ("power-gate", b'h'),
     ("bot-blockade", b'm'),
+    ("crab-bot", b'a'),
 ];
 
 /// Breakable blocks: entity type to the marker of its bottom-left tile. A block is 16x16

@@ -2,10 +2,10 @@
 //! beach, cafés and palms, then the MagicEden dino zoo, the harbor and the Wormhole
 //! Bridge to Ethereum City.
 //!
-//! The map is painted in GBA-Studio as six rooms (`project/studio/rooms/`: `beach`,
-//! `harbor`, `jurassic-zoo`, `service-tunnels`, `marina` and `wormhole-hq`), each in its
-//! own tileset, which `build.rs` stitches where they sit on the world map and turns into
-//! rows of the `level.rs` legend, with the zookeeper's and the cosmonaut's lines from
+//! The map is painted in GBA-Studio as seven rooms (`project/studio/rooms/`: `beach`,
+//! `beach-tunnels`, `harbor`, `jurassic-zoo`, `service-tunnels`, `marina` and
+//! `wormhole-hq`), each in its own tileset, which `build.rs` stitches where they sit on
+//! the world map and turns into rows of the `level.rs` legend, with the zookeeper's and the cosmonaut's lines from
 //! their `talk` properties. Each room is a camera zone (the beach and the harbor, one
 //! tileset side by side, share one): the camera stays in it and cuts across at a
 //! doorway. Edit them in the studio. The zoo, the tunnels and the Wormhole building were
@@ -14,17 +14,21 @@
 //!
 //! The way through (rows 0-59 of one tall map):
 //!
-//! - the beach (columns 0-29) and the café terrace (30-59), where the MagicEden
-//!   zookeeper explains: a power cut, the fences dead, the clay dinos loose;
-//! - the Jurassic Zoo (60-149, rows 0-39): a lower paddock of loose dinos, a jungle
-//!   canopy above it up the girders at the east end, and a service shaft (92-101) down
-//!   to the tunnels. The gate to the harbor (146) holds until the power is back;
-//! - the service tunnels (rows 40-59): the generator's breaker at the west end (70).
+//! - the beach (columns 0-89, rows 0-39), where crab bots scuttle over the sand. Two
+//!   shafts in it (38-40 and 66-68) are plugged by sand blocks: shot apart, they drop
+//!   into the beach tunnels (rows 40-59), a gallery of diamonds under the sand that
+//!   climbs back out up a stack of planks through a hole at 79-82;
+//! - the café terrace (90-119), where the MagicEden zookeeper explains: a power cut,
+//!   the fences dead, the clay dinos loose;
+//! - the Jurassic Zoo (120-209, rows 0-39): a lower paddock of loose dinos, a jungle
+//!   canopy above it up the girders at the east end, and a service shaft (152-161) down
+//!   to the tunnels. The gate to the harbor (206) holds until the power is back;
+//! - the service tunnels (rows 40-59): the generator's breaker at the west end (130).
 //!   Thrown, the fences hold the dinos again and the zoo's gate opens. Girders beside
-//!   the shaft (98-101) climb back up;
-//! - the harbor (150-209): piers over the water, containers stacked up to a crane, and
+//!   the shaft (158-161) climb back up;
+//! - the harbor (210-269): piers over the water, containers stacked up to a crane, and
 //!   the Wormhole building's front door, jammed by blockade bots that can't be beaten;
-//! - the Wormhole building (210-269): in off the crane's jib at its roof (row 15),
+//! - the Wormhole building (270-329): in off the crane's jib at its roof (row 15),
 //!   through a skylight and down a zigzag of floors to the portal hall, where the
 //!   cosmonaut wassie waits by the portal.
 
@@ -40,33 +44,33 @@ include!(concat!(env!("OUT_DIR"), "/sol_city.rs"));
 /// the harbor's containers and crane onto the roof, and down the building's floors to
 /// the portal.
 static ROUTE: [(i32, i32); 27] = [
-    (93, 45),
-    (99, 55),
-    (87, 51),
-    (74, 53),
-    (70, 55),
-    (74, 53),
-    (87, 51),
-    (94, 49),
-    (94, 45),
-    (99, 41),
-    (99, 37),
-    (104, 35),
-    (150, 35),
-    (195, 29),
-    (199, 26),
-    (205, 22),
-    (200, 18),
-    (204, 15),
-    (215, 15),
-    (232, 21),
-    (236, 29),
-    (232, 33),
-    (236, 41),
-    (232, 45),
-    (237, 57),
-    (250, 57),
-    (258, 57),
+    (153, 45),
+    (159, 55),
+    (147, 51),
+    (134, 53),
+    (130, 55),
+    (134, 53),
+    (147, 51),
+    (154, 49),
+    (154, 45),
+    (159, 41),
+    (159, 37),
+    (164, 35),
+    (210, 35),
+    (255, 29),
+    (259, 26),
+    (265, 22),
+    (260, 18),
+    (264, 15),
+    (275, 15),
+    (292, 21),
+    (296, 29),
+    (292, 33),
+    (296, 41),
+    (292, 45),
+    (297, 57),
+    (310, 57),
+    (318, 57),
 ];
 
 static MARKERS: Markers = Markers::scan(ROWS);

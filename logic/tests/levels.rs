@@ -52,7 +52,7 @@ fn maps_are_well_formed() {
 
         for (c, tx, ty) in level.markers() {
             assert_eq!(level.tile(tx, ty), Tile::Empty, "{name}: {} at ({tx},{ty}) is in rock", c as char);
-            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm');
+            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm' | b'a');
             if grounded {
                 assert!(level.is_floor(tx, ty + 1), "{name}: {} at ({tx},{ty}) floats", c as char);
             }

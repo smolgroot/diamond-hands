@@ -5,6 +5,9 @@
 //! picked up in the level so far, and CL207's shield parts; version 7 what a run had
 //! taken at its beacon, for the explorable Badlands. Version 8 is laid out as version
 //! 7: it marks saves made since the Trenches were rebuilt as an explorable map too.
+//! Version 9 keeps 256 bits of what a run had taken, since Sol City grew past 128
+//! actors when its beach got longer and the tunnels under it; that moved everything
+//! east of the beach, so a run saved part-way through Sol City starts it again.
 //! Each starts with a tag, and an older cartridge is read in its own layout and moved
 //! over rather than wiped.
 //!
@@ -15,6 +18,7 @@ use agb::save::{SaveManager, SaveSlotManager};
 use diamond_hands_logic::{
     Difficulty, Game, Progress,
     game::FILES,
+    enemy::ActorSet,
     levels::{self, Cleared},
 };
 use serde::{Deserialize, Serialize};
@@ -22,8 +26,9 @@ use serde::{Deserialize, Serialize};
 /// Changing this wipes existing saves, so bump the suffix only for incompatible formats.
 /// Formats that can be read and moved over keep it and change [`TAG`] instead.
 const MAGIC: [u8; 32] = *b"diamond-hands-save-v4___________";
-/// Leads every version 8 save.
-const TAG: [u8; 4] = *b"DHv8";
+/// Leads every version 9 save.
+const TAG: [u8; 4] = *b"DHv9";
+const TAG_V8: [u8; 4] = *b"DHv8";
 const TAG_V7: [u8; 4] = *b"DHv7";
 const TAG_V6: [u8; 4] = *b"DHv6";
 const TAG_V5: [u8; 4] = *b"DHv5";
@@ -53,7 +58,7 @@ struct FileData {
     wallet: u32,
     purse: u32,
     parts: u16,
-    taken: u128,
+    taken: [u128; 2],
 }
 
 impl FileData {
@@ -63,19 +68,82 @@ impl FileData {
         if self.level != level || self.checkpoint.is_none() {
             return self;
         }
-        Self { checkpoint: None, beacons: 0, diamonds: 0, kills: 0, frames: 0, coins: 0, taken: 0, ..self }
+        Self { checkpoint: None, beacons: 0, diamonds: 0, kills: 0, frames: 0, coins: 0, taken: [0; 2], ..self }
     }
 
-    /// From before version 7, both the Badlands and the Trenches were rebuilt since.
+    /// From before version 7, the Badlands, the Trenches and Sol City were all rebuilt
+    /// since.
     fn restart_rebuilt_levels(self) -> Self {
-        self.restart_rebuilt(0).restart_rebuilt(1)
+        self.restart_rebuilt(0).restart_rebuilt(1).restart_rebuilt(2)
     }
 }
 
 impl SaveData {
-    /// A version 7 save: only the Trenches were rebuilt since.
-    fn from_v7(v7: SaveData) -> Self {
-        Self { tag: TAG, files: v7.files.map(|f| f.map(|f| f.restart_rebuilt(1))), ..v7 }
+    /// A version 8 save: Sol City was rebuilt since.
+    fn from_v8(v8: SaveDataV8) -> Self {
+        Self {
+            tag: TAG,
+            best: v8.best,
+            difficulty: v8.difficulty,
+            files: v8.files.map(|f| f.map(FileData::from)),
+        }
+    }
+
+    /// A version 7 save, laid out as version 8: the Trenches were rebuilt since too.
+    fn from_v7(v7: SaveDataV8) -> Self {
+        let v8 = Self::from_v8(v7);
+        Self { files: v8.files.map(|f| f.map(|f| f.restart_rebuilt(1))), ..v8 }
+    }
+}
+
+/// The version 7 and 8 layout, from before Sol City's beach grew: 128 bits taken.
+#[derive(Clone, Serialize, Deserialize)]
+struct SaveDataV8 {
+    tag: [u8; 4],
+    best: u32,
+    difficulty: u8,
+    files: [Option<FileDataV8>; FILES],
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct FileDataV8 {
+    level: u8,
+    checkpoint: Option<(i32, i32)>,
+    beacons: u8,
+    banked: u32,
+    diamonds: u32,
+    kills: u32,
+    frames: u32,
+    complete: bool,
+    cleared: Cleared,
+    coins: u32,
+    wallet: u32,
+    purse: u32,
+    parts: u16,
+    taken: u128,
+}
+
+impl From<FileDataV8> for FileData {
+    /// A version 8 run keeps where it was, except part-way through Sol City: everything
+    /// east of its beach moved, so such a run starts the level again.
+    fn from(f: FileDataV8) -> Self {
+        Self {
+            level: f.level,
+            checkpoint: f.checkpoint,
+            beacons: f.beacons,
+            banked: f.banked,
+            diamonds: f.diamonds,
+            kills: f.kills,
+            frames: f.frames,
+            complete: f.complete,
+            cleared: f.cleared,
+            coins: f.coins,
+            wallet: f.wallet,
+            purse: f.purse,
+            parts: f.parts,
+            taken: [f.taken, 0],
+        }
+        .restart_rebuilt(2)
     }
 }
 
@@ -124,7 +192,7 @@ impl From<FileDataV6> for FileData {
             wallet: f.wallet,
             purse: f.purse,
             parts: f.parts,
-            taken: 0,
+            taken: [0; 2],
         }
         .restart_rebuilt_levels()
     }
@@ -183,7 +251,7 @@ impl From<FileDataV5> for FileData {
             wallet: 0,
             purse: 0,
             parts: 0,
-            taken: 0,
+            taken: [0; 2],
         }
         .restart_rebuilt_levels()
     }
@@ -242,7 +310,7 @@ impl From<FileDataV4> for FileData {
             wallet: 0,
             purse: 0,
             parts: 0,
-            taken: 0,
+            taken: [0; 2],
         }
         .restart_rebuilt_levels()
     }
@@ -275,7 +343,7 @@ impl From<Progress> for FileData {
             wallet: p.wallet,
             purse: p.purse,
             parts: p.parts,
-            taken: p.taken,
+            taken: p.taken.0,
         }
     }
 }
@@ -296,7 +364,7 @@ impl From<FileData> for Progress {
             wallet: f.wallet,
             purse: f.purse,
             parts: f.parts,
-            taken: f.taken,
+            taken: ActorSet(f.taken),
         }
     }
 }
@@ -326,7 +394,10 @@ impl Store {
                     .ok()
                     .filter(|data| data.tag == TAG)
                     .or_else(|| {
-                        slots.read::<SaveData>(0).ok().filter(|data| data.tag == TAG_V7).map(SaveData::from_v7)
+                        slots.read::<SaveDataV8>(0).ok().filter(|data| data.tag == TAG_V8).map(SaveData::from_v8)
+                    })
+                    .or_else(|| {
+                        slots.read::<SaveDataV8>(0).ok().filter(|data| data.tag == TAG_V7).map(SaveData::from_v7)
                     })
                     .or_else(|| {
                         slots

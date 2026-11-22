@@ -6,7 +6,7 @@ use alloc::{boxed::Box, vec};
 use crate::{
     FX, SCREEN_H, SCREEN_W, TILE,
     boss::{Boss, BossCtx},
-    enemy::{self, Actor, ActorKind, Ctx, MAX_ACTORS},
+    enemy::{self, Actor, ActorKind, ActorSet, Ctx, MAX_ACTORS},
     fx::{FxKind, FxPool},
     game::{Progress, keys},
     block::{Blocks, Map},
@@ -577,11 +577,14 @@ impl World {
     /// The actors taken so far, one bit per actor slot: pickups collected, villains
     /// beaten for good, beacons lit and terminals on. Saved with the run so an
     /// explorable level comes back exactly as it was left.
-    pub fn taken(&self) -> u128 {
-        self.actors[..self.used].iter().enumerate().fold(0, |mask, (i, a)| {
-            let done = a.killed || (a.kind.keeps_state() && a.state == enemy::state::LIT);
-            if done { mask | 1 << i } else { mask }
-        })
+    pub fn taken(&self) -> ActorSet {
+        let mut taken = ActorSet::EMPTY;
+        for (i, a) in self.actors[..self.used].iter().enumerate() {
+            if a.killed || (a.kind.keeps_state() && a.state == enemy::state::LIT) {
+                taken.insert(i);
+            }
+        }
+        taken
     }
 
     pub fn score(&self) -> u32 {
@@ -640,7 +643,7 @@ impl World {
         let edge = if self.level.explore {
             // No left-to-right order to go by: put back exactly what was taken.
             for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
-                if progress.taken & (1 << i) == 0 {
+                if !progress.taken.contains(i) {
                     continue;
                 }
                 if a.kind.keeps_state() {
@@ -1414,7 +1417,7 @@ impl World {
             let r = s.rect();
             for &i in &threats[..count] {
                 let (a, i) = (&mut self.actors[i as usize], i as usize);
-                if !a.is_threat() || !r.overlaps(&a.rect()) || s.hits & (1u128 << i) != 0 {
+                if !a.is_threat() || !r.overlaps(&a.rect()) || s.hits.contains(i) {
                     continue;
                 }
                 let ar = a.rect();
@@ -1436,7 +1439,7 @@ impl World {
                     }
                 }
                 if s.kind.pierces() {
-                    s.hits |= 1u128 << i;
+                    s.hits.insert(i);
                 } else {
                     s.active = false;
                     break;
@@ -1773,6 +1776,13 @@ mod tests {
         events
     }
 
+    /// Presses `keys` (on top of `before`, held from the frame before) and holds them.
+    fn press(w: &mut World, keys: u16, before: u16, frames: usize) -> Events {
+        let mut events = w.step(&Input::from_keys(keys, before));
+        events.insert(hold(w, keys, frames.saturating_sub(1)));
+        events
+    }
+
     fn tap(w: &mut World, keys: u16) -> Events {
         let events = w.step(&Input::from_keys(keys, 0));
         w.step(&Input::default());
@@ -1867,6 +1877,16 @@ mod tests {
         w.step(&Input::from_keys(keys::DOWN | keys::LEFT | keys::B, 0));
         let bolt = w.shots.iter().find(|s| s.active).unwrap();
         assert!(bolt.vx_fx < 0 && bolt.vy_fx > 0, "down and back the way it faces");
+    }
+
+    #[test]
+    fn down_aims_fire_from_the_ground() {
+        let mut w = world();
+        hold(&mut w, 0, 5);
+        assert!(w.player.grounded);
+        let events = w.step(&Input::from_keys(keys::DOWN | keys::B, keys::DOWN));
+        assert!(events.contains(Events::SHOOT), "standing, the blaster fires straight down");
+        assert_eq!(w.player.aim, crate::player::Aim::Down);
     }
 
     #[test]
@@ -2443,7 +2463,7 @@ mod tests {
         assert_eq!(again.lift.unwrap().state, LiftState::Done);
         assert!(again.camera_y < SCREEN_H);
         // Without the breaker, the lift is still dark.
-        let dark = Progress { taken: 0, ..down };
+        let dark = Progress { taken: ActorSet::EMPTY, ..down };
         assert_eq!(World::resume(&dark, Difficulty::Normal).lift.unwrap().state, LiftState::Dark);
     }
 
@@ -2461,9 +2481,9 @@ mod tests {
 
     #[test]
     fn a_loose_dino_roars_then_charges_and_the_power_calms_it() {
-        let mut w = sol_city_on(80, 35);
+        let mut w = sol_city_on(140, 35);
         w.god = true;
-        let d = w.actors.iter().position(|a| a.kind == ActorKind::Dino && (80..90).contains(&a.home.0.div_euclid(TILE))).unwrap();
+        let d = w.actors.iter().position(|a| a.kind == ActorKind::Dino && (140..150).contains(&a.home.0.div_euclid(TILE))).unwrap();
         let home = w.actors[d].home;
         let mut roared = false;
         let mut charged = false;
@@ -2484,7 +2504,7 @@ mod tests {
 
     #[test]
     fn the_harbor_gate_stays_shut_until_the_breaker_is_thrown() {
-        let mut w = sol_city_on(138, 35);
+        let mut w = sol_city_on(198, 35);
         w.god = true;
         let g = w.actors[sol_city_first(&w, ActorKind::Gate)].rect();
         hold(&mut w, keys::RIGHT, 90);
@@ -2493,12 +2513,12 @@ mod tests {
         w.actors[t].state = state::LIT;
         hold(&mut w, keys::RIGHT, 90);
         assert!(w.player.body.x() > g.right(), "open, it lets the wassie through");
-        assert!(w.taken() & (1 << sol_city_first(&w, ActorKind::Gate)) != 0, "and a saved run keeps it open");
+        assert!(w.taken().contains(sol_city_first(&w, ActorKind::Gate)), "and a saved run keeps it open");
     }
 
     #[test]
     fn the_breaker_in_the_tunnels_brings_the_power_back() {
-        let mut w = sol_city_on(70, 55);
+        let mut w = sol_city_on(130, 55);
         assert!(!w.powered());
         assert!(w.up_prompt().is_some(), "Up works the breaker");
         let events = tap(&mut w, keys::UP);
@@ -2507,7 +2527,7 @@ mod tests {
 
     #[test]
     fn blockade_bots_shrug_off_shots_and_stomps() {
-        let mut w = sol_city_on(200, 35);
+        let mut w = sol_city_on(260, 35);
         let b = sol_city_first(&w, ActorKind::Blockade);
         w.actors[b].awake = true;
         for _ in 0..20 {
@@ -2539,17 +2559,110 @@ mod tests {
         assert_eq!(again.map().tile(15, 34), Tile::Empty);
     }
 
-    /// The crate tower on the dock: two crates stacked at columns 168-169.
+    #[test]
+    fn a_crab_bot_raises_its_claws_then_snaps_and_never_walks_off_a_ledge() {
+        use crate::enemy::{CRAB_SNAP_FRAMES, CRAB_TELL_FRAMES};
+        // The crab between the dune and the second shaft, the wassie a few steps east.
+        let mut w = sol_city_on(64, 35);
+        w.god = true;
+        let c = w.actors.iter().position(|a| a.kind == ActorKind::Crab && a.home.1 < 40 * TILE).unwrap();
+        let mut told_at = None;
+        let mut snapped_at = None;
+        for frame in 0..240 {
+            w.step(&Input::default());
+            let a = &w.actors[c];
+            if a.state == state::AIM && told_at.is_none() {
+                told_at = Some(frame);
+            }
+            if a.state == state::LUNGE && snapped_at.is_none() {
+                snapped_at = Some(frame);
+                assert!(a.facing > 0, "it snaps at the wassie");
+            }
+        }
+        let (told, snapped) = (told_at.expect("claws up"), snapped_at.expect("a snap"));
+        assert!(snapped - told >= CRAB_TELL_FRAMES as i32 - 1, "the tell comes first");
+        assert!(CRAB_SNAP_FRAMES > 0 && w.actors[c].is_threat());
+        // It keeps at it, snapping toward the second shaft (66-68), but never drops in.
+        let mut snaps = 0;
+        for _ in 0..1200 {
+            let was = w.actors[c].state;
+            w.step(&Input::default());
+            let a = &w.actors[c];
+            snaps += (a.state == state::LUNGE && was != state::LUNGE) as u32;
+            assert!(a.rect().bottom() <= 35 * TILE, "on the sand, never down a shaft");
+        }
+        assert!(snaps >= 3, "{snaps} snaps");
+    }
+
+    #[test]
+    fn shooting_the_sand_plugs_drops_the_wassie_into_the_tunnels() {
+        use crate::level::{Terrain, Tile};
+        // On the sand just west of the first shaft: the blaster fires down ahead of the
+        // wassie, over the plugs.
+        let mut w = sol_city_on(37, 35);
+        w.god = true;
+        hold(&mut w, 0, 5);
+        let top = w.blocks.at_px(38 * TILE + 4, 35 * TILE + 4).expect("the plug at the surface");
+        let bottom = w.blocks.at_px(38 * TILE + 4, 37 * TILE + 4).expect("the plug under it");
+        // Jumping and firing down breaks them, one after the other.
+        let mut events = Events::default();
+        for _ in 0..20 {
+            events.insert(press(&mut w, keys::A, 0, 8));
+            events.insert(press(&mut w, keys::DOWN | keys::B, keys::DOWN, 1));
+            events.insert(hold(&mut w, keys::DOWN, 40));
+            if w.blocks.is_broken(top) && w.blocks.is_broken(bottom) {
+                break;
+            }
+        }
+        assert!(w.blocks.is_broken(top) && w.blocks.is_broken(bottom), "both plugs come apart");
+        assert!(events.contains(Events::BREAK));
+        assert_eq!(w.map().tile(38, 39), Tile::Solid, "the nub the plugs sat on stays");
+        hold(&mut w, keys::RIGHT, 60);
+        hold(&mut w, 0, 60);
+        assert!(w.player.body.y() > 40 * TILE, "down in the tunnels");
+    }
+
+    #[test]
+    fn the_beach_tunnels_climb_back_out_to_the_beach() {
+        // At the foot of the climb, under the hole at 79-82.
+        let mut w = sol_city_on(80, 55);
+        w.god = true;
+        for _ in 0..12 {
+            if w.player.body.rect().bottom() <= 37 * TILE {
+                // On the plank in the hole: hop out onto the sand.
+                press(&mut w, keys::A | keys::RIGHT, keys::RIGHT, 30);
+                hold(&mut w, keys::RIGHT, 30);
+            } else {
+                // Straight up through the planks overhead, a plain jump at a time.
+                press(&mut w, keys::A, 0, 14);
+                hold(&mut w, 0, 30);
+            }
+            if w.player.grounded && w.player.body.rect().bottom() <= 35 * TILE {
+                break;
+            }
+        }
+        assert!(w.player.grounded && w.player.body.rect().bottom() == 35 * TILE, "back on the beach");
+    }
+
+    #[test]
+    fn the_beach_tunnels_hold_a_stash_of_diamonds() {
+        let w = sol_city_on(5, 35);
+        let under = |kind| w.actors[..w.used].iter().filter(|a| a.kind == kind && a.home.0 < 90 * TILE && a.home.1 >= 40 * TILE).count();
+        assert!(under(ActorKind::Diamond) >= 20, "{} diamonds", under(ActorKind::Diamond));
+        assert!(under(ActorKind::Crab) >= 2);
+    }
+
+    /// The crate tower on the dock: two crates stacked at columns 228-229.
     fn dock_tower(w: &World) -> (usize, usize) {
-        let bottom = w.blocks.at_px(168 * TILE + 4, 35 * TILE + 4).expect("the tower's bottom crate");
-        let top = w.blocks.at_px(168 * TILE + 4, 33 * TILE + 4).expect("the crate on top");
+        let bottom = w.blocks.at_px(228 * TILE + 4, 35 * TILE + 4).expect("the tower's bottom crate");
+        let top = w.blocks.at_px(228 * TILE + 4, 33 * TILE + 4).expect("the crate on top");
         (bottom, top)
     }
 
     #[test]
     fn a_crate_with_nothing_under_it_falls_and_lands() {
         use crate::level::{Terrain, Tile};
-        let mut w = sol_city_on(150, 35);
+        let mut w = sol_city_on(210, 35);
         let (bottom, top) = dock_tower(&w);
         hold(&mut w, 0, 10);
         assert_eq!(w.blocks.rect(top).y, 32 * TILE, "held up by the crate under it");
@@ -2561,7 +2674,7 @@ mod tests {
         hold(&mut w, 0, 40);
         assert!(!w.blocks.falling(top));
         assert_eq!(w.blocks.rect(top).bottom(), 36 * TILE, "on the quay");
-        assert_eq!((w.map().tile(168, 35), w.map().tile(168, 33)), (Tile::Solid, Tile::Empty));
+        assert_eq!((w.map().tile(228, 35), w.map().tile(228, 33)), (Tile::Solid, Tile::Empty));
         assert_eq!(w.actors[w.blocks.slots()[top] as usize].body.y(), 34 * TILE, "drawn where it is");
         // And a saved run puts it there straight away.
         let progress = Progress { level: 2, checkpoint: Some(w.checkpoint), taken: w.taken(), ..Progress::default() };
@@ -2571,7 +2684,7 @@ mod tests {
 
     #[test]
     fn every_sol_city_block_starts_at_rest() {
-        let mut w = sol_city_on(150, 35);
+        let mut w = sol_city_on(210, 35);
         let before: alloc::vec::Vec<_> = (0..w.blocks.len()).map(|i| w.blocks.rect(i)).collect();
         hold(&mut w, 0, 5);
         for (i, r) in before.iter().enumerate() {
@@ -2581,12 +2694,12 @@ mod tests {
 
     #[test]
     fn a_falling_crate_shatters_on_the_wassie() {
-        let mut w = sol_city_on(150, 35);
+        let mut w = sol_city_on(210, 35);
         let (bottom, top) = dock_tower(&w);
         let mut events = Events::default();
         w.hit_block(bottom, 99, &mut events);
         // The wassie steps in where the bottom crate stood.
-        w.player = Player::new(Body::standing_on_tile(168, 35, PLAYER_W, PLAYER_H));
+        w.player = Player::new(Body::standing_on_tile(228, 35, PLAYER_W, PLAYER_H));
         let hp = w.player.hp;
         let events = hold(&mut w, 0, 30);
         assert!(w.blocks.is_broken(top) && events.contains(Events::BREAK), "it comes apart on impact");
@@ -2595,7 +2708,7 @@ mod tests {
 
     #[test]
     fn falling_in_the_water_is_a_pit() {
-        let mut w = sol_city_on(176, 35);
+        let mut w = sol_city_on(236, 35);
         w.player.body.y_fx += 12 * FX;
         let hp = w.player.hp;
         let events = w.step(&Input::default());
@@ -2605,7 +2718,7 @@ mod tests {
 
     #[test]
     fn people_speak_up_once_then_again_on_up() {
-        let mut w = sol_city_on(56, 35);
+        let mut w = sol_city_on(116, 35);
         hold(&mut w, keys::RIGHT, 20);
         assert_eq!(w.npc_due.take(), Some(0), "the zookeeper has something to say");
         hold(&mut w, 0, 10);
@@ -2618,12 +2731,12 @@ mod tests {
 
     #[test]
     fn the_portal_waits_for_its_keeper_then_takes_the_wassie() {
-        let mut w = sol_city_on(264, 57);
+        let mut w = sol_city_on(324, 57);
         w.god = true;
         assert!(w.keeps_portal(1) && !w.portal_open(), "the cosmonaut minds it");
         hold(&mut w, keys::LEFT, 30);
         assert_eq!(w.warp, 0, "shut until it has spoken");
-        let mut w = sol_city_on(252, 57);
+        let mut w = sol_city_on(312, 57);
         w.god = true;
         hold(&mut w, 0, 2);
         assert_eq!(w.npc_due.take(), Some(1));

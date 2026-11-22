@@ -11,9 +11,27 @@ use crate::{
     world::Difficulty,
 };
 
-/// At most 128, for the `u128` masks a piercing beam keeps of the actors it has hit
-/// and a save keeps of those taken. Every `World` holds this many, on the heap.
-pub const MAX_ACTORS: usize = 128;
+/// At most 256, for the [`ActorSet`] masks a piercing beam keeps of the actors it has
+/// hit and a save keeps of those taken. Every `World` holds this many, on the heap.
+pub const MAX_ACTORS: usize = 192;
+const _: () = assert!(MAX_ACTORS <= ActorSet::CAPACITY);
+
+/// One bit per actor slot: what a run has taken, or the actors a piercing beam has hit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActorSet(pub [u128; 2]);
+
+impl ActorSet {
+    pub const EMPTY: ActorSet = ActorSet([0; 2]);
+    pub const CAPACITY: usize = 256;
+
+    pub const fn contains(&self, i: usize) -> bool {
+        self.0[i / 128] & (1 << (i % 128)) != 0
+    }
+
+    pub fn insert(&mut self, i: usize) {
+        self.0[i / 128] |= 1 << (i % 128);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -53,6 +71,9 @@ pub enum ActorKind {
     Gate,
     /// A blockade bot at the Wormhole terminal's door: armoured, it can't be beaten.
     Blockade,
+    /// A crab bot on the beach and in the tunnels under it: scuttles sideways, raises its
+    /// claws, then snaps forward.
+    Crab,
     /// A block of sand, a crate or a clod of soil that the wassie can shoot apart: solid
     /// terrain until it breaks (see [`crate::block`]).
     Block(BlockLook),
@@ -79,6 +100,7 @@ impl ActorKind {
             b'w' => ActorKind::Portal,
             b'h' => ActorKind::Gate,
             b'm' => ActorKind::Blockade,
+            b'a' => ActorKind::Crab,
             b'n' | b'u' | b'y' => ActorKind::Block(BlockLook::from_marker(c)?),
             _ => return None,
         })
@@ -104,6 +126,7 @@ impl ActorKind {
             ActorKind::Portal => (16, 52),
             ActorKind::Gate => (16, 32),
             ActorKind::Blockade => (16, 26),
+            ActorKind::Crab => (22, 16),
             ActorKind::Block(_) => (16, 16),
         }
     }
@@ -113,6 +136,7 @@ impl ActorKind {
         match self {
             ActorKind::Sentry => Some(crate::fx::FxKind::Wreck),
             ActorKind::Guard => Some(crate::fx::FxKind::NinjaWreck),
+            ActorKind::Crab => Some(crate::fx::FxKind::CrabWreck),
             _ => None,
         }
     }
@@ -128,6 +152,7 @@ impl ActorKind {
                 | ActorKind::Guard
                 | ActorKind::Dino
                 | ActorKind::Blockade
+                | ActorKind::Crab
         )
     }
 
@@ -136,7 +161,7 @@ impl ActorKind {
         match self {
             ActorKind::Guard => 3,
             ActorKind::Sentry | ActorKind::Dealer => 2,
-            ActorKind::Crawler | ActorKind::Drone | ActorKind::Mine => 1,
+            ActorKind::Crawler | ActorKind::Drone | ActorKind::Mine | ActorKind::Crab => 1,
             _ => 0,
         }
     }
@@ -146,7 +171,7 @@ impl ActorKind {
             ActorKind::Guard => 6,
             ActorKind::Dino => 4,
             ActorKind::Block(look) => look.hp(),
-            ActorKind::Sentry | ActorKind::Dealer => 3,
+            ActorKind::Sentry | ActorKind::Dealer | ActorKind::Crab => 3,
             ActorKind::Crawler | ActorKind::Drone => 2,
             _ => 1,
         }
@@ -154,7 +179,12 @@ impl ActorKind {
 
     pub fn contact_damage(self) -> i32 {
         match self {
-            ActorKind::Sentry | ActorKind::Crawler | ActorKind::Guard | ActorKind::Dino | ActorKind::Blockade => 2,
+            ActorKind::Sentry
+            | ActorKind::Crawler
+            | ActorKind::Guard
+            | ActorKind::Dino
+            | ActorKind::Blockade
+            | ActorKind::Crab => 2,
             _ => 1,
         }
     }
@@ -216,6 +246,13 @@ pub const DINO_CHARGE_FRAMES: u16 = 36;
 /// Where a blockade bot fires from, and how often.
 pub const BLOCKADE_MUZZLE: (i32, i32) = (17, 16);
 const BLOCKADE_EVERY: u16 = 90;
+/// A crab bot: how long it holds its claws up before it snaps (the tell), how long the
+/// snap lasts, and how long it backs off after.
+pub const CRAB_TELL_FRAMES: u16 = 22;
+pub const CRAB_SNAP_FRAMES: u16 = 16;
+pub const CRAB_BACK_FRAMES: u16 = 24;
+/// How near (across) and how level (up and down) the wassie must be to set it off.
+const CRAB_REACH: (i32, i32) = (64, 18);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Actor {
@@ -383,6 +420,7 @@ impl Actor {
             ActorKind::Guard => self.guard(ctx),
             ActorKind::Dino => self.dino(ctx),
             ActorKind::Blockade => self.blockade(ctx),
+            ActorKind::Crab => self.crab(ctx),
             ActorKind::Gate => {
                 if ctx.power {
                     self.state = state::LIT;
@@ -614,6 +652,62 @@ impl Actor {
             if self.state == state::LUNGE {
                 self.state = state::IDLE;
                 self.timer = 70;
+            }
+        }
+    }
+
+    /// Scuttles sideways along its stretch of sand, turning at walls and ledges. When
+    /// the wassie is level and near, it stops and raises its claws (the tell), snaps
+    /// forward, then backs off before it can snap again. It never walks off a ledge.
+    fn crab(&mut self, ctx: &mut Ctx) {
+        match self.state {
+            state::AIM => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.state = state::LUNGE;
+                    self.timer = CRAB_SNAP_FRAMES;
+                }
+            }
+            state::LUNGE => {
+                self.body.vx_fx = self.facing * 2 * FX;
+                if self.timer == 0 {
+                    self.state = state::RETURN;
+                    self.timer = CRAB_BACK_FRAMES;
+                }
+            }
+            state::RETURN => {
+                self.body.vx_fx = -self.facing * FX / 2;
+                if self.timer == 0 {
+                    self.state = state::IDLE;
+                    self.timer = 50;
+                }
+            }
+            _ => {
+                self.body.vx_fx = self.facing * 3 * FX / 5;
+                if self.timer == 0 && self.in_line(&ctx.player, CRAB_REACH.0, CRAB_REACH.1) {
+                    self.face_player(&ctx.player);
+                    self.state = state::AIM;
+                    self.timer = CRAB_TELL_FRAMES;
+                }
+            }
+        }
+        let contacts = self.fall(&ctx.map);
+        let r = self.rect();
+        // The edge it is heading for: forward, or behind it while it backs off.
+        let heading = if self.body.vx_fx < 0 { -1 } else { 1 };
+        let front = if heading > 0 { r.right() } else { r.x - 1 };
+        let ledge = contacts.ground && self.body.vx_fx != 0 && !ctx.map.ground_ahead(front, r.bottom());
+        if ledge {
+            self.body.x_fx -= self.body.vx_fx;
+        }
+        if contacts.wall() || ledge {
+            match self.state {
+                state::IDLE => self.facing = -self.facing,
+                state::LUNGE => {
+                    self.state = state::RETURN;
+                    self.timer = CRAB_BACK_FRAMES;
+                }
+                _ => {}
             }
         }
     }

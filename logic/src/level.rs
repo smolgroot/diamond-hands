@@ -187,7 +187,7 @@ const fn is_scenery(c: u8) -> bool {
 }
 
 /// Most markers a map may hold.
-pub const MAX_MARKERS: usize = 128;
+pub const MAX_MARKERS: usize = 256;
 
 /// A map's markers in row-major order, found when the game is compiled rather than by
 /// reading the map as a level starts: on the GBA the map sits in cartridge ROM, and

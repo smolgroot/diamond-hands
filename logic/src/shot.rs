@@ -104,7 +104,7 @@ pub struct Shot {
     pub life: u16,
     pub active: bool,
     /// Actors already hit by a piercing beam (bit = actor index), so it hits each once.
-    pub hits: u128,
+    pub hits: crate::enemy::ActorSet,
     pub hit_boss: bool,
 }
 
@@ -117,7 +117,7 @@ impl Shot {
         vy_fx: 0,
         life: 0,
         active: false,
-        hits: 0,
+        hits: crate::enemy::ActorSet::EMPTY,
         hit_boss: false,
     };
 
@@ -178,7 +178,7 @@ pub fn spawn(
         vy_fx,
         life: kind.life(),
         active: true,
-        hits: 0,
+        hits: crate::enemy::ActorSet::EMPTY,
         hit_boss: false,
     };
     true

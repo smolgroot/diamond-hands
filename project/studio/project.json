@@ -99,123 +99,142 @@
       "name": "Player start",
       "colour": "#3e63dd",
       "sprite": "wassie",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "sentry",
       "name": "Sentry bot",
       "colour": "#e5484d",
       "sprite": "sentry",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "crawler",
       "name": "Crawler",
       "colour": "#f5a623",
       "sprite": "crawler",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "drone",
       "name": "Drone",
       "colour": "#9b5de5",
       "sprite": "drone",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "mine",
       "name": "Mine",
       "colour": "#8d99ae",
       "sprite": "mine",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "checkpoint",
       "name": "Checkpoint",
       "colour": "#30a46c",
       "sprite": "beacon",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "diamond",
       "name": "Diamond",
       "colour": "#46c8f0",
       "sprite": "fx",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "heal",
       "name": "Cold-wallet heal",
       "colour": "#3dd68c",
       "sprite": "fx",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "dealer",
       "name": "Dealer",
       "colour": "#ffb224",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "guard",
       "name": "Guard",
       "colour": "#e54666",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "coin",
       "name": "Gold coin",
       "colour": "#f5c41e",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "plasma-cell",
       "name": "Plasma cell",
       "colour": "#ff6ad5",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "jetpack",
       "name": "Jetpack",
       "colour": "#bd7cff",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "breaker",
       "name": "Elevator breaker",
       "colour": "#12a594",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "lift-car",
       "name": "Elevator car (left edge)",
       "colour": "#8e8c99",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "lift-stop",
       "name": "Elevator arrival",
       "colour": "#8e8c99",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "arena-edge",
       "name": "Boss arena (left edge)",
       "colour": "#e5484d",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "boss",
       "name": "Boss",
       "colour": "#e5484d",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "dino",
       "name": "Clay dino (loose)",
       "colour": "#f5a24b",
       "sprite": "clay-dino",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "zookeeper",
@@ -228,7 +247,8 @@
           "type": "string",
           "default": ""
         }
-      ]
+      ],
+      "behaviours": []
     },
     {
       "id": "cosmo-wassie",
@@ -241,7 +261,8 @@
           "type": "string",
           "default": ""
         }
-      ]
+      ],
+      "behaviours": []
     },
     {
       "id": "portal",
@@ -254,49 +275,64 @@
           "type": "string",
           "default": "ethereum-city"
         }
-      ]
+      ],
+      "behaviours": []
     },
     {
       "id": "zoo-breaker",
       "name": "Zoo breaker",
       "colour": "#f8d048",
       "sprite": "zoo-breaker",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "power-gate",
       "name": "Power gate (opens with the breaker)",
       "colour": "#7080a8",
       "sprite": "power-gate",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "bot-blockade",
       "name": "Blockade bot (bars the Wormhole door)",
       "colour": "#c03050",
       "sprite": "sentry",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "sand-block",
       "name": "Sand block (shoot to break)",
       "colour": "#f2d48a",
       "sprite": "sand-block-sheen",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "dock-crate",
       "name": "Dock crate (shoot to break)",
       "colour": "#9a5a2a",
       "sprite": "dock-crate-sheen",
-      "props": []
+      "props": [],
+      "behaviours": []
     },
     {
       "id": "soil-block",
       "name": "Soil block (shoot to break)",
       "colour": "#6a4a2a",
       "sprite": "soil-block-sheen",
-      "props": []
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "crab-bot",
+      "name": "Crab bot",
+      "colour": "#ff3d8b",
+      "sprite": "crab-bot",
+      "props": [],
+      "behaviours": []
     }
   ],
   "physics": {

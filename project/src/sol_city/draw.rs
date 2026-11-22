@@ -9,7 +9,7 @@ use agb::{
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
     block::BlockLook,
-    enemy::{Actor, ActorKind, DINO_ROAR_FRAMES, state},
+    enemy::{Actor, ActorKind, CRAB_SNAP_FRAMES, DINO_ROAR_FRAMES, state},
     fx::FxKind,
     player::{Aim, HOVER_FRAMES},
     shot::ShotKind,
@@ -354,6 +354,15 @@ impl Screen {
                     at(frame, s, anim(s, name, 0), e.x - cx, e.y - cy, e.flip);
                     continue;
                 }
+                FxKind::CrabWreck => {
+                    // Sputters, slumps flat and smokes, then blinks out.
+                    let s = &gfx::SPRITE_CRAB_BOT;
+                    if e.age > 66 && e.age % 4 < 2 {
+                        continue;
+                    }
+                    at(frame, s, anim(s, "death", e.age as u32), e.x - cx, e.y - cy, false);
+                    continue;
+                }
                 // Casino effects: Sol City has none.
                 FxKind::CoinPop | FxKind::Splat | FxKind::NinjaWreck => continue,
             };
@@ -556,6 +565,19 @@ impl Screen {
                     _ => anim(s, "walk", walk * 2),
                 };
                 // The clay dino faces right in its sheet.
+                at(frame, s, index, x, feet, a.facing < 0);
+            }
+            ActorKind::Crab => {
+                let s = &gfx::SPRITE_CRAB_BOT;
+                let index = match a.state {
+                    _ if a.flash > 0 => anim(s, "hit", 6u32.saturating_sub(a.flash as u32) * 2),
+                    // Claws up: the tell, held until the snap.
+                    state::AIM => anim(s, "snap", 4),
+                    state::LUNGE => anim(s, "snap", 8 + CRAB_SNAP_FRAMES.saturating_sub(a.timer) as u32),
+                    _ if a.body.vx_fx == 0 => anim(s, "idle", tick),
+                    _ => anim(s, "walk", walk * 2),
+                };
+                // Facing the wassie in its sheet; it snaps toward its facing side.
                 at(frame, s, index, x, feet, a.facing < 0);
             }
             ActorKind::Npc => {

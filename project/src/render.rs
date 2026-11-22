@@ -1640,6 +1640,8 @@ impl Renderer {
                         .show(frame);
                     continue;
                 }
+                // Sol City's crab bots: the studio ROM draws that level.
+                FxKind::CrabWreck => continue,
                 FxKind::CoinPop | FxKind::Splat => {
                     let Some(casino) = self.level_art.as_ref().and_then(LevelArt::casino) else {
                         continue;
@@ -1984,7 +1986,7 @@ impl Renderer {
                     (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
                 }
                 // Sol City's people and creatures: the studio ROM draws that level.
-                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) => continue,
+                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) | ActorKind::Crab => continue,
                 ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;
