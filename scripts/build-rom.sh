@@ -8,8 +8,8 @@
 #                                          # (project/) -> dist/diamond-hands-studio.gba
 #   ./scripts/build-rom.sh --studio --dev  # ... with every level open: dist/diamond-hands-studio-dev.gba
 #
-# The studio build needs GBA-Studio's runtime and build helper checked out next to this
-# repo (../gba-studio), see project/Cargo.toml.
+# The studio build fetches GBA-Studio's runtime and build helper from GitHub, at the commit
+# pinned in project/Cargo.toml.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 

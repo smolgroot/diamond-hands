@@ -32,11 +32,18 @@ agb_tracker = "0.25.0"
 # `studio`: levels painted in GBA-Studio (Sol City) are playable in this ROM.
 diamond_hands_logic = { path = "../logic", features = ["studio"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
-pecten_studio_rt = { path = "/home/user/repos/gba-studio/runtime", features = ["agb"] }
+# Pecten-Studio's runtime and build helper, pinned to a commit of the public repo. The
+# studio's MCP server only edits `studio/`; these crates are compiled into the ROM.
+# Bump `rev` to take a newer studio. To build against a local checkout instead, add to
+# `project/.cargo/config.toml` (don't commit it):
+#   [patch."https://github.com/smolgroot/gba-studio"]
+#   pecten_studio_rt = { path = "../../gba-studio/runtime" }
+#   pecten_studio_build = { path = "../../gba-studio/codegen" }
+pecten_studio_rt = { git = "https://github.com/smolgroot/gba-studio", rev = "aa7636b65350d2200e5d97ff6a13bdc61d19bec7", features = ["agb"] }
 
 [build-dependencies]
 png = "0.17"
-pecten_studio_build = { path = "/home/user/repos/gba-studio/codegen" }
+pecten_studio_build = { git = "https://github.com/smolgroot/gba-studio", rev = "aa7636b65350d2200e5d97ff6a13bdc61d19bec7" }
 
 # Both builds are optimized for speed, without debug info or debug strings; the matching
 # nightly flags are in `.cargo/config.toml`.

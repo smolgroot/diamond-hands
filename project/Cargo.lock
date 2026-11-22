@@ -605,6 +605,7 @@ checksum = "fee2531e9fa461274702c7fca3ad82af33297de093c323ec36bbc2fb2091953b"
 [[package]]
 name = "pecten_studio_build"
 version = "0.1.0"
+source = "git+https://github.com/smolgroot/gba-studio?rev=aa7636b65350d2200e5d97ff6a13bdc61d19bec7#aa7636b65350d2200e5d97ff6a13bdc61d19bec7"
 dependencies = [
  "pecten_studio_rt",
  "png",
@@ -615,6 +616,7 @@ dependencies = [
 [[package]]
 name = "pecten_studio_rt"
 version = "0.1.0"
+source = "git+https://github.com/smolgroot/gba-studio?rev=aa7636b65350d2200e5d97ff6a13bdc61d19bec7#aa7636b65350d2200e5d97ff6a13bdc61d19bec7"
 dependencies = [
  "agb",
 ]

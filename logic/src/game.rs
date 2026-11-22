@@ -1223,7 +1223,7 @@ mod tests {
         play_level(&mut game);
         let w = &mut game.world;
         w.god = true;
-        w.player = crate::player::Player::new(crate::physics::Body::standing_on_tile(309, 35, crate::player::PLAYER_W, crate::player::PLAYER_H));
+        w.player = crate::player::Player::new(crate::physics::Body::standing_on_tile(312, 57, crate::player::PLAYER_W, crate::player::PLAYER_H));
         game.step(&Input::default());
         assert_eq!((game.scene, game.talk), (Scene::Dialog, Talk::Npc(1)));
         assert_eq!(game.talk_lines()[0].speaker, crate::talk::Speaker::Cosmo);

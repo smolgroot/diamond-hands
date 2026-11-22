@@ -26,6 +26,7 @@ jobs:
           workspaces: |
             diamond-hands
             diamond-hands/game
+            diamond-hands/project
 
       - name: Logic tests
         working-directory: diamond-hands
@@ -37,11 +38,25 @@ jobs:
           cargo +stable install agb-gbafix --locked
           ./scripts/build-rom.sh
 
+      # The studio ROM: the same game with its art, music and Sol City from GBA-Studio.
+      - name: Build studio ROM
+        working-directory: diamond-hands
+        run: ./scripts/build-rom.sh --studio
+
+      - name: Logic tests (studio)
+        working-directory: diamond-hands
+        run: cargo +stable test -p diamond_hands_logic --features studio
+
       - name: ROM tests on gba-wasm
         working-directory: diamond-hands
         run: cargo +stable test -p diamond_hands_harness
 
       - uses: actions/upload-artifact@v4
         with:
-          name: diamond-hands.gba
+          name: diamond-hands-studio.gba
+          path: diamond-hands/dist/diamond-hands-studio.gba
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diamond-hands-classic.gba
           path: diamond-hands/dist/diamond-hands.gba

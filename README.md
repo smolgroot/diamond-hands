@@ -186,9 +186,17 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
   palettes and music are files in `project/assets/` registered in `project/studio/`,
   edited in the studio (see `project/AGENTS.md`); `project/src/` is `game/src/` with its
   sprite and glyph painting replaced by loading those sheets (`src/art/studio.rs`, generated).
-  It plays the first two levels with the menus, map and saves of the code-drawn ROM. Sol City,
-  painted in the studio, builds as its own ROM (`--features sol-city --bin sol-city`), because
-  the full game's renderer can't draw it yet.
+  It plays all three levels with the menus, map and saves of the code-drawn ROM: Sol City
+  is drawn from its studio rooms (`src/sol_city/draw.rs`), the first two levels by the
+  code-drawn renderer. Sol City also builds as a ROM of its own
+  (`--features sol-city --bin sol-city`).
+  - GBA-Studio's runtime (`pecten_studio_rt`, compiled into the ROM) and build helper
+    (`pecten_studio_build`, run by `build.rs`) are git dependencies on
+    [smolgroot/gba-studio](https://github.com/smolgroot/gba-studio), pinned to a commit in
+    `project/Cargo.toml`; no local checkout of the studio is needed to build. The studio's
+    MCP server only edits `studio/`. To take a newer studio, bump `rev` there; to build
+    against a local checkout, add a `[patch."https://github.com/smolgroot/gba-studio"]`
+    section to `project/.cargo/config.toml` (the comment in `Cargo.toml` shows it).
 - `game/`: the code-drawn agb ROM. It reads buttons, steps `logic`, draws, and saves to SRAM.
   - All art is drawn in code, in `game/src/art/` (`casino.rs` and `trenches.rs` for the
     Trenches, after `.claude/skills/diamond-hands-gba/sprite-sheet-SBF.png` and
@@ -229,7 +237,8 @@ Then:
 (cd game && cargo run --release)  # play in mgba-qt
 ```
 
-The studio ROM (the same game, art from GBA-Studio) builds from `project/`:
+The studio ROM (the same game, art and Sol City from GBA-Studio) builds from `project/`.
+It is the one releases ship:
 
 ```sh
 ./scripts/build-rom.sh --studio   # → dist/diamond-hands-studio.gba (or Build in GBA-Studio)
@@ -256,6 +265,14 @@ The dev ROM (`DEV` in the title screen's corner) opens every level on the world 
 a new file, so the Trenches can be played without beating the Badlands. It changes only
 what the map lets you start: nothing extra is saved, and a level beaten there counts as a
 first clear.
+
+### CI and releases
+
+Every push builds both ROMs and runs the logic tests with and without `--features studio`,
+then the harness on the code-drawn ROM. Both ROMs are uploaded as workflow artifacts
+(`diamond-hands-studio.gba`, `diamond-hands-classic.gba`). Pushing a `v*` tag publishes a
+GitHub release with the studio ROM as `diamond-hands-<tag>.gba` and the code-drawn ROM
+beside it as `diamond-hands-classic-<tag>.gba`. The harness doesn't boot the studio ROM yet.
 
 To play in gba-wasm, load `dist/diamond-hands.gba` in its browser UI (`pnpm dev` in `../gba-wasm`).
 

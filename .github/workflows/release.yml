@@ -22,14 +22,21 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin/agb-gbafix
             game/target
-          key: rom-${{ runner.os }}-${{ hashFiles('game/Cargo.lock', 'game/rust-toolchain.toml') }}
+            project/target
+          key: rom-${{ runner.os }}-${{ hashFiles('game/Cargo.lock', 'game/rust-toolchain.toml', 'project/Cargo.lock', 'project/rust-toolchain.toml') }}
       - name: Install agb-gbafix
         run: command -v agb-gbafix || cargo install agb-gbafix
-      - name: Build ROM
-        run: ./scripts/build-rom.sh
-      - name: Name ROM after the tag
+      # The release is the studio ROM (art, music and Sol City from GBA-Studio); the
+      # code-drawn ROM ships beside it as -classic.
+      - name: Build ROMs
+        run: |
+          ./scripts/build-rom.sh --studio
+          ./scripts/build-rom.sh
+      - name: Name ROMs after the tag
         if: startsWith(github.ref, 'refs/tags/')
-        run: cp dist/diamond-hands.gba "dist/diamond-hands-${GITHUB_REF_NAME}.gba"
+        run: |
+          cp dist/diamond-hands-studio.gba "dist/diamond-hands-${GITHUB_REF_NAME}.gba"
+          cp dist/diamond-hands.gba "dist/diamond-hands-classic-${GITHUB_REF_NAME}.gba"
       - uses: actions/upload-artifact@v4
         with:
           name: diamond-hands-rom
@@ -38,5 +45,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/diamond-hands-${{ github.ref_name }}.gba
+          files: |
+            dist/diamond-hands-${{ github.ref_name }}.gba
+            dist/diamond-hands-classic-${{ github.ref_name }}.gba
           generate_release_notes: true
