@@ -193,6 +193,11 @@ impl Sfx {
         }
         self.menu(events);
         self.casino(events);
+        if events.contains(Events::SHIELD) {
+            // The plasma shield soaking up a hit: a bright ping falling to a hum.
+            Self::chime(LADDER[8], tone(0, 2, 1, 11));
+            self.pending = Some((CHIME_GAP, LADDER[2]));
+        }
         // A shock outranks the fences coming on; the beam's rumble outranks both.
         if events.contains(Events::SHOCK) {
             self.crackle = Some(Crackle::SHOCK);
@@ -220,6 +225,11 @@ impl Sfx {
                 SOUND1CNT_L.write_volatile(sweep_down(6, 1));
                 SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
+            }
+            if events.contains(Events::BLOCKED) && !events.contains(Events::BEAM) {
+                // A bolt off a riot shield: a short, bright clank, higher than a break.
+                SOUND4CNT_L.write_volatile(tone(0, 0, 1, 10));
+                SOUND4CNT_H.write_volatile(1 << 4 | RESTART);
             }
             if events.contains(Events::BREAK) && !events.contains(Events::BEAM) {
                 // A short, gritty crunch on the noise channel: divider 1 and shift 2

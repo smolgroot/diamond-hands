@@ -1,12 +1,13 @@
 //! The levels in play order, and the places on the world map.
 
 pub mod badlands;
+pub mod eth_city;
 pub mod sol_city;
 pub mod trenches;
 
 use crate::{arrival::Arrival, level::Level};
 
-pub static ALL: [&Level; 3] = [&badlands::BADLANDS, &trenches::TRENCHES, &sol_city::SOL_CITY];
+pub static ALL: [&Level; 4] = [&badlands::BADLANDS, &trenches::TRENCHES, &sol_city::SOL_CITY, &eth_city::ETH_CITY];
 
 /// Whether this build can play `level`: a level painted in GBA-Studio needs the studio
 /// ROM (the `studio` feature). Elsewhere it shows on the map as coming soon.
@@ -143,7 +144,7 @@ pub static MAP: [Place; 4] = [
         x: 212,
         y: 60,
         order: 3,
-        level: None,
+        level: Some(3),
     },
 ];
 
@@ -171,12 +172,13 @@ mod tests {
     fn places_show_cleared_open_locked_and_soon() {
         use PlaceStatus::*;
         let status = |cleared| MAP.each_ref().map(|p| p.status(cleared));
-        let sol_city = if cfg!(feature = "studio") { Locked } else { Soon };
-        assert_eq!(status(0), [Open, Locked, sol_city, Soon]);
-        assert_eq!(status(0b1), [Cleared, Open, sol_city, Soon]);
+        let studio = if cfg!(feature = "studio") { Locked } else { Soon };
+        assert_eq!(status(0), [Open, Locked, studio, studio]);
+        assert_eq!(status(0b1), [Cleared, Open, studio, studio]);
         if cfg!(feature = "studio") {
-            assert_eq!(status(0b11), [Cleared, Cleared, Open, Soon], "clearing level 2 unlocks Sol City");
-            assert_eq!(status(0b111), [Cleared, Cleared, Cleared, Upcoming], "and Sol City unlocks Ethereum City");
+            assert_eq!(status(0b11), [Cleared, Cleared, Open, Locked], "clearing level 2 unlocks Sol City");
+            assert_eq!(status(0b111), [Cleared, Cleared, Cleared, Open], "and Sol City unlocks Ethereum City");
+            assert_eq!(status(0b1111), [Cleared, Cleared, Cleared, Cleared]);
         } else {
             assert_eq!(status(0b11), [Cleared, Cleared, Upcoming, Soon], "Sol City needs the studio ROM");
         }

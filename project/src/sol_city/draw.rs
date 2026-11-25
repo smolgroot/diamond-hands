@@ -9,17 +9,20 @@ use agb::{
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
     block::BlockLook,
-    boss::{BossState, CRAB_DYING_FRAMES, HALO_LIVE_FRAMES, SPRAY_TELL_FRAMES},
-    enemy::{Actor, ActorKind, CRAB_SNAP_FRAMES, DINO_ROAR_FRAMES, state},
+    boss::{APE_DYING_FRAMES, BossState, CRAB_DYING_FRAMES, HALO_LIVE_FRAMES, SPRAY_TELL_FRAMES},
+    enemy::{Actor, ActorKind, COP_TELL_FRAMES, CRAB_SNAP_FRAMES, DINO_ROAR_FRAMES, state},
     fx::FxKind,
+    level::{BossKind, Theme},
     player::{Aim, HOVER_FRAMES},
     shot::ShotKind,
     talk::Speaker,
-    world::{CHARGE_FRAMES, WARP_FRAMES},
+    world::{CHARGE_FRAMES, SHIELD_MAX, WARP_FRAMES},
 };
 use pecten_studio_rt::{
     data::World,
+    debug::{self, GameState},
     gfx::{SpriteSheet, WorldView},
+    physics::Body,
 };
 
 use agb::display::object::SpriteVram;
@@ -85,7 +88,22 @@ const DROPPED_AT: (i32, i32) = (9, 8);
 const JETPACK_AT: (i32, i32) = (1, 15);
 const FLAME_AT: (i32, i32) = (1, 29);
 
+/// Tells GBA-Studio that the game is somewhere it has no map of (the menus, the world
+/// map, the levels drawn in code), so its overlays have nothing to draw. The block can
+/// only be published, not cleared, so this parks the camera far from every room
+/// instead of leaving the last place in Sol City on the screen.
+// Only the full game has such screens: the Sol City ROM never calls it.
+#[allow(dead_code)]
+pub fn publish_away() {
+    const FAR: i32 = -1_000_000;
+    let mut shown = GameState::new();
+    (shown.camera_x, shown.camera_y) = (FAR, FAR);
+    debug::publish(&shown);
+}
+
 pub struct Screen {
+    /// The level painted in the studio that this screen draws.
+    theme: Theme,
     /// The studio's map, and a view of its rooms that share the tileset of the room on
     /// screen. `None` for the frame between dropping one tileset's view and making the
     /// next: their tiles don't fit in VRAM together.
@@ -140,17 +158,29 @@ fn anim(sheet: &'static SpriteSheet, name: &str, tick: u32) -> usize {
     sheet.animation(name).map_or(0, |a| a.frame_at(tick))
 }
 
+/// The first frame of an animation of a sheet, or 0 if it has none of that name.
+fn first_of(sheet: &'static SpriteSheet, name: &str) -> usize {
+    anim(sheet, name, 0)
+}
+
 impl Screen {
-    /// `world` is the studio's map, read once at boot (`data::world()`).
-    pub fn new(world: &'static World<'static>) -> Self {
-        // The level's map starts at its first room's top-left, the beach.
-        let origin = world.origin(room::BEACH).unwrap_or((0, 0));
+    /// `world` is the studio's map, read once at boot (`data::world()`); `theme` is the
+    /// studio level to draw.
+    pub fn new(world: &'static World<'static>, theme: Theme) -> Self {
+        // The level's map starts at the top-left of its top-left room: Sol City's beach,
+        // Ethereum City's Wormhole office.
+        let first = match theme {
+            Theme::EthCity => room::ETH_OFFICE,
+            _ => room::BEACH,
+        };
+        let origin = world.origin(first).unwrap_or((0, 0));
         use studio::{hud_8x8 as hud, pickups, wassie_talk};
         let [half, wide] = wassie_talk::portrait_talk();
         Self {
+            theme,
             world,
             view: None,
-            backdrop: room::BEACH,
+            backdrop: first,
             origin,
             camera: None,
             font: Font::new(),
@@ -172,6 +202,13 @@ impl Screen {
             dialog: None,
             dialog_painted: None,
         }
+    }
+
+    /// The level this screen draws.
+    // Only the full game swaps levels: the Sol City ROM never asks.
+    #[allow(dead_code)]
+    pub fn theme(&self) -> Theme {
+        self.theme
     }
 
     /// Puts the rooms the camera is in on the backgrounds: call before taking the
@@ -200,6 +237,28 @@ impl Screen {
                 self.camera = None;
             }
         }
+    }
+
+    /// Tells GBA-Studio where the game is, for the Play panel's overlays: the room the
+    /// wassie is in, the camera and the wassie's body, in the studio's world pixels (the level's
+    /// coordinates plus the room it starts in). Call it once a frame, after the game
+    /// has stepped. A build without the debug map does nothing with it.
+    pub fn publish(&self, game: &Game) {
+        let world = &game.world;
+        let (ox, oy) = self.origin;
+        let player = &world.player;
+        let r = player.body.rect();
+        let (x, y) = (ox + r.x, oy + r.y);
+        let room = self.world.room_at_screen((x + r.w / 2).div_euclid(SCREEN_W), (y + r.h / 2).div_euclid(SCREEN_H)).unwrap_or(self.backdrop);
+        let mut body = Body::new(x, y, r.w, r.h);
+        // The game's speeds are in 1/256 pixel a frame, as the studio's are.
+        (body.vx, body.vy, body.on_ground) = (player.body.vx_fx, player.body.vy_fx, player.grounded);
+        let mut shown = GameState::new();
+        shown.frame = game.frame;
+        shown.room = room as u32;
+        (shown.camera_x, shown.camera_y) = (ox + world.camera_x, oy + world.camera_y);
+        shown.player = body;
+        debug::publish(&shown);
     }
 
     pub fn draw(&mut self, game: &Game, frame: &mut GraphicsFrame) {
@@ -264,6 +323,7 @@ impl Screen {
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             let art = HudArt { life_caps: &self.life_caps, life: &self.life, diamond: &self.diamond };
             screens::hud(&self.font, &art, None, game, frame);
+            self.shield_hud(game, frame);
             self.boss_bar(game, frame);
         }
         // Title cards stand alone, on black.
@@ -308,6 +368,7 @@ impl Screen {
             // they only bob while they talk.
             Speaker::CrabBot => put(frame, &gfx::SPRITE_CRAB_BOT_BOSS_PORTRAIT, 0, px, py - bob, false),
             Speaker::Smolsnip => put(frame, &gfx::SPRITE_SMOLSNIP_PORTRAIT, 0, px, py - bob, false),
+            Speaker::Ape => put(frame, &gfx::SPRITE_APE_BOSS_PORTRAIT, 0, px, py - bob, false),
             _ => {}
         }
 
@@ -325,6 +386,21 @@ impl Screen {
         }
         if let Some(dialog) = &mut self.dialog {
             dialog.show_sprites(frame);
+        }
+    }
+
+    /// The plasma shield's charges under the life bar, once CL207 has handed it over:
+    /// a lit hexagon a charge, a dark one for each spent.
+    fn shield_hud(&self, game: &Game, frame: &mut GraphicsFrame) {
+        let world = &game.world;
+        if !world.has_shield() {
+            return;
+        }
+        for i in 0..SHIELD_MAX {
+            let lit = i < world.shield;
+            // The last charge left blinks, as a warning.
+            let warn = world.shield == 1 && lit && (game.frame / 16).is_multiple_of(2);
+            put(frame, &gfx::SPRITE_SHIELD_HUD, (!lit || warn) as usize, 8 + 9 * i as i32, 14, false);
         }
     }
 
@@ -351,6 +427,10 @@ impl Screen {
     fn boss(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
         let boss = &game.world.boss;
         if !boss.present {
+            return;
+        }
+        if boss.kind == BossKind::Ape {
+            self.ape(game, frame, cx, cy);
             return;
         }
         let s = &gfx::SPRITE_CRAB_BOT_BOSS;
@@ -395,6 +475,43 @@ impl Screen {
         }
     }
 
+    /// BORED KONG, from its sheet (`studio/sprites/ape-boss.json`), facing right there.
+    fn ape(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
+        let boss = &game.world.boss;
+        let s = &gfx::SPRITE_APE_BOSS;
+        let r = boss.rect();
+        if r.right() < cx - 32 || r.x > cx + SCREEN_W + 32 || r.bottom() < cy || r.y > cy + SCREEN_H + 64 {
+            return;
+        }
+        let tick = game.frame;
+        let first = |name| s.animation(name).map_or(0, |a| a.frame_at(0));
+        let index = match boss.state {
+            BossState::Dying => anim(s, "death", (APE_DYING_FRAMES - boss.timer) as u32),
+            BossState::Defeated => first("death") + 2,
+            _ if boss.flash > 0 => first("hit"),
+            BossState::Stunned => first("stunned"),
+            BossState::Windup | BossState::Intro => anim(s, "pound", tick),
+            BossState::Leap => first("leap"),
+            BossState::Recover if boss.timer > 12 => first("slam"),
+            BossState::Recover => first("crouch"),
+            // The masonry held back, then flung.
+            BossState::Throw if boss.timer > 8 => first("throw"),
+            BossState::Throw => first("throw") + 1,
+            BossState::Telegraph => first("crouch"),
+            BossState::Charge => anim(s, "charge", tick),
+            BossState::Walk if boss.body.vx_fx != 0 => anim(s, "walk", (r.x.unsigned_abs() / 2) * 4),
+            _ => anim(s, "idle", tick),
+        };
+        if boss.flash > 0 && boss.state != BossState::Dying && (tick / 2).is_multiple_of(2) {
+            return;
+        }
+        at(frame, s, index, r.centre_x() - cx, r.bottom() - cy, boss.facing < 0);
+        let tell = matches!(boss.state, BossState::Windup | BossState::Telegraph) || (boss.state == BossState::Throw && boss.timer > 8);
+        if tell && game.scene == Scene::Play {
+            put(frame, &gfx::SPRITE_UI, ui::ALERT, r.centre_x() - 4 - cx, r.y - 22 - cy, false);
+        }
+    }
+
     /// "^" where Up does something, and "!" over a villain about to attack.
     fn prompts(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
         let world = &game.world;
@@ -426,6 +543,15 @@ impl Screen {
                     let s = &gfx::SPRITE_SENTRY;
                     let name = if e.age < 20 { "kneel" } else { "down" };
                     at(frame, s, anim(s, name, 0), e.x - cx, e.y - cy, e.flip);
+                    continue;
+                }
+                FxKind::CopWreck => {
+                    // Down behind its shield, smoking, then it blinks out.
+                    let s = &gfx::SPRITE_BAD_COP;
+                    if e.age > 66 && e.age % 4 < 2 {
+                        continue;
+                    }
+                    at(frame, s, anim(s, "defeat", e.age as u32), e.x - cx, e.y - cy, e.flip);
                     continue;
                 }
                 FxKind::CrabWreck => {
@@ -481,6 +607,15 @@ impl Screen {
                 // SAM's cucumbers are), and its halo throws sparks along the floor.
                 ShotKind::Cucumber => at(frame, sheet, fx::GLINT + 1 + (game.frame / 4 % 2) as usize, x, y, false),
                 ShotKind::Shockwave => at(frame, sheet, fx::SPARKS + (game.frame / 3 % 2) as usize, x, y, false),
+                // A Bad Cop's canister spins as it arcs; BORED KONG's masonry tumbles.
+                ShotKind::Canister => {
+                    let s = &gfx::SPRITE_BAD_COP_CANISTER;
+                    at(frame, s, anim(s, "spin", game.frame), x, y, false);
+                }
+                ShotKind::Rubble => {
+                    let s = &gfx::SPRITE_APE_RUBBLE;
+                    at(frame, s, anim(s, "spin", game.frame), x, y, false);
+                }
                 _ => at(frame, sheet, fx::BULLET, x, y, left),
             }
         }
@@ -490,6 +625,9 @@ impl Screen {
     fn wassie(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
         let world = &game.world;
         let p = &world.player;
+        // The shield's bubble, in front of the wassie: shown even while it blinks after
+        // the bubble soaked up a hit.
+        self.shield_bubble(game, frame, cx, cy);
         let blinking = p.invuln > 0 && !p.is_dead() && (game.frame / 3).is_multiple_of(2);
         if blinking {
             return;
@@ -572,11 +710,34 @@ impl Screen {
         }
     }
 
+    /// CL207's plasma shield around the wassie while it has charges: a humming ring, a
+    /// bright flash when it soaks up a hit or takes an emerald, flickering on its last
+    /// charge.
+    fn shield_bubble(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
+        let world = &game.world;
+        let p = &world.player;
+        if world.warp > 0 || p.is_dead() || (world.shield == 0 && world.shield_flash == 0) {
+            return;
+        }
+        let s = &gfx::SPRITE_PLASMA_SHIELD;
+        let index = if world.shield_flash > 0 {
+            first_of(s, "hit") + (world.shield_flash / 3 % 2) as usize
+        } else {
+            if world.shield == 1 && (game.frame / 4) % 3 == 0 {
+                return;
+            }
+            anim(s, "hum", game.frame)
+        };
+        let r = p.body.rect();
+        at(frame, s, index, r.centre_x() - cx, r.centre_y() - 1 - cy, false);
+    }
+
     fn actors(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
         let world = &game.world;
         let mut person = 0;
         for a in world.placed_actors() {
-            let speaker = if a.kind == ActorKind::Npc {
+            // People are numbered in map order, whoever they are, as the level's lines are.
+            let speaker = if a.kind.is_person() {
                 person += 1;
                 world.level.npcs.get(person - 1).and_then(|lines| lines.iter().map(|l| l.speaker).find(|&s| s != Speaker::Wassie))
             } else {
@@ -602,6 +763,15 @@ impl Screen {
                     screens::show(frame, &self.heal, r.x - 3 - cx, r.y - 3 - cy);
                     continue;
                 }
+                // Green, bobbing a pixel, its facets catching the light now and then.
+                ActorKind::Emerald => {
+                    let s = &gfx::SPRITE_EMERALD;
+                    let phase = (game.frame + r.x as u32 * 3) % 72;
+                    let index = if phase < 32 { anim(s, "glint", phase) } else { 0 };
+                    let bob = (game.frame / 20 % 2) as i32;
+                    put(frame, s, index, r.x - 3 - cx, r.y - 3 - bob - cy, false);
+                    continue;
+                }
                 _ => {}
             }
             self.actor(game, frame, a, speaker, r.centre_x() - cx, r.bottom() - cy);
@@ -615,7 +785,7 @@ impl Screen {
         let walk = (a.body.x().unsigned_abs() / 4) as u32;
         let lit = a.state == state::LIT;
         match a.kind {
-            ActorKind::Diamond | ActorKind::Heal => {}
+            ActorKind::Diamond | ActorKind::Heal | ActorKind::Emerald => {}
             ActorKind::Checkpoint => {
                 let s = &gfx::SPRITE_BEACON;
                 at(frame, s, anim(s, if lit { "lit" } else { "off" }, tick), x, feet, false);
@@ -662,6 +832,26 @@ impl Screen {
             }
             // Smolsnip, the Big Crab Bot's prisoner, facing out of its cell.
             ActorKind::Prisoner => at(frame, &gfx::SPRITE_SMOLSNIP, 0, x, feet, false),
+            ActorKind::Cop => {
+                let s = &gfx::SPRITE_BAD_COP;
+                let index = match a.state {
+                    _ if a.flash > 0 => anim(s, "hit", 6u32.saturating_sub(a.flash as u32) * 2),
+                    // The wind-up, shield coming down, then the throw held a moment.
+                    state::AIM => anim(s, "attack", (COP_TELL_FRAMES.saturating_sub(a.timer) as u32) * 25 / COP_TELL_FRAMES as u32),
+                    state::RECOIL => first_of(s, "attack") + 5,
+                    _ if a.body.vx_fx == 0 => anim(s, "idle", tick),
+                    _ => anim(s, "walk", walk * 2),
+                };
+                // Its sheet faces right, shield forward.
+                at(frame, s, index, x, feet, a.facing < 0);
+            }
+            // CL207 in the hazmat suit: the top half over the legs, facing the wassie.
+            ActorKind::Mentor => {
+                let s = &gfx::SPRITE_CL207;
+                let (w, flip) = (s.width as i32, a.facing > 0);
+                put(frame, s, 1, x - w / 2, feet - 16, flip);
+                put(frame, s, 0, x - w / 2, feet - 32, flip);
+            }
             ActorKind::Npc => {
                 let (s, name): (&'static SpriteSheet, &str) = match speaker {
                     Some(Speaker::Cosmo) => (&gfx::SPRITE_COSMONAUT_WASSIE, "idle"),

@@ -29,6 +29,8 @@ pub enum Gauge {
     Fuel,
     /// Plasma cells found, out of those the shield needs.
     Cells,
+    /// Charges left in the plasma shield.
+    Charge,
 }
 
 /// Plasma cells CL207's shield needs.
@@ -82,9 +84,9 @@ pub static ITEMS: [ItemInfo; 5] = [
         item: Item::Shield,
         name: "SHIELD",
         kind: "GEAR",
-        about: ["CL207'S PLASMA SHIELD,", "BUILT FROM THE 3 CELLS."],
-        detail: &["CL207 SENDS IT ON", "TO ETHEREUM CITY", "ONCE HE HAS ALL", "THREE CELLS."],
-        gauge: Gauge::None,
+        about: ["CL207'S PLASMA SHIELD:", "EACH CHARGE TAKES A HIT"],
+        detail: &["FROM CL207, IN", "ETHEREUM CITY.", "GREEN EMERALDS", "RECHARGE IT."],
+        gauge: Gauge::Charge,
     },
     ItemInfo {
         item: Item::Cells,
@@ -111,7 +113,7 @@ impl Item {
     pub fn equipped(self, game: &Game) -> bool {
         match self {
             Item::Scarf => true,
-            Item::Shield => false,
+            Item::Shield => (game.parts | game.world.parts) & crate::world::GEAR_SHIELD != 0,
             Item::Cells => cells(game.parts | game.world.parts) != 0,
             Item::Blaster => game.scene != Scene::Arrival || game.beat > Beat::Gift,
             // A level that hides the jetpack holds it back until it is found.
@@ -127,6 +129,7 @@ impl Gauge {
             Gauge::None => None,
             Gauge::Fuel => Some((game.world.player.hover_fuel as u32, HOVER_FRAMES as u32)),
             Gauge::Cells => Some((cells(game.parts | game.world.parts).count_ones().min(SHIELD_CELLS), SHIELD_CELLS)),
+            Gauge::Charge => Some((game.world.shield as u32, crate::world::SHIELD_MAX as u32)),
         }
     }
 }

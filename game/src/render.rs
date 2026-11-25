@@ -57,7 +57,7 @@ impl LevelArt {
     fn new(theme: Theme) -> Self {
         match theme {
             // Sol City is drawn by the studio ROM only; this one never starts it.
-            Theme::Badlands | Theme::SolCity => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
+            Theme::Badlands | Theme::SolCity | Theme::EthCity => LevelArt::Badlands(Bera::new(), ArrivalArt::new()),
             Theme::Trenches => LevelArt::Trenches(CasinoArt::new()),
         }
     }
@@ -355,7 +355,7 @@ impl Renderer {
         }
         if fence != self.fence {
             match theme {
-                Theme::Badlands | Theme::SolCity => {
+                Theme::Badlands | Theme::SolCity | Theme::EthCity => {
                     frame.set_background_palette(TERRAIN_PALETTE, &badlands::ground_palette(stage, fence.0));
                     frame.set_background_palette(badlands::BACK_PALETTE, &badlands::back_palette(stage, fence.0));
                 }
@@ -638,7 +638,7 @@ impl Renderer {
     fn terrain_key(level: &Level, col: i32, ty: i32) -> usize {
         match level.theme {
             Theme::Trenches => trenches::terrain_key(level, col, ty),
-            Theme::Badlands | Theme::SolCity => badlands::terrain_key(level, col, ty),
+            Theme::Badlands | Theme::SolCity | Theme::EthCity => badlands::terrain_key(level, col, ty),
         }
     }
 
@@ -660,7 +660,7 @@ impl Renderer {
     fn region(level: &Level, ty: i32) -> usize {
         match level.theme {
             Theme::Trenches => (level.stratum(ty) >= 2) as usize,
-            Theme::Badlands | Theme::SolCity => 0,
+            Theme::Badlands | Theme::SolCity | Theme::EthCity => 0,
         }
     }
 
@@ -772,7 +772,7 @@ impl Renderer {
         let slot = (col.rem_euclid(TERRAIN_COLS), ty.rem_euclid(TERRAIN_ROWS));
         let palette = match level.theme {
             Theme::Trenches => trenches::palette_slot(level, ty, key),
-            Theme::Badlands | Theme::SolCity => badlands::palette_slot(key),
+            Theme::Badlands | Theme::SolCity | Theme::EthCity => badlands::palette_slot(key),
         };
         self.terrain.set_tile_dynamic16(slot, tile, TileEffect::new(false, false, palette));
     }
@@ -1558,6 +1558,8 @@ impl Renderer {
                 ShotKind::Bomb => (&v.bomb, r.x, r.y),
                 ShotKind::Shockwave => (&v.shockwave, r.x - 3, r.y - 4),
                 ShotKind::Missile => (&v.missile, r.x - 1, r.y - 2),
+                // Ethereum City's: a studio level, which this ROM doesn't play.
+                ShotKind::Canister | ShotKind::Rubble => continue,
                 ShotKind::Card | ShotKind::Cucumber | ShotKind::MegaCucumber | ShotKind::Candle | ShotKind::Orb => {
                     self.draw_casino_shot(frame, s, game.frame);
                     continue;
@@ -1749,7 +1751,7 @@ impl Renderer {
                     continue;
                 }
                 // Sol City's crab bots: the studio ROM draws that level.
-                FxKind::CrabWreck => continue,
+                FxKind::CrabWreck | FxKind::CopWreck => continue,
                 FxKind::CoinPop | FxKind::Splat => {
                     let Some(casino) = self.level_art.as_ref().and_then(LevelArt::casino) else {
                         continue;
@@ -2094,7 +2096,7 @@ impl Renderer {
                     (&floor.ninja.sprite(pose as usize), left, r.bottom() - 32, flip)
                 }
                 // Sol City's people and creatures: the studio ROM draws that level.
-                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) | ActorKind::Crab | ActorKind::Prisoner => continue,
+                ActorKind::Dino | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Blockade | ActorKind::Block(_) | ActorKind::Crab | ActorKind::Prisoner | ActorKind::Cop | ActorKind::Emerald | ActorKind::Mentor => continue,
                 ActorKind::Part | ActorKind::Terminal | ActorKind::Dealer => {
                     let Some(floor) = floor else {
                         continue;

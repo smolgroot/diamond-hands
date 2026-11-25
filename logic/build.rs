@@ -13,13 +13,22 @@
 //! marker on the cell its feet stand in. An entity with a `talk` property brings its
 //! lines: pages split by `|`, rows by a newline, and a page starting with `>` is the
 //! wassie's reply.
+//!
+//! The pickups' worth comes from the studio's behaviours: a diamond, a coin, a heal and an
+//! emerald (charges back in the plasma shield) are
+//! worth the `value` of their type's `collectible` behaviour, or of the entity's own
+//! `value` where one was placed with it. The other behaviours a type lists (`hazard`,
+//! `checkpoint`, `ability-pickup`) describe what the game's own code does with it.
 
 use std::{collections::HashMap, env, fmt::Write, fs, path::PathBuf};
 
 use serde_json::Value;
 
 /// Levels made in the studio: the name of the generated module, and its rooms.
-const LEVELS: &[(&str, &[&str])] = &[("sol_city", &["beach", "beach-tunnels", "crab-lair", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"])];
+const LEVELS: &[(&str, &[&str])] = &[
+    ("sol_city", &["beach", "beach-tunnels", "crab-lair", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"]),
+    ("eth_city", &["eth-office", "eth-avenue", "eth-subway", "eth-tower", "ape-roof"]),
+];
 
 /// Entity type to map marker.
 const MARKERS: &[(&str, u8)] = &[
@@ -48,6 +57,10 @@ const MARKERS: &[(&str, u8)] = &[
     ("arena-edge", b'X'),
     ("crab-boss", b'B'),
     ("smolsnip", b'f'),
+    ("bad-cop", b'z'),
+    ("emerald", b'i'),
+    ("cl207", b'I'),
+    ("ape-boss", b'B'),
 ];
 
 /// Breakable blocks: entity type to the marker of its bottom-left tile. A block is 16x16
@@ -55,8 +68,11 @@ const MARKERS: &[(&str, u8)] = &[
 /// cells of air; only its marker goes in the map, since it moves (see `src/block.rs`).
 const BLOCKS: &[(&str, u8)] = &[("sand-block", b'n'), ("dock-crate", b'u'), ("soil-block", b'y')];
 
+/// The pickups whose worth the game reads from their type's `collectible` behaviour.
+const PICKUPS: &[&str] = &["diamond", "coin", "heal", "emerald"];
+
 /// The speaker of an entity type's lines.
-const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo"), ("smolsnip", "Smolsnip")];
+const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo"), ("smolsnip", "Smolsnip"), ("cl207", "Cl207")];
 
 fn read(path: &PathBuf) -> Value {
     println!("cargo:rerun-if-changed={}", path.display());
@@ -73,6 +89,17 @@ fn decode(data: &Value, cells: usize) -> Vec<u32> {
     }
     assert_eq!(out.len(), cells, "run-length data of the wrong size");
     out
+}
+
+/// What entity type `kind` is worth, from its `collectible` behaviour: the `value` it sets,
+/// else the behaviour's default of one.
+fn worth_of(project: &Value, kind: &str) -> i64 {
+    let ty = project["entityTypes"].as_array().unwrap().iter().find(|t| t["id"] == kind).unwrap_or_else(|| panic!("the project has no entity type {kind}"));
+    let behaviour = ty["behaviours"]
+        .as_array()
+        .and_then(|list| list.iter().find(|b| b["id"] == "collectible"))
+        .unwrap_or_else(|| panic!("entity type {kind} has no `collectible` behaviour: the game reads what it is worth from it (entity_type_add_behaviour)"));
+    behaviour["props"]["value"].as_i64().unwrap_or(1)
 }
 
 fn main() {
@@ -100,6 +127,8 @@ fn main() {
         }
     };
 
+    let worth: HashMap<&str, i64> = PICKUPS.iter().map(|&kind| (kind, worth_of(&project, kind))).collect();
+
     let world = read(&studio.join("world.json"));
     for &(module, ids) in LEVELS {
         // Each room's screen on the world map, then the box around them all.
@@ -118,6 +147,8 @@ fn main() {
         let (cols, rows) = ((sx1 - sx0) as usize * 30, (sy1 - sy0) as usize * 20);
         let mut map = vec![vec![b'#'; cols]; rows];
         let mut people: Vec<(usize, usize, Vec<String>)> = Vec::new();
+        // Pickups placed with a worth of their own: (col, row, value).
+        let mut valued: Vec<(usize, usize, i64)> = Vec::new();
         // Zones as (left, top, right, bottom) in tiles, right and bottom exclusive, with
         // the tileset they are drawn in.
         let mut zones: Vec<(usize, usize, usize, usize, String)> = Vec::new();
@@ -178,6 +209,12 @@ fn main() {
             let cell = &mut map[row][col];
             assert_eq!(*cell, b'.', "{id}: {kind} at {x},{y} stands in a cell that isn't air ({})", *cell as char);
             *cell = marker;
+            if let Some(&type_worth) = worth.get(kind)
+                && let Some(own) = entity["props"].get("value").and_then(Value::as_i64)
+                && own != type_worth
+            {
+                valued.push((col, row, own));
+            }
             if let Some(&(_, speaker)) = SPEAKERS.iter().find(|s| s.0 == kind) {
                 let text = entity["props"]["talk"].as_str().unwrap_or("");
                 let mut lines = Vec::new();
@@ -219,6 +256,18 @@ fn main() {
         writeln!(code, "];").unwrap();
         code.push_str(&talks);
         writeln!(code, "static TALKS: [&[Line]; {}] = [{}];", talk_names.len(), talk_names.iter().map(|n| format!("&{n}")).collect::<Vec<_>>().join(", ")).unwrap();
+        valued.sort();
+        let valued: Vec<String> = valued.iter().map(|p| format!("({}, {}, {})", p.0, p.1, p.2)).collect();
+        writeln!(
+            code,
+            "static WORTH: Worth = Worth {{ diamond: {}, coin: {}, heal: {}, emerald: {}, placed: &[{}] }};",
+            worth["diamond"],
+            worth["coin"],
+            worth["heal"],
+            worth["emerald"],
+            valued.join(", ")
+        )
+        .unwrap();
         let zones: Vec<String> = merged.iter().map(|z| format!("({}, {}, {}, {})", z.0, z.1, z.2, z.3)).collect();
         writeln!(code, "static ZONES: [(i32, i32, i32, i32); {}] = [{}];", zones.len(), zones.join(", ")).unwrap();
         fs::write(out.join(format!("{module}.rs")), code).unwrap();

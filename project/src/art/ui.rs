@@ -361,16 +361,26 @@ impl BoxSprites {
         self.dirty |= 1 << index;
     }
 
+    /// Re-sends each changed sprite. The new copy is allocated while the old one is
+    /// still held (by `vram` and by the last frame's objects), and agb only drops its
+    /// cached static sprites when VRAM runs out, so after a busy fight (the crab's
+    /// frames scattered through VRAM) there may be no 2 KB gap left. Then the sprite
+    /// lets go of its old copy and sits out a frame: once the last frame's objects
+    /// are released the space is free, and it is sent again on the next.
     fn show(&mut self, frame: &mut GraphicsFrame) {
+        let mut failed = 0;
         for (i, (vram, sprite)) in self.vram.iter_mut().zip(&self.now).enumerate() {
             if self.dirty & (1 << i) != 0 || vram.is_none() {
-                *vram = Some(sprite.to_vram(&DIALOG_PALETTE));
+                *vram = sprite.try_to_vram(&DIALOG_PALETTE).ok();
+                if vram.is_none() {
+                    failed |= 1 << i;
+                }
             }
             if let Some(vram) = vram {
                 Object::new(vram.clone()).set_pos(vec2(i as i32 * 64, 0)).set_priority(Priority::P0).show(frame);
             }
         }
-        self.dirty = 0;
+        self.dirty = failed;
     }
 }
 

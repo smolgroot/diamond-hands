@@ -81,10 +81,19 @@ const CALL_REACH: i32 = 64;
 /// The bit of the file's part mask that records the jetpack, found in a level that
 /// hides it. The other bits are CL207's plasma cells.
 pub const GEAR_JETPACK: u16 = 1 << 15;
+/// The bit of the file's part mask that records CL207's plasma shield, handed over in
+/// Ethereum City.
+pub const GEAR_SHIELD: u16 = 1 << 14;
+/// Hits a fully charged plasma shield soaks up. Each costs a charge; emeralds put them
+/// back.
+pub const SHIELD_MAX: u8 = 3;
+/// Frames the wassie blinks after the shield soaks up a hit, and the bubble flashes.
+pub const SHIELD_INVULN: u16 = 40;
+pub const SHIELD_FLASH: u8 = 12;
 
 /// The plasma cells in a part mask, without the gear bits.
 pub fn cells(parts: u16) -> u16 {
-    parts & !GEAR_JETPACK
+    parts & !(GEAR_JETPACK | GEAR_SHIELD)
 }
 /// Actors wake once this close to the screen edges.
 const WAKE_MARGIN: i32 = 16;
@@ -161,7 +170,7 @@ impl Input {
 
 /// Things that happened during a step, for sound effects and saving.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Events(pub u32);
+pub struct Events(pub u64);
 
 impl Events {
     pub const JUMP: Events = Events(1 << 0);
@@ -212,6 +221,10 @@ impl Events {
     pub const SPLASH: Events = Events(1 << 29);
     /// A block, a crate or a clod of soil was shot apart.
     pub const BREAK: Events = Events(1 << 30);
+    /// The plasma shield soaked up a hit.
+    pub const SHIELD: Events = Events(1 << 31);
+    /// A bolt clanged off a Bad Cop's riot shield.
+    pub const BLOCKED: Events = Events(1 << 32);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -418,6 +431,10 @@ pub struct World {
     pub coins: u32,
     /// Shield parts this file owns, one bit each, including any picked up here.
     pub parts: u16,
+    /// Charges left in the plasma shield, 0 to [`SHIELD_MAX`]; 0 without it.
+    pub shield: u8,
+    /// Frames left of the bubble's flash after it soaked up a hit.
+    pub shield_flash: u8,
     pub kills: u32,
     pub lift: Option<Lift>,
     /// Someone has words for the wassie: their number among the level's people.
@@ -522,6 +539,8 @@ impl World {
             diamonds: 0,
             coins: 0,
             parts: 0,
+            shield: 0,
+            shield_flash: 0,
             kills: 0,
             lift,
             npc_due: None,
@@ -605,9 +624,22 @@ impl World {
         (diamonds + coins) * 10 + kills * 50 + boss
     }
 
-    /// The file already owns the parts in `mask`: those here are gone from the map.
+    /// Whether the wassie has CL207's plasma shield.
+    pub fn has_shield(&self) -> bool {
+        self.parts & GEAR_SHIELD != 0
+    }
+
+    /// The file already owns the parts in `mask`: those here are gone from the map. A
+    /// file with the plasma shield starts the level with it fully charged, and CL207
+    /// has nothing more to hand over.
     pub fn own_parts(&mut self, mask: u16) {
         self.parts |= mask;
+        if mask & GEAR_SHIELD != 0 {
+            self.shield = SHIELD_MAX;
+            for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Mentor) {
+                a.state = enemy::state::LIT;
+            }
+        }
         if mask & GEAR_JETPACK != 0 {
             for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Jetpack) {
                 a.alive = false;
@@ -720,6 +752,7 @@ impl World {
         }
         self.frames += 1;
         self.fx.update();
+        self.shield_flash = self.shield_flash.saturating_sub(1);
         self.shake = self.shake.saturating_sub(1);
         self.kick = self.kick.saturating_sub(1);
 
@@ -822,6 +855,11 @@ impl World {
             if !s.active && matches!(s.kind, ShotKind::Cucumber | ShotKind::MegaCucumber) {
                 self.fx.spawn(FxKind::Splat, r.centre_x(), r.centre_y());
             }
+            // A canister bursts into smoke, masonry into grit, where it lands.
+            if !s.active && matches!(s.kind, ShotKind::Canister | ShotKind::Rubble) {
+                self.fx.spawn(FxKind::Puff, r.centre_x(), r.centre_y());
+                self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
+            }
             let off_side = r.right() < self.camera_x - 16 || r.x > self.camera_x + SCREEN_W + 16;
             // Well above or below the screen too, in a tall level.
             let off_end = r.bottom() < self.camera_y - SCREEN_H || r.y > self.camera_y + 2 * SCREEN_H;
@@ -847,7 +885,7 @@ impl World {
 
     /// The people on the map, in the order of [`Level::npcs`].
     pub fn people(&self) -> impl Iterator<Item = &Actor> {
-        self.actors[..self.used].iter().filter(|a| matches!(a.kind, ActorKind::Npc | ActorKind::Prisoner))
+        self.actors[..self.used].iter().filter(|a| a.kind.is_person())
     }
 
     /// Whether person `a` can speak: a prisoner says nothing while its jailer stands.
@@ -855,24 +893,35 @@ impl World {
         a.kind != ActorKind::Prisoner || !self.boss.present || self.boss.state == crate::boss::BossState::Defeated
     }
 
-    /// Person `n` has had their say. A freed prisoner hands over its reward, once:
-    /// saved with the run, so it is never paid twice.
+    /// Person `n` has had their say. A freed prisoner hands over its reward, and CL207
+    /// the plasma shield, once: saved with the run, so it is never paid twice.
     /// Returns whether it paid, so the run can be saved.
     pub fn heard_out(&mut self, n: u8, events: &mut Events) -> bool {
         let Some(i) = self.actors[..self.used]
             .iter()
             .enumerate()
-            .filter(|(_, a)| matches!(a.kind, ActorKind::Npc | ActorKind::Prisoner))
+            .filter(|(_, a)| a.kind.is_person())
             .nth(n as usize)
             .map(|(i, _)| i)
         else {
             return false;
         };
         let a = &mut self.actors[i];
-        if a.kind != ActorKind::Prisoner || a.state == enemy::state::LIT {
+        if !matches!(a.kind, ActorKind::Prisoner | ActorKind::Mentor) || a.state == enemy::state::LIT {
             return false;
         }
         a.state = enemy::state::LIT;
+        if a.kind == ActorKind::Mentor {
+            // The plasma shield, fully charged, comes on around the wassie.
+            self.parts |= GEAR_SHIELD;
+            self.shield = SHIELD_MAX;
+            self.shield_flash = SHIELD_FLASH;
+            let r = self.player.body.rect();
+            self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
+            self.fx.spawn(FxKind::Glint, r.centre_x(), r.y);
+            events.insert(Events::GEAR);
+            return true;
+        }
         self.diamonds += PRISONER_REWARD;
         let r = a.rect();
         for (dx, dy) in [(-12, -8), (0, -16), (12, -8), (-6, -24), (6, -24)] {
@@ -1375,6 +1424,8 @@ impl World {
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
         let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
+        // While the fight is on, the arena's edge, and the rows its screen covers.
+        let arena_edge = (self.arena && self.boss.present).then_some((self.boss.arena.0, self.arena_y, self.arena_y + SCREEN_H));
         for a in self.actors[..self.used].iter_mut().filter(|a| a.alive) {
             let r = a.rect();
             let visible = r.right() > view.0 && r.x < view.1 && r.bottom() > view_y.0 && r.y < view_y.1;
@@ -1388,6 +1439,21 @@ impl World {
                 || r.y > view_y.1 + SCREEN_H / 2;
             if a.awake && !far {
                 a.update(&mut ctx);
+                // While the fight is on, a Bad Cop's beat ends at the arena's edge: none
+                // follows the wassie onto the roof. Only cops: the older levels' villains
+                // keep their ways, which their screens' sprite budgets were measured
+                // with (one held at SAM's arena edge leaves too little sprite VRAM for
+                // the dialogue box there).
+                if let Some((edge, top, bottom)) = arena_edge
+                    && a.kind == ActorKind::Cop
+                    && a.home.0 < edge
+                    && a.rect().right() > edge
+                    && a.rect().bottom() > top
+                    && a.rect().y < bottom
+                {
+                    a.body.x_fx = (edge - a.body.w) * FX;
+                    a.facing = -1;
+                }
             }
         }
     }
@@ -1476,6 +1542,14 @@ impl World {
                     continue;
                 }
                 let ar = a.rect();
+                // A Bad Cop's riot shield stops a bolt from the front; a charged beam
+                // burns through it.
+                if !s.kind.pierces() && a.shield_stops(s.vx_fx) {
+                    self.fx.spawn(FxKind::Sparks, ar.centre_x() + a.facing * 8, r.centre_y());
+                    events.insert(Events::BLOCKED);
+                    s.active = false;
+                    break;
+                }
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
                 if a.damage(s.kind.damage()) {
                     self.kills += 1;
@@ -1532,17 +1606,32 @@ impl World {
         // Touching villains, pickups and checkpoints.
         let mut checkpoint_reached = None;
         let mut part_taken = None;
+        let worth = self.level.worth;
         for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
             if !a.alive || !player.overlaps(&a.rect()) {
                 continue;
             }
+            // A pickup's marker stands in the tile at its centre, where it was placed.
+            let (tx, ty) = (a.rect().centre_x().div_euclid(TILE), a.rect().centre_y().div_euclid(TILE));
             match a.kind {
                 ActorKind::Diamond => {
                     a.alive = false;
                     a.killed = true;
-                    self.diamonds += 1;
+                    self.diamonds += worth.of(a.kind, tx, ty);
                     let r = a.rect();
                     self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
+                    events.insert(Events::PICKUP);
+                }
+                ActorKind::Emerald => {
+                    a.alive = false;
+                    a.killed = true;
+                    let r = a.rect();
+                    self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
+                    if self.parts & GEAR_SHIELD != 0 {
+                        let charge = self.shield as u32 + worth.of(a.kind, tx, ty);
+                        self.shield = charge.min(SHIELD_MAX as u32) as u8;
+                        self.shield_flash = SHIELD_FLASH / 2;
+                    }
                     events.insert(Events::PICKUP);
                 }
                 ActorKind::Heal => {
@@ -1550,13 +1639,13 @@ impl World {
                     a.killed = true;
                     let r = a.rect();
                     self.fx.spawn(FxKind::Glint, r.centre_x(), r.centre_y());
-                    self.player.hp = (self.player.hp + HEAL_AMOUNT).min(MAX_HP);
+                    self.player.hp = (self.player.hp + worth.of(a.kind, tx, ty) as i32).min(MAX_HP);
                     events.insert(Events::PICKUP);
                 }
                 ActorKind::Coin => {
                     a.alive = false;
                     a.killed = true;
-                    self.coins += 1;
+                    self.coins += worth.of(a.kind, tx, ty);
                     let r = a.rect();
                     self.fx.spawn(FxKind::CoinPop, r.centre_x(), r.centre_y());
                     events.insert(Events::COIN);
@@ -1580,7 +1669,7 @@ impl World {
                     self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
                     events.insert(Events::GEAR);
                 }
-                ActorKind::Terminal | ActorKind::Npc | ActorKind::Portal | ActorKind::Gate | ActorKind::Block(_) => {}
+                ActorKind::Terminal | ActorKind::Npc | ActorKind::Mentor | ActorKind::Portal | ActorKind::Gate | ActorKind::Block(_) => {}
                 ActorKind::Checkpoint => {
                     if a.state != enemy::state::LIT {
                         a.state = enemy::state::LIT;
@@ -1645,6 +1734,18 @@ impl World {
     fn knock_player(&mut self, damage: i32, from_x: i32, heavy: bool, events: &mut Events) -> bool {
         if self.god {
             return false;
+        }
+        if self.shield > 0 && self.player.invuln == 0 && !self.player.is_dead() {
+            // The plasma shield soaks it up: a charge gone, no harm done, and a moment's
+            // grace so one blast doesn't drain it twice.
+            self.shield -= 1;
+            self.shield_flash = SHIELD_FLASH;
+            self.player.invuln = SHIELD_INVULN;
+            let r = self.player.body.rect();
+            let side = if from_x < r.centre_x() { -1 } else { 1 };
+            self.fx.spawn(FxKind::Sparks, r.centre_x() + side * 14, r.centre_y());
+            events.insert(Events::SHIELD);
+            return true;
         }
         if !self.player.knocked(self.difficulty.damage(damage), from_x, heavy) {
             return false;
@@ -1876,6 +1977,57 @@ mod tests {
         assert_eq!(w.checkpoints_lit, 1);
         assert_eq!(w.checkpoint, (18, 15));
         assert!(w.actors.iter().any(|a| a.kind == ActorKind::Checkpoint && a.state == state::LIT));
+    }
+
+    /// A level whose pickups are worth what its studio says: a diamond is worth 5, a coin 2,
+    /// a heal 1, and the second diamond was placed with a value of 9 of its own.
+    static DEAR: Level = Level {
+        rows: &[
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "........................................",
+            "...P.....o..+..o..$.....................",
+            "########################################",
+            "########################################",
+            "########################################",
+            "########################################",
+        ],
+        worth: &crate::level::Worth { diamond: 5, coin: 2, heal: 1, emerald: 1, placed: &[(15, 15, 9)] },
+        ..Level::BASE
+    };
+
+    #[test]
+    fn pickups_pay_what_the_level_says_they_are_worth() {
+        let mut w = World::with_level(&DEAR, 0, Difficulty::Normal);
+        w.step(&Input::default());
+        w.god = true;
+        w.player.hp = 3;
+        let events = hold(&mut w, keys::RIGHT, 120);
+        assert!(events.contains(Events::PICKUP) && events.contains(Events::COIN));
+        assert_eq!(w.diamonds, 5 + 9, "a diamond is worth 5, the one placed with its own value 9");
+        assert_eq!(w.coins, 2);
+        assert_eq!(w.player.hp, 3 + 1, "a heal gives back one heart here");
+    }
+
+    #[test]
+    fn a_levels_drawn_in_code_pay_one_and_the_heal_amount() {
+        let mut w = world();
+        w.god = true;
+        w.player.hp = 3;
+        hold(&mut w, keys::RIGHT, 120);
+        assert_eq!((w.diamonds, w.player.hp), (1, 3 + HEAL_AMOUNT));
     }
 
     #[test]
@@ -2992,4 +3144,253 @@ mod tests {
         assert!(w.lift.unwrap().riding(), "and it can be ridden again");
     }
 
+
+    // Ethereum City: the plasma shield, emeralds, Bad Cops and BORED KONG.
+
+    fn eth_city_on(tx: i32, ty: i32) -> World {
+        let mut w = World::new(3, Difficulty::Normal);
+        w.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        w
+    }
+
+    /// A wassie with CL207's shield, fully charged.
+    fn shielded(w: &mut World) {
+        w.parts |= GEAR_SHIELD;
+        w.shield = SHIELD_MAX;
+    }
+
+    #[test]
+    fn cl207_hands_over_the_plasma_shield_once() {
+        let mut w = World::new(3, Difficulty::Normal);
+        assert!(!w.has_shield() && w.shield == 0, "the wassie arrives without it");
+        let n = w.people().position(|a| a.kind == ActorKind::Mentor).unwrap() as u8;
+        // Walking up to CL207 starts the talk.
+        let cl207 = w.people().nth(n as usize).unwrap().rect();
+        w.player = Player::new(Body::standing_on_tile(cl207.centre_x().div_euclid(TILE) - 2, (cl207.bottom() - 1).div_euclid(TILE), PLAYER_W, PLAYER_H));
+        hold(&mut w, 0, 2);
+        assert_eq!(w.npc_due, Some(n), "CL207 has words for the wassie");
+        let mut events = Events::default();
+        assert!(w.heard_out(n, &mut events), "the hand-over is saved");
+        assert!(events.contains(Events::GEAR));
+        assert!(w.has_shield() && w.shield == SHIELD_MAX);
+        assert_eq!(cells(w.parts), 0, "the shield is gear, not a plasma cell");
+        w.shield = 1;
+        assert!(!w.heard_out(n, &mut Events::default()), "only once");
+        assert_eq!(w.shield, 1, "hearing CL207 again doesn't recharge it");
+    }
+
+    #[test]
+    fn a_file_with_the_shield_starts_the_level_charged() {
+        let mut w = World::new(3, Difficulty::Normal);
+        w.own_parts(GEAR_SHIELD);
+        assert_eq!(w.shield, SHIELD_MAX);
+        let n = w.people().position(|a| a.kind == ActorKind::Mentor).unwrap() as u8;
+        assert!(!w.heard_out(n, &mut Events::default()), "CL207 has nothing more to hand over");
+    }
+
+    #[test]
+    fn the_shield_soaks_up_a_hit_per_charge_then_the_wassie_gets_hurt() {
+        let mut w = eth_city_on(20, 35);
+        shielded(&mut w);
+        let hp = w.player.hp;
+        for left in (0..SHIELD_MAX).rev() {
+            let mut events = Events::default();
+            assert!(w.knock_player(2, 0, true, &mut events));
+            assert!(events.contains(Events::SHIELD) && !events.contains(Events::HIT));
+            assert_eq!((w.player.hp, w.shield), (hp, left), "no harm done, a charge gone");
+            assert!(w.player.invuln > 0 && w.player.hurt == 0, "no knockback either");
+            assert!(!w.knock_player(2, 0, false, &mut Events::default()), "a moment's grace after");
+            w.player.invuln = 0;
+        }
+        let mut events = Events::default();
+        assert!(w.knock_player(2, 0, false, &mut events));
+        assert!(events.contains(Events::HIT) && w.player.hp < hp, "dry: the hit goes through");
+    }
+
+    #[test]
+    fn falling_in_a_pit_gets_past_the_shield() {
+        let mut w = eth_city_on(20, 35);
+        shielded(&mut w);
+        let hp = w.player.hp;
+        w.player.body.y_fx = (w.level.px_height() + 8) * FX;
+        w.step(&Input::default());
+        assert!(w.player.hp < hp && w.shield == SHIELD_MAX);
+    }
+
+    #[test]
+    fn emeralds_recharge_the_shield_and_diamonds_dont() {
+        let mut w = World::new(3, Difficulty::Normal);
+        shielded(&mut w);
+        w.shield = 0;
+        let e = w.actors.iter().position(|a| a.kind == ActorKind::Emerald).unwrap();
+        let d = w.actors.iter().position(|a| a.kind == ActorKind::Diamond).unwrap();
+        let stand_on = |w: &mut World, i: usize| {
+            let r = w.actors[i].rect();
+            w.player.body.x_fx = (r.centre_x() - PLAYER_W / 2) * FX;
+            w.player.body.y_fx = (r.bottom() - PLAYER_H) * FX;
+            w.player.body.vy_fx = 0;
+        };
+        stand_on(&mut w, d);
+        w.collide(&mut Events::default());
+        assert_eq!(w.shield, 0, "a diamond is no use to the shield");
+        stand_on(&mut w, e);
+        let mut events = Events::default();
+        w.collide(&mut events);
+        assert!(events.contains(Events::PICKUP) && !w.actors[e].alive);
+        assert_eq!(w.shield, 1);
+        assert_eq!(w.level.worth.emerald, 1, "an emerald's worth comes from the studio");
+        // Never past full.
+        w.shield = SHIELD_MAX;
+        let e2 = w.actors.iter().position(|a| a.kind == ActorKind::Emerald && a.alive).unwrap();
+        stand_on(&mut w, e2);
+        w.collide(&mut Events::default());
+        assert_eq!(w.shield, SHIELD_MAX);
+    }
+
+    #[test]
+    fn an_emerald_without_the_shield_is_just_taken() {
+        let mut w = World::new(3, Difficulty::Normal);
+        let e = w.actors.iter().position(|a| a.kind == ActorKind::Emerald).unwrap();
+        let r = w.actors[e].rect();
+        w.player.body.x_fx = (r.centre_x() - PLAYER_W / 2) * FX;
+        w.player.body.y_fx = (r.bottom() - PLAYER_H) * FX;
+        w.collide(&mut Events::default());
+        assert!(!w.actors[e].alive && w.shield == 0);
+    }
+
+    /// The first Bad Cop on the avenue, awake and walking its beat facing `facing`.
+    fn cop_on_the_beat(w: &mut World, facing: i32) -> usize {
+        let c = w.actors.iter().position(|a| a.kind == ActorKind::Cop).unwrap();
+        let a = &mut w.actors[c];
+        a.awake = true;
+        a.facing = facing;
+        a.state = state::IDLE;
+        c
+    }
+
+    fn shoot_at(w: &mut World, c: usize, kind: ShotKind, from: i32) {
+        let r = w.actors[c].rect();
+        w.shots = [Shot::EMPTY; MAX_SHOTS];
+        shot::spawn(&mut w.shots, kind, r.centre_x() + from * 6, r.centre_y(), -from * 4 * FX, 0);
+    }
+
+    #[test]
+    fn a_bad_cops_riot_shield_stops_bolts_from_the_front_but_not_a_beam_or_from_behind() {
+        let mut w = World::new(3, Difficulty::Normal);
+        let c = cop_on_the_beat(&mut w, 1);
+        let hp = w.actors[c].hp;
+        // From in front (it faces right; the bolt comes from the right, heading left).
+        shoot_at(&mut w, c, ShotKind::Bolt, 1);
+        let mut events = Events::default();
+        w.collide(&mut events);
+        assert!(events.contains(Events::BLOCKED), "clang");
+        assert_eq!(w.actors[c].hp, hp, "the shield takes it");
+        assert!(!w.shots[0].active, "and the bolt is spent");
+        // From behind.
+        shoot_at(&mut w, c, ShotKind::Bolt, -1);
+        w.collide(&mut Events::default());
+        assert_eq!(w.actors[c].hp, hp - 1, "nothing covers its back");
+        // A charged beam burns through the shield.
+        shoot_at(&mut w, c, ShotKind::Beam, 1);
+        w.collide(&mut Events::default());
+        assert_eq!(w.actors[c].hp, hp - 1 - ShotKind::Beam.damage());
+    }
+
+    #[test]
+    fn a_bad_cop_lowers_its_shield_to_lob_a_canister() {
+        let mut w = World::new(3, Difficulty::Normal);
+        w.god = true;
+        let c = cop_on_the_beat(&mut w, -1);
+        // The wassie a few steps ahead of it, on the street.
+        let r = w.actors[c].rect();
+        w.player = Player::new(Body::standing_on_tile((r.centre_x() + 64).div_euclid(TILE), (r.bottom() - 1).div_euclid(TILE), PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        let (mut told, mut thrown) = (None, None);
+        for frame in 0..120 {
+            w.step(&Input::default());
+            let a = &w.actors[c];
+            if a.state == state::AIM && told.is_none() {
+                told = Some(frame);
+                assert_eq!(a.facing, 1, "it turns to face the wassie");
+                assert!(!a.shield_stops(-FX), "winding up, its shield is down");
+            }
+            if thrown.is_none() && w.shots.iter().any(|s| s.active && s.kind == ShotKind::Canister) {
+                thrown = Some(frame);
+                let s = w.shots.iter().find(|s| s.active && s.kind == ShotKind::Canister).unwrap();
+                assert!(s.vy_fx < 0 && s.vx_fx > 0, "lobbed up and toward the wassie");
+            }
+        }
+        let (told, thrown) = (told.expect("it winds up"), thrown.expect("it throws"));
+        assert!(thrown - told >= crate::enemy::COP_TELL_FRAMES as i32 - 1, "the tell comes first");
+    }
+
+    /// On the tower's roof, the fight on.
+    fn ape_fight() -> World {
+        let mut w = eth_city_on(306, 15);
+        w.god = true;
+        let events = hold(&mut w, 0, 2);
+        assert!(w.arena && events.contains(Events::BOSS_START), "the arena closes");
+        assert_eq!(w.boss.kind, crate::level::BossKind::Ape);
+        w
+    }
+
+    #[test]
+    fn bored_kong_leaps_throws_and_rampages_into_the_wall() {
+        let mut w = ape_fight();
+        let mut seen = [false; 6];
+        let (mut rubble, mut waves) = (false, false);
+        for _ in 0..2400 {
+            w.step(&Input::default());
+            rubble |= w.shots.iter().any(|s| s.active && s.kind == ShotKind::Rubble);
+            waves |= w.shots.iter().any(|s| s.active && s.kind == ShotKind::Shockwave);
+            let i = match w.boss.state {
+                BossState::Windup => 0,
+                BossState::Leap => 1,
+                BossState::Throw => 2,
+                BossState::Charge => 3,
+                BossState::Stunned => 4,
+                BossState::Recover => 5,
+                _ => continue,
+            };
+            seen[i] = true;
+            if w.boss.state == BossState::Charge {
+                assert!(w.boss.rect().h < crate::player::JUMP_APEX, "low enough to jump");
+            }
+        }
+        assert_eq!(seen, [true; 6], "pound, leap, throw, rampage, dazed, landing");
+        assert!(rubble && waves);
+    }
+
+    #[test]
+    fn bored_kong_dazed_takes_double_and_beating_it_clears_the_level() {
+        let mut w = ape_fight();
+        w.boss.state = BossState::Stunned;
+        w.boss.timer = 30;
+        let hp = w.boss.hp;
+        w.boss.damage(1, &mut Events::default());
+        assert_eq!(w.boss.hp, hp - 2);
+        w.boss.hp = 1;
+        w.boss.damage(1, &mut Events::default());
+        let mut events = Events::default();
+        for _ in 0..crate::boss::APE_DYING_FRAMES + 2 {
+            events.insert(w.step(&Input::default()));
+        }
+        assert!(events.contains(Events::LEVEL_CLEAR) && w.cleared);
+    }
+
+    #[test]
+    fn bad_cops_never_follow_the_wassie_onto_the_roof() {
+        let mut w = ape_fight();
+        let edge = w.boss.arena.0;
+        let c = w.actors.iter().position(|a| a.kind == ActorKind::Cop && (a.home.0 - edge).abs() < 160).unwrap();
+        // A cop on the top floor, walking for the roof.
+        w.actors[c].awake = true;
+        w.actors[c].facing = 1;
+        w.actors[c].body.x_fx = (edge - 20) * FX;
+        for _ in 0..240 {
+            w.step(&Input::default());
+            assert!(w.actors[c].rect().right() <= edge, "it stays off the roof");
+        }
+    }
 }

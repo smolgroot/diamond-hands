@@ -73,14 +73,16 @@ Run `validate` after changing anything under `studio/`.
 - Collision comes from the tileset: each tile has a collision class. A room can
   override single cells.
 - An entity is a type, a position in pixels (its feet: the middle of its bottom
-  edge), and the properties its type defines. What an entity does is code in `src/`:
-  match on the generated `data::EntityKind`.
+  edge), and the properties its type defines. What an entity does comes from its
+  type's behaviours, from the runtime's library (patrol, collectible, hazard, door
+  and the rest; see `entity_type_add_behaviour`), and from code in `src/`, which
+  can match on the generated `data::EntityKind` for what is special to a type.
 - Ids are lowercase letters, digits, `-` and `_`, and are the file names.
 
 ## In the game code
 
 ```rust
-pecten_studio_rt::include_data!();   // data::world(), EntityKind, ENTITY_SLOTS, room and class constants
+pecten_studio_rt::include_data!();   // data::world(), EntityKind, entities(), enter_room, update_entities, room and class constants
 pecten_studio_rt::include_gfx!();    // gfx::ART, TILESETS, BACKGROUNDS, SPRITE_<NAME>, ENTITY_SPRITES
 pecten_studio_rt::include_audio!();  // audio::TRACKS, SFX (needs agb_tracker)
 ```

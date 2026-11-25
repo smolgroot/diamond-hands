@@ -19,8 +19,10 @@ path = "src/sol_city/main.rs"
 required-features = ["sol-city"]
 
 [features]
-# A dev build: every level is open on the world map, without beating the ones before.
-dev = []
+# A dev build: every level is open on the world map, without beating the ones before, and
+# the ROM carries GBA-Studio's debug map, which the Play panel's overlays and entity list
+# read. The dev profile turns debug assertions off, which would leave the map out.
+dev = ["pecten_studio_rt/debug-map"]
 # Plays levels painted in the studio (logic's `studio` feature): builds the `sol-city` ROM.
 sol-city = ["diamond_hands_logic/studio"]
 # The route bot plays Sol City in god mode, A-ing through the dialogue, to watch the level.
@@ -39,11 +41,11 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 #   [patch."https://github.com/smolgroot/gba-studio"]
 #   pecten_studio_rt = { path = "../../gba-studio/runtime" }
 #   pecten_studio_build = { path = "../../gba-studio/codegen" }
-pecten_studio_rt = { git = "https://github.com/smolgroot/gba-studio", rev = "aa7636b65350d2200e5d97ff6a13bdc61d19bec7", features = ["agb"] }
+pecten_studio_rt = { git = "https://github.com/smolgroot/gba-studio", rev = "0c8a35f6ba724c901d994c7c074405de80c02326", features = ["agb"] }
 
 [build-dependencies]
 png = "0.17"
-pecten_studio_build = { git = "https://github.com/smolgroot/gba-studio", rev = "aa7636b65350d2200e5d97ff6a13bdc61d19bec7" }
+pecten_studio_build = { git = "https://github.com/smolgroot/gba-studio", rev = "0c8a35f6ba724c901d994c7c074405de80c02326" }
 
 # Both builds are optimized for speed, without debug info or debug strings; the matching
 # nightly flags are in `.cargo/config.toml`.

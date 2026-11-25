@@ -108,7 +108,12 @@
       "colour": "#e5484d",
       "sprite": "sentry",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "crawler",
@@ -116,7 +121,12 @@
       "colour": "#f5a623",
       "sprite": "crawler",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "drone",
@@ -124,7 +134,12 @@
       "colour": "#9b5de5",
       "sprite": "drone",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "mine",
@@ -132,7 +147,12 @@
       "colour": "#8d99ae",
       "sprite": "mine",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "checkpoint",
@@ -140,7 +160,12 @@
       "colour": "#30a46c",
       "sprite": "beacon",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "checkpoint",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "diamond",
@@ -148,7 +173,14 @@
       "colour": "#46c8f0",
       "sprite": "fx",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "collectible",
+          "props": {
+            "value": 1
+          }
+        }
+      ]
     },
     {
       "id": "heal",
@@ -156,42 +188,80 @@
       "colour": "#3dd68c",
       "sprite": "fx",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "collectible",
+          "props": {
+            "value": 2
+          }
+        }
+      ]
     },
     {
       "id": "dealer",
       "name": "Dealer",
       "colour": "#ffb224",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "guard",
       "name": "Guard",
       "colour": "#e54666",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "coin",
       "name": "Gold coin",
       "colour": "#f5c41e",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "collectible",
+          "props": {
+            "value": 1
+          }
+        }
+      ]
     },
     {
       "id": "plasma-cell",
       "name": "Plasma cell",
       "colour": "#ff6ad5",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "collectible",
+          "props": {
+            "value": 1
+          }
+        }
+      ]
     },
     {
       "id": "jetpack",
       "name": "Jetpack",
       "colour": "#bd7cff",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "ability-pickup",
+          "props": {
+            "grants_ability": 0
+          }
+        }
+      ]
     },
     {
       "id": "breaker",
@@ -234,7 +304,12 @@
       "colour": "#f5a24b",
       "sprite": "clay-dino",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "zookeeper",
@@ -300,7 +375,12 @@
       "colour": "#c03050",
       "sprite": "sentry",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "sand-block",
@@ -332,7 +412,12 @@
       "colour": "#ff3d8b",
       "sprite": "crab-bot",
       "props": [],
-      "behaviours": []
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
     },
     {
       "id": "crab-boss",
@@ -354,6 +439,51 @@
           "default": ""
         }
       ],
+      "behaviours": []
+    },
+    {
+      "id": "bad-cop",
+      "name": "Bad Cop bot (riot shield, lobs canisters)",
+      "colour": "#3b5bdb",
+      "sprite": "bad-cop",
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "emerald",
+      "name": "Green emerald (recharges the plasma shield)",
+      "colour": "#2fcf78",
+      "sprite": "emerald",
+      "props": [],
+      "behaviours": [
+        {
+          "id": "collectible",
+          "props": {
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "cl207",
+      "name": "CL207 (hands over the plasma shield)",
+      "colour": "#ffd24a",
+      "sprite": "cl207",
+      "props": [
+        {
+          "name": "talk",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "behaviours": []
+    },
+    {
+      "id": "ape-boss",
+      "name": "Bored Kong (boss)",
+      "colour": "#8a5a3c",
+      "sprite": "ape-boss",
+      "props": [],
       "behaviours": []
     }
   ],

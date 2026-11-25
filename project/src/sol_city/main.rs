@@ -48,7 +48,7 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut music = music::Music::new();
     let mut sfx = sound::Sfx::new();
     let world: &'static _ = Box::leak(boxed(data::world));
-    let mut screen = boxed(|| draw::Screen::new(world));
+    let mut screen = boxed(|| draw::Screen::new(world, diamond_hands_logic::level::Theme::SolCity));
     let mut previous = 0;
     let mut bot = diamond_hands_logic::bot::Bot::default();
 
@@ -70,6 +70,8 @@ fn main(mut gba: agb::Gba) -> ! {
         mixer.frame();
 
         screen.prepare(&game, &mut graphics);
+        // For GBA-Studio's Play panel (dev builds).
+        screen.publish(&game);
         let mut frame = graphics.frame();
         screen.draw(&game, &mut frame);
         frame.commit();

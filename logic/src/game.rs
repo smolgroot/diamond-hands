@@ -1117,8 +1117,8 @@ mod tests {
         assert!(events.contains(Events::SAVE));
         assert_eq!(game.cleared, 0b1);
         use levels::PlaceStatus::*;
-        let sol_city = if cfg!(feature = "studio") { Locked } else { Soon };
-        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, sol_city, Soon]);
+        let studio = if cfg!(feature = "studio") { Locked } else { Soon };
+        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, studio, studio]);
         assert_eq!(game.cursor, 1, "the cursor waits on the new place");
         assert_eq!(game.fresh, Some(1));
         assert_eq!(game.map_walk, Some((0, 1)), "the wassie walks the road there");
@@ -1202,12 +1202,24 @@ mod tests {
         assert!(core::ptr::eq(game.world.level, &levels::sol_city::SOL_CITY));
         clear_level(&mut game);
         let file = game.files[0].expect("saved on clear");
-        assert!(file.complete);
-        assert_eq!(file.cleared, levels::ALL_CLEARED);
-        assert_eq!(game.fresh, Some(3), "Ethereum City shows unlocked, though not built");
+        assert!(!file.complete, "Ethereum City is still to come");
+        assert_eq!(game.fresh, Some(3), "Ethereum City opens");
         assert_eq!(game.map_walk, Some((2, 3)), "the wassie walks on to it");
-        assert_eq!(levels::MAP[3].status(game.cleared), levels::PlaceStatus::Upcoming);
-        assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "but it can't be played yet");
+        if cfg!(feature = "studio") {
+            assert_eq!(levels::MAP[3].status(game.cleared), levels::PlaceStatus::Open);
+            tap(&mut game, keys::A);
+            play_level(&mut game);
+            assert!(core::ptr::eq(game.world.level, &levels::eth_city::ETH_CITY));
+            clear_level(&mut game);
+            let file = game.files[0].expect("saved on clear");
+            assert!(file.complete);
+            assert_eq!(file.cleared, levels::ALL_CLEARED);
+            assert_eq!(game.fresh, None, "nothing after Ethereum City yet");
+        } else {
+            assert_eq!(levels::MAP[3].status(game.cleared), levels::PlaceStatus::Upcoming);
+            assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "the code-drawn ROM can't play it");
+            return;
+        }
         tap(&mut game, keys::B);
         assert_eq!(game.scene, Scene::Title);
         tap(&mut game, keys::UP);

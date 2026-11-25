@@ -23,7 +23,7 @@
 //! and on a pipe in the middle of the sewers, up on the jetpack.
 
 use crate::{
-    level::{Area, BossKind, Level, Markers, Theme},
+    level::{Area, BossKind, Level, Markers, Theme, Worth},
     talk::{Line, Speaker},
 };
 
@@ -186,4 +186,5 @@ pub static TRENCHES: Level = Level {
     npcs: &[],
     studio: false,
     markers: Some(&MARKERS),
+    worth: &Worth::DEFAULT,
 };

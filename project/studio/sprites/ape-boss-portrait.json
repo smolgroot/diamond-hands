@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "Ape boss portrait",
+  "image": "generated/sprites/ape-boss-portrait.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "anchor": {
+    "x": 16,
+    "y": 32
+  },
+  "animations": []
+}

@@ -10,7 +10,8 @@
 //! tileset side by side, share one): the camera stays in it and cuts across at a
 //! doorway. Edit them in the studio. The zoo, the tunnels and the Wormhole building were
 //! laid out with the studio's `tileset_generate` and `room_generate`, then given their
-//! doorways and people by hand.
+//! doorways and people by hand. What a diamond, a coin and a heal are worth comes from the
+//! `collectible` behaviour of their entity types (see `build.rs`).
 //!
 //! The way through (rows 0-59 of one tall map):
 //!
@@ -34,12 +35,13 @@
 //!   the shaft (158-161) climb back up;
 //! - the harbor (210-269): piers over the water, containers stacked up to a crane, and
 //!   the Wormhole building's front door, jammed by blockade bots that can't be beaten;
-//! - the Wormhole building (270-329): in off the crane's jib at its roof (row 15),
-//!   through a skylight and down a zigzag of floors to the portal hall, where the
-//!   cosmonaut wassie waits by the portal.
+//! - the Wormhole building (270-329): off the crane's jib onto a ledge on its west
+//!   face (row 16), up a fire-escape step to the roof (row 10), and in from the top
+//!   through a skylight (311-315) to the top floor, then down a zigzag of floors to the
+//!   portal hall, where the cosmonaut wassie waits by the portal.
 
 use crate::{
-    level::{Level, Markers, Theme},
+    level::{Level, Markers, Theme, Worth},
     talk::{Line, Speaker},
 };
 
@@ -47,9 +49,9 @@ include!(concat!(env!("OUT_DIR"), "/sol_city.rs"));
 
 /// The route bot's way through: down the service shaft, off the landing girder to the
 /// tunnel floor, west to the breaker, back up the girders, through the zoo's gate, over
-/// the harbor's containers and crane onto the roof, and down the building's floors to
-/// the portal.
-static ROUTE: [(i32, i32); 27] = [
+/// the harbor's containers and crane, up the building's wall onto its roof, in by the
+/// skylight, and down the building's floors to the portal.
+static ROUTE: [(i32, i32); 31] = [
     (153, 45),
     (159, 55),
     (147, 51),
@@ -68,7 +70,11 @@ static ROUTE: [(i32, i32); 27] = [
     (265, 22),
     (260, 18),
     (264, 15),
-    (275, 15),
+    (271, 15),
+    (274, 12),
+    (280, 9),
+    (310, 9),
+    (314, 15),
     (292, 21),
     (296, 29),
     (292, 33),
@@ -112,4 +118,5 @@ pub static SOL_CITY: Level = Level {
     npcs: &TALKS,
     studio: true,
     markers: Some(&MARKERS),
+    worth: &WORTH,
 };

@@ -41,12 +41,15 @@
 //! | `w`  | the Wormhole portal: stepping in ends the level |
 //! | `h`  | a gate that stays shut until a terminal (`E`) brings the power back |
 //! | `m`  | a blockade bot: armoured, it can't be beaten, only gone around |
+//! | `z`  | a Bad Cop bot: its riot shield stops bolts from the front; it lobs canisters |
+//! | `i`  | a green emerald: recharges the plasma shield |
+//! | `I`  | CL207, who hands over the plasma shield: someone to talk to, in map order with the rest |
 //! | `n`, `u`, `y` | the bottom-left tile of a 2x2 block the wassie can shoot apart, which falls when nothing holds it up: sand on the beach, a crate on the dock, soil in the zoo (see [`crate::block`]) |
 //!
-//! Studio levels (Sol City) are painted in GBA-Studio; `build.rs` writes their rows in
+//! Studio levels (Sol City, Ethereum City) are painted in GBA-Studio; `build.rs` writes their rows in
 //! this legend.
 
-use crate::{TILE, talk::Line};
+use crate::{TILE, enemy::ActorKind, talk::Line};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
@@ -128,6 +131,16 @@ pub enum Theme {
     /// Sol City on a Miami morning: the beach, the MagicEden dino zoo, the harbor and
     /// the Wormhole Bridge. Painted in GBA-Studio.
     SolCity,
+    /// Ethereum City, a New York at dusk: the Wormhole office, the avenue, the subway
+    /// and a skyscraper with an ape on its roof. Painted in GBA-Studio.
+    EthCity,
+}
+
+impl Theme {
+    /// Painted in GBA-Studio and drawn from its rooms.
+    pub const fn studio(self) -> bool {
+        matches!(self, Theme::SolCity | Theme::EthCity)
+    }
 }
 
 /// Who waits in the arena.
@@ -139,6 +152,8 @@ pub enum BossKind {
     Sam,
     /// The Big Crab Bot, in its lair under Sol City's beach. Not the end of the level.
     Crab,
+    /// BORED KONG, the giant ape on the roof of Ethereum City's tallest tower.
+    Ape,
 }
 
 impl BossKind {
@@ -301,6 +316,46 @@ pub struct Level {
     /// The map's markers, listed when the game is compiled ([`Markers::scan`]); `None`
     /// to read them off the map, as test levels do.
     pub markers: Option<&'static Markers>,
+    /// What its pickups are worth. A studio level takes them from the `collectible`
+    /// behaviour of the pickups' entity types.
+    pub worth: &'static Worth,
+}
+
+/// What a pickup is worth when the wassie touches it: the `value` of the `collectible`
+/// behaviour that the studio gives the entity type, or a placed entity's own `value`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Worth {
+    /// Diamonds a diamond adds to the count.
+    pub diamond: u32,
+    /// Gold coins a coin adds to the purse.
+    pub coin: u32,
+    /// Hearts a cold-wallet heal gives back.
+    pub heal: u32,
+    /// Charges an emerald puts back in the plasma shield.
+    pub emerald: u32,
+    /// Pickups that set their own value, as the tile column and row of their marker and
+    /// what they are worth. Everything else in the level is worth its type's value.
+    pub placed: &'static [(i32, i32, u32)],
+}
+
+impl Worth {
+    /// What the pickups of a level drawn in code are worth: one each, and a heal of
+    /// [`HEAL_AMOUNT`](crate::world::HEAL_AMOUNT).
+    pub const DEFAULT: Worth = Worth { diamond: 1, coin: 1, heal: crate::world::HEAL_AMOUNT as u32, emerald: 1, placed: &[] };
+
+    /// What the pickup `kind` whose marker stands in tile `(tx, ty)` is worth.
+    pub fn of(&self, kind: ActorKind, tx: i32, ty: i32) -> u32 {
+        if let Some(&(_, _, value)) = self.placed.iter().find(|p| p.0 == tx && p.1 == ty) {
+            return value;
+        }
+        match kind {
+            ActorKind::Diamond => self.diamond,
+            ActorKind::Coin => self.coin,
+            ActorKind::Heal => self.heal,
+            ActorKind::Emerald => self.emerald,
+            _ => 0,
+        }
+    }
 }
 
 /// Arena width in tiles: exactly one screen.
@@ -331,6 +386,7 @@ impl Level {
         npcs: &[],
         studio: false,
         markers: None,
+        worth: &Worth::DEFAULT,
     };
 
     pub fn width(&self) -> i32 {

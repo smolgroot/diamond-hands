@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "Shield HUD",
+  "image": "generated/sprites/shield-hud.png",
+  "frame": {
+    "width": 8,
+    "height": 8
+  },
+  "anchor": {
+    "x": 4,
+    "y": 8
+  },
+  "animations": []
+}

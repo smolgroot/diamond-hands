@@ -23,6 +23,14 @@
 //! spray, and its halo sends sparks running along the floor. It is the only boss that
 //! doesn't end its level: beaten, its arena opens again.
 //!
+//! BORED KONG, a giant ape with a bored stare, sits on the roof of Ethereum City's tallest
+//! tower. It lumbers after the wassie and works through three attacks: the Leap (it
+//! pounds its chest, then jumps at the wassie, and the landing sends shockwaves along
+//! the roof both ways), the Throw (chunks of the spire lobbed at the wassie) and the
+//! Rampage (it crouches, then charges low on its knuckles into the wall, where it sits
+//! dazed, taking double damage). At half health it speeds up, throws three at a time,
+//! and its landings shake rubble down from the spire.
+//!
 //! Every step is on timers, so the fights are deterministic.
 
 use crate::{
@@ -81,6 +89,27 @@ const SPRAY_GAP_FRAMES: u16 = 18;
 const CRAB_PATTERN: [[BossState; 6]; 2] = [
     [BossState::Telegraph, BossState::Spray, BossState::Halo, BossState::Telegraph, BossState::Spray, BossState::Spray],
     [BossState::Telegraph, BossState::Halo, BossState::Spray, BossState::Telegraph, BossState::Spray, BossState::Halo],
+];
+/// BORED KONG: big and tall, low enough on its knuckles in a Rampage to be jumped.
+pub const APE_W: i32 = 36;
+pub const APE_H: i32 = 50;
+pub const APE_CHARGE_H: i32 = 26;
+const _: () = assert!(APE_CHARGE_H < crate::player::JUMP_APEX, "the rampage must be jumpable");
+pub const APE_HP: i32 = 44;
+pub const APE_DYING_FRAMES: u16 = 150;
+const APE_WALK_FX: i32 = 2 * FX / 3;
+const APE_CHARGE_FX: i32 = 3 * FX;
+/// The Leap: how fast it springs up, and the frames its chest-pounding tell lasts.
+const APE_LEAP_FX: i32 = 11 * FX / 2;
+pub const APE_POUND_FRAMES: u16 = 40;
+/// The Throw: frames it holds the masonry back before letting go (the tell), and
+/// between throws in a volley.
+pub const APE_THROW_TELL: u16 = 26;
+const APE_THROW_GAP: u16 = 16;
+/// BORED KONG's attacks, in order, before and after it reaches half health.
+const APE_PATTERN: [[BossState; 6]; 2] = [
+    [BossState::Throw, BossState::Windup, BossState::Telegraph, BossState::Throw, BossState::Windup, BossState::Throw],
+    [BossState::Windup, BossState::Throw, BossState::Telegraph, BossState::Windup, BossState::Throw, BossState::Telegraph],
 ];
 const WALK_FX: i32 = 3 * FX / 4;
 const CHARGE_FX: i32 = 3 * FX;
@@ -185,6 +214,7 @@ impl Boss {
             BossKind::Bera => (BOSS_W, BOSS_H),
             BossKind::Sam => (SAM_W, SAM_H),
             BossKind::Crab => (CRAB_W, CRAB_H),
+            BossKind::Ape => (APE_W, APE_H),
         }
     }
 
@@ -193,6 +223,7 @@ impl Boss {
             BossKind::Bera => BOSS_HP,
             BossKind::Sam => SAM_HP,
             BossKind::Crab => CRAB_HP,
+            BossKind::Ape => APE_HP,
         }
     }
 
@@ -250,6 +281,7 @@ impl Boss {
             BossKind::Bera => self.hp * 3 > BOSS_HP,
             BossKind::Sam => self.hp * 2 > SAM_HP,
             BossKind::Crab => self.hp * 2 > CRAB_HP,
+            BossKind::Ape => self.hp * 2 > APE_HP,
         };
         if lasts { 1 } else { 2 }
     }
@@ -261,6 +293,8 @@ impl Boss {
         }
         Some(match self.state {
             BossState::Swing => (SWING_DAMAGE, true),
+            // BORED KONG's Rampage, or its weight coming down on the wassie.
+            BossState::Charge | BossState::Leap if self.kind == BossKind::Ape => (SWING_DAMAGE, true),
             _ => (CONTACT_DAMAGE, false),
         })
     }
@@ -315,6 +349,7 @@ impl Boss {
                 BossKind::Bera => 120,
                 BossKind::Sam => SAM_DYING_FRAMES,
                 BossKind::Crab => CRAB_DYING_FRAMES,
+                BossKind::Ape => APE_DYING_FRAMES,
             };
             events.insert(Events::BOSS_DOWN);
             return true;
@@ -363,6 +398,7 @@ impl Boss {
             BossKind::Bera => self.bera(ctx, &mut events),
             BossKind::Sam => self.sam(ctx, &mut events),
             BossKind::Crab => self.crab(ctx, &mut events),
+            BossKind::Ape => self.ape(ctx, &mut events),
         }
 
         self.body.vy_fx = (self.body.vy_fx + GRAVITY_FX).min(5 * FX);
@@ -674,6 +710,130 @@ impl Boss {
                     }
                     events.insert(Events::SLAM);
                 }
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(40, 24));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// One frame of BORED KONG. Timers run shorter past half health.
+    fn ape(&mut self, ctx: &mut BossCtx, events: &mut Events) {
+        let player = ctx.player;
+        let fast = self.phase() == 2;
+        let pick = |slow: u16, quick: u16| if fast { quick } else { slow };
+        match self.state {
+            BossState::Intro => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, 50);
+                }
+            }
+            BossState::Walk => {
+                // Lumbers after the wassie, stopping at arm's length.
+                self.face(&player);
+                let dist = (player.centre_x() - self.rect().centre_x()).abs();
+                let speed = if fast { APE_WALK_FX * 3 / 2 } else { APE_WALK_FX };
+                self.body.vx_fx = if dist > 56 { self.facing * speed } else { 0 };
+                if self.timer == 0 && self.grounded {
+                    self.body.vx_fx = 0;
+                    let next = APE_PATTERN[fast as usize][self.step as usize % APE_PATTERN[0].len()];
+                    self.step = self.step.wrapping_add(1);
+                    match next {
+                        BossState::Throw => {
+                            self.shots_left = if fast { 3 } else { 1 };
+                            self.go(BossState::Throw, APE_THROW_TELL);
+                        }
+                        BossState::Windup => self.go(BossState::Windup, pick(APE_POUND_FRAMES, APE_POUND_FRAMES * 3 / 4)),
+                        _ => self.go(BossState::Telegraph, pick(34, 24)),
+                    }
+                }
+            }
+            BossState::Windup => {
+                // Pounding its chest: the Leap is coming.
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    let airtime = 2 * APE_LEAP_FX / GRAVITY_FX;
+                    let dx = player.centre_x() - self.rect().centre_x();
+                    self.body.vx_fx = (dx * FX / airtime).clamp(-3 * FX, 3 * FX);
+                    self.body.vy_fx = -APE_LEAP_FX;
+                    self.left_ground = false;
+                    self.go(BossState::Leap, 0);
+                }
+            }
+            BossState::Leap => {
+                if self.left_ground && self.grounded {
+                    // The roof shakes: shockwaves both ways, and past half health
+                    // chunks of the spire come down around the wassie.
+                    let r = self.rect();
+                    for dir in [-1, 1] {
+                        shot::spawn(ctx.shots, ShotKind::Shockwave, r.centre_x() + dir * (APE_W / 2 + 6), r.bottom() - 6, dir * 2 * FX, 0);
+                    }
+                    if fast {
+                        let px = ctx.player.centre_x();
+                        let top = (r.bottom() - 150).max(4);
+                        for offset in [-56, 0, 56] {
+                            let jitter = ctx.rng.below(17) as i32 - 8;
+                            let x = (px + offset + jitter).clamp(self.arena.0 + 8, self.arena.1 - 8);
+                            shot::spawn(ctx.shots, ShotKind::Rubble, x, top, 0, 0);
+                        }
+                    }
+                    events.insert(Events::SLAM);
+                    self.body.vx_fx = 0;
+                    self.go(BossState::Recover, pick(40, 26));
+                }
+            }
+            BossState::Recover => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(50, 30));
+                }
+            }
+            BossState::Throw => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    let r = self.rect();
+                    let (x, y) = (r.centre_x() + self.facing * 14, r.y + 6);
+                    let (tx, ty) = (ctx.player.centre_x(), ctx.player.centre_y());
+                    let n = THROW_FRAMES;
+                    let vx = ((tx - x) * FX / n).clamp(-3 * FX, 3 * FX);
+                    let vy = (ty - y) * FX / n - shot::GRAVITY_FX_SHOT * n / 2;
+                    shot::spawn(ctx.shots, ShotKind::Rubble, x, y, vx, vy);
+                    self.shots_left = self.shots_left.saturating_sub(1);
+                    if self.shots_left > 0 {
+                        self.timer = APE_THROW_GAP;
+                    } else {
+                        self.go(BossState::Walk, ctx.difficulty.fire_interval(pick(50, 32)));
+                    }
+                }
+            }
+            BossState::Telegraph => {
+                // Down on its knuckles, snorting: the Rampage is coming.
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.set_height(APE_CHARGE_H);
+                    self.body.vx_fx = self.facing * if fast { APE_CHARGE_FX * 6 / 5 } else { APE_CHARGE_FX };
+                    self.go(BossState::Charge, 150);
+                }
+            }
+            BossState::Charge => {
+                let r = self.rect();
+                let wall = (self.facing < 0 && r.x <= self.arena.0 + 4) || (self.facing > 0 && r.right() >= self.arena.1 - 4);
+                if wall || self.timer == 0 {
+                    // Into the wall: it sits there dazed.
+                    self.body.vx_fx = 0;
+                    self.set_height(APE_H);
+                    events.insert(Events::SLAM);
+                    self.go(BossState::Stunned, pick(80, 56));
+                }
+            }
+            BossState::Stunned => {
+                self.body.vx_fx = 0;
                 if self.timer == 0 {
                     self.go(BossState::Walk, pick(40, 24));
                 }

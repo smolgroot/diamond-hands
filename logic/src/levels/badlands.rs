@@ -11,7 +11,7 @@
 
 use crate::{
     arrival::Arrival,
-    level::{Level, Markers, Theme},
+    level::{Level, Markers, Theme, Worth},
     talk::{Line, Speaker},
 };
 
@@ -220,4 +220,5 @@ pub static BADLANDS: Level = Level {
     npcs: &[],
     studio: false,
     markers: Some(&MARKERS),
+    worth: &Worth::DEFAULT,
 };

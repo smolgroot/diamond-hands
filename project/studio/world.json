@@ -50,11 +50,36 @@
       "room": "crab-lair",
       "x": 1,
       "y": 13
+    },
+    {
+      "room": "eth-office",
+      "x": 0,
+      "y": 15
+    },
+    {
+      "room": "eth-avenue",
+      "x": 2,
+      "y": 15
+    },
+    {
+      "room": "eth-subway",
+      "x": 5,
+      "y": 17
+    },
+    {
+      "room": "eth-tower",
+      "x": 9,
+      "y": 15
+    },
+    {
+      "room": "ape-roof",
+      "x": 10,
+      "y": 15
     }
   ],
   "start": "badlands",
   "size": {
     "width": 12,
-    "height": 14
+    "height": 18
   }
 }

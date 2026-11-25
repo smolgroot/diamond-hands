@@ -30,6 +30,8 @@ pub enum Speaker {
     CrabBot,
     /// Smolsnip, half crab and half wassie, the Big Crab Bot's prisoner.
     Smolsnip,
+    /// BORED KONG, the giant ape on the roof of Ethereum City's tallest tower.
+    Ape,
 }
 
 impl Speaker {
@@ -44,6 +46,7 @@ impl Speaker {
             Speaker::Cosmo => "COSMO WASSIE",
             Speaker::CrabBot => "BIG CRAB BOT",
             Speaker::Smolsnip => "SMOLSNIP",
+            Speaker::Ape => "BORED KONG",
         }
     }
 }

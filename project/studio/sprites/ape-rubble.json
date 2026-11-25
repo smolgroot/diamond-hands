@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "Ape rubble",
+  "image": "generated/sprites/ape-rubble.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 8,
+    "y": 8
+  },
+  "animations": [
+    {
+      "name": "spin",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 6
+        },
+        {
+          "index": 1,
+          "duration": 6
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

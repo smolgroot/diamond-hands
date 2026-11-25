@@ -80,6 +80,14 @@ pub enum ActorKind {
     /// A block of sand, a crate or a clod of soil that the wassie can shoot apart: solid
     /// terrain until it breaks (see [`crate::block`]).
     Block(BlockLook),
+    /// A Bad Cop bot on Ethereum City's beat: walks behind a riot shield that stops bolts
+    /// from the front, and lobs canisters at the wassie. Throwing, it lowers the shield.
+    Cop,
+    /// A green emerald: puts a charge back in the plasma shield.
+    Emerald,
+    /// CL207, in the Wormhole building's Ethereum City office: someone to talk to, who
+    /// hands over the plasma shield once.
+    Mentor,
 }
 
 impl ActorKind {
@@ -106,6 +114,9 @@ impl ActorKind {
             b'a' => ActorKind::Crab,
             b'f' => ActorKind::Prisoner,
             b'n' | b'u' | b'y' => ActorKind::Block(BlockLook::from_marker(c)?),
+            b'z' => ActorKind::Cop,
+            b'i' => ActorKind::Emerald,
+            b'I' => ActorKind::Mentor,
             _ => return None,
         })
     }
@@ -133,6 +144,9 @@ impl ActorKind {
             ActorKind::Crab => (22, 16),
             ActorKind::Prisoner => (20, 46),
             ActorKind::Block(_) => (16, 16),
+            ActorKind::Cop => (16, 26),
+            ActorKind::Emerald => (10, 10),
+            ActorKind::Mentor => (14, 28),
         }
     }
 
@@ -142,6 +156,7 @@ impl ActorKind {
             ActorKind::Sentry => Some(crate::fx::FxKind::Wreck),
             ActorKind::Guard => Some(crate::fx::FxKind::NinjaWreck),
             ActorKind::Crab => Some(crate::fx::FxKind::CrabWreck),
+            ActorKind::Cop => Some(crate::fx::FxKind::CopWreck),
             _ => None,
         }
     }
@@ -158,6 +173,7 @@ impl ActorKind {
                 | ActorKind::Dino
                 | ActorKind::Blockade
                 | ActorKind::Crab
+                | ActorKind::Cop
         )
     }
 
@@ -165,7 +181,7 @@ impl ActorKind {
     pub fn bounty(self) -> u32 {
         match self {
             ActorKind::Guard => 3,
-            ActorKind::Sentry | ActorKind::Dealer => 2,
+            ActorKind::Sentry | ActorKind::Dealer | ActorKind::Cop => 2,
             ActorKind::Crawler | ActorKind::Drone | ActorKind::Mine | ActorKind::Crab => 1,
             _ => 0,
         }
@@ -174,7 +190,7 @@ impl ActorKind {
     pub fn max_hp(self) -> i32 {
         match self {
             ActorKind::Guard => 6,
-            ActorKind::Dino => 4,
+            ActorKind::Dino | ActorKind::Cop => 4,
             ActorKind::Block(look) => look.hp(),
             ActorKind::Sentry | ActorKind::Dealer | ActorKind::Crab => 3,
             ActorKind::Crawler | ActorKind::Drone => 2,
@@ -189,7 +205,8 @@ impl ActorKind {
             | ActorKind::Guard
             | ActorKind::Dino
             | ActorKind::Blockade
-            | ActorKind::Crab => 2,
+            | ActorKind::Crab
+            | ActorKind::Cop => 2,
             _ => 1,
         }
     }
@@ -197,12 +214,17 @@ impl ActorKind {
     /// Checkpoints stay lit, terminals on and gates open through a respawn, and a
     /// saved run brings them back that way.
     pub fn keeps_state(self) -> bool {
-        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate | ActorKind::Prisoner)
+        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate | ActorKind::Prisoner | ActorKind::Mentor)
+    }
+
+    /// Someone to talk to: their lines are the level's [`Level::npcs`], in map order.
+    pub fn is_person(self) -> bool {
+        matches!(self, ActorKind::Npc | ActorKind::Prisoner | ActorKind::Mentor)
     }
 
     /// Picked up by touching it.
     pub fn is_pickup(self) -> bool {
-        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack)
+        matches!(self, ActorKind::Diamond | ActorKind::Heal | ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack | ActorKind::Emerald)
     }
 
     /// Floats instead of falling.
@@ -216,6 +238,7 @@ impl ActorKind {
                 | ActorKind::Coin
                 | ActorKind::Part
                 | ActorKind::Jetpack
+                | ActorKind::Emerald
         )
     }
 }
@@ -258,6 +281,15 @@ pub const CRAB_SNAP_FRAMES: u16 = 16;
 pub const CRAB_BACK_FRAMES: u16 = 24;
 /// How near (across) and how level (up and down) the wassie must be to set it off.
 const CRAB_REACH: (i32, i32) = (64, 18);
+/// A Bad Cop: how long it winds up a throw (the tell: the shield comes down), how long
+/// it stays open after letting go, and how far it sees across and up or down.
+pub const COP_TELL_FRAMES: u16 = 26;
+pub const COP_THROW_FRAMES: u16 = 18;
+const COP_SIGHT: (i32, i32) = (120, 48);
+/// Frames a canister is in the air before it comes down where the wassie stood.
+const CANISTER_FRAMES: i32 = 40;
+/// Where a cop's hand lets go of a canister: ahead of its centre, and up from its feet.
+pub const COP_HAND: (i32, i32) = (6, 26);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Actor {
@@ -426,12 +458,13 @@ impl Actor {
             ActorKind::Dino => self.dino(ctx),
             ActorKind::Blockade => self.blockade(ctx),
             ActorKind::Crab => self.crab(ctx),
+            ActorKind::Cop => self.cop(ctx),
             ActorKind::Gate => {
                 if ctx.power {
                     self.state = state::LIT;
                 }
             }
-            ActorKind::Npc | ActorKind::Prisoner | ActorKind::Portal => self.face_player(&ctx.player),
+            ActorKind::Npc | ActorKind::Prisoner | ActorKind::Portal | ActorKind::Mentor => self.face_player(&ctx.player),
             ActorKind::Diamond
             | ActorKind::Heal
             | ActorKind::Checkpoint
@@ -439,8 +472,15 @@ impl Actor {
             | ActorKind::Part
             | ActorKind::Jetpack
             | ActorKind::Terminal
+            | ActorKind::Emerald
             | ActorKind::Block(_) => {}
         }
+    }
+
+    /// Whether a Bad Cop's riot shield is up and facing a shot heading `vx_fx`: it is
+    /// raised except while the cop throws, and only covers its front.
+    pub fn shield_stops(&self, vx_fx: i32) -> bool {
+        self.kind == ActorKind::Cop && !matches!(self.state, state::AIM | state::RECOIL) && vx_fx * self.facing < 0
     }
 
     fn fall(&mut self, level: &impl Terrain) -> crate::physics::Contacts {
@@ -714,6 +754,54 @@ impl Actor {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Walks its beat behind the riot shield, turning at walls and ledges. When the
+    /// wassie is in sight, it stops, faces it and winds up (the tell: the shield comes
+    /// down), lobs a canister to come down where the wassie stands, and stays open a
+    /// moment before the shield goes back up.
+    fn cop(&mut self, ctx: &mut Ctx) {
+        match self.state {
+            state::AIM => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    let r = self.rect();
+                    let (x, y) = (r.centre_x() + self.facing * COP_HAND.0, r.bottom() - COP_HAND.1);
+                    let (tx, ty) = (ctx.player.centre_x(), ctx.player.centre_y());
+                    let n = CANISTER_FRAMES;
+                    let vx = ((tx - x) * FX / n).clamp(-5 * FX / 2, 5 * FX / 2);
+                    let vy = (ty - y) * FX / n - shot::GRAVITY_FX_SHOT * n / 2;
+                    shot::spawn(ctx.shots, ShotKind::Canister, x, y, vx, vy);
+                    self.state = state::RECOIL;
+                    self.timer = COP_THROW_FRAMES;
+                }
+            }
+            state::RECOIL => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.state = state::IDLE;
+                    self.timer = ctx.difficulty.fire_interval(120);
+                }
+            }
+            _ => {
+                self.body.vx_fx = self.facing * FX / 2;
+                if self.timer == 0 && self.in_line(&ctx.player, COP_SIGHT.0, COP_SIGHT.1) {
+                    self.face_player(&ctx.player);
+                    self.state = state::AIM;
+                    self.timer = COP_TELL_FRAMES;
+                }
+            }
+        }
+        let contacts = self.fall(&ctx.map);
+        let r = self.rect();
+        let front = if self.facing > 0 { r.right() } else { r.x - 1 };
+        let ledge = contacts.ground && self.body.vx_fx != 0 && !ctx.map.ground_ahead(front, r.bottom());
+        if ledge {
+            self.body.x_fx -= self.body.vx_fx;
+        }
+        if (contacts.wall() || ledge) && self.state == state::IDLE {
+            self.facing = -self.facing;
         }
     }
 

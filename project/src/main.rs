@@ -21,7 +21,8 @@ mod save;
 mod screens;
 mod sound;
 mod splash;
-/// Sol City's screen, drawn from its studio room: shared with the `sol-city` ROM.
+/// The studio levels' screen (Sol City, Ethereum City), drawn from their rooms: shared
+/// with the `sol-city` ROM.
 #[path = "sol_city/draw.rs"]
 mod studio_screen;
 
@@ -84,11 +85,17 @@ fn main(mut gba: agb::Gba) -> ! {
         } else if splash.is_none() && drawer.is_none() {
             drawer = Some(match want {
                 DrawerKind::Classic => Drawer::Classic(boxed(|| render::Renderer::new(&mut gfx))),
-                DrawerKind::Studio => Drawer::Studio(boxed(|| studio_screen::Screen::new(studio_world))),
+                DrawerKind::Studio(theme) => Drawer::Studio(boxed(|| studio_screen::Screen::new(studio_world, theme))),
             });
         }
         if let Some(Drawer::Studio(screen)) = &mut drawer {
             screen.prepare(&game, &mut gfx);
+        }
+        // For GBA-Studio's Play panel (dev builds): where Sol City's wassie is, or that
+        // the game is somewhere the studio has no map of.
+        match &drawer {
+            Some(Drawer::Studio(screen)) => screen.publish(&game),
+            _ => studio_screen::publish_away(),
         }
         let mut frame = gfx.frame();
         if game.scene == Scene::Splash {
@@ -107,7 +114,7 @@ fn main(mut gba: agb::Gba) -> ! {
 }
 
 /// What draws the frame: the code-drawn renderer (menus, map, the first two levels), or
-/// the studio's screen for a level painted in GBA-Studio.
+/// the studio's screen for a level painted in GBA-Studio (Sol City, Ethereum City).
 enum Drawer {
     Classic(Box<render::Renderer>),
     Studio(Box<studio_screen::Screen>),
@@ -116,22 +123,24 @@ enum Drawer {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DrawerKind {
     Classic,
-    Studio,
+    /// The studio screen of one level: going to another studio level makes a new one.
+    Studio(Theme),
 }
 
 impl Drawer {
     fn kind(&self) -> DrawerKind {
         match self {
             Drawer::Classic(_) => DrawerKind::Classic,
-            Drawer::Studio(_) => DrawerKind::Studio,
+            Drawer::Studio(screen) => DrawerKind::Studio(screen.theme()),
         }
     }
 
-    /// The studio screen draws Sol City from its card to its clear screen; the pause
-    /// menu, the map and the menus stay with the renderer, which has them.
+    /// The studio screen draws a studio level from its card to its clear screen; the
+    /// pause menu, the map and the menus stay with the renderer, which has them.
     fn wanted(game: &Game) -> DrawerKind {
         let in_level = matches!(game.scene, Scene::Intro | Scene::Arrival | Scene::Play | Scene::Dialog | Scene::LevelClear);
-        if in_level && game.world.level.theme == Theme::SolCity { DrawerKind::Studio } else { DrawerKind::Classic }
+        let theme = game.world.level.theme;
+        if in_level && theme.studio() { DrawerKind::Studio(theme) } else { DrawerKind::Classic }
     }
 }
 

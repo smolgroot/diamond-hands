@@ -34,8 +34,13 @@ with a boss.
    beaten: climb the containers and the crane onto the terminal's roof, drop in through
    the skylight, fight through the hall, and a wassie in a cosmonaut suit sends you into
    the portal. The first level made in GBA-Studio (`project/`).
-4. **Ethereum City** (unlocked by clearing Sol City, not built yet): where CL207's
-   Plasma Shield arrives.
+4. **Ethereum City** (playable in the studio ROM, unlocked by clearing Sol City): through
+   the Wormhole into a New York at dusk. The wassie comes out in the Wormhole building's
+   Ethereum City office, where **CL207** hands over the **Plasma Shield**. Then the
+   avenue: brownstones with fire escapes up to the roofs, walked by **Bad Cop** bots
+   behind riot shields. Down the subway stairs, along the platform over live track pits,
+   up a skyscraper floor by floor on steel girders, and out onto its roof, where
+   **BORED KONG**, a giant ape with a bored stare, sits on top of the town.
 
 | Button      | Action                                                          |
 | ----------- | --------------------------------------------------------------- |
@@ -121,6 +126,22 @@ with a boss.
   its arena opens. Shoot apart the sand wall at the east end and Smolsnip hands over
   **50 diamonds**; the wall holds while the fight is on. A beacon waits at the foot of
   the shaft, and the save keeps the crab beaten and the reward paid.
+- **Plasma Shield (Ethereum City):** CL207 hands it over in the Wormhole office. A green
+  bubble around the wassie that soaks up hits: each costs one of its 3 charges (the
+  hexagons under the life bar) instead of health, with no knockback. The bubble flickers
+  on its last charge. **Green emeralds** charge it back up, one each; diamonds don't.
+  Falling in a pit or onto the live rail gets past it. A file keeps the shield, fully
+  charged at the start of each level.
+- **Bad Cop bots:** their riot shield stops bolts from the front (a clank and sparks).
+  Hit them from behind, stomp them, burn through with a charged beam, or catch them when
+  they lower the shield to lob a canister at you (the "!" tell).
+- **BORED KONG:** Ethereum City's boss, on the skyscraper's roof. It lumbers after you and
+  works through the **Leap** (it pounds its chest, then jumps at you: the landing sends
+  shockwaves both ways, so jump them), the **Throw** (chunks of the spire lobbed at you)
+  and the **Rampage** (it drops onto its knuckles, then charges low into the wall: jump
+  it; it sits there dazed and takes double damage). At half health it speeds up, throws
+  three at a time, and its landings shake rubble down from the spire. Beating it clears
+  the level.
 - **Electric fences:** pylons on the ground throw up a curtain of lightning that reaches the
   rock above (or the sky), so it can't be jumped. They cycle: dead, a blinking warning with
   sparks, then live for about 2.5 seconds. Touching a live curtain shocks you and throws you
@@ -180,15 +201,22 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
     The camera stays inside a room and cuts to the next at a doorway, where the screen goes
     black for a frame while the next room's tileset loads.
     Edit it in the studio; the tests and the route bot then play exactly what the ROM draws.
+  - Ethereum City is five rooms: `eth-office` (in the Wormhole building's tileset),
+    `eth-avenue`, `eth-subway`, `eth-tower` and `ape-roof`, in the `eth-brownstone`,
+    `eth-subway` and `eth-skyscraper` tilesets made with `tileset_generate`. New entity
+    types: `bad-cop` (map `z`), `emerald` (`i`, worth its `collectible` value in charges),
+    `cl207` (`I`, lines in its `talk` property, hands over the shield) and `ape-boss` (`B`).
+    The shield is gear bit 14 of the file's part mask (`GEAR_SHIELD`, beside the jetpack's).
   - The `studio` feature marks the build as the studio ROM: only it can play studio-made
-    levels. Without it (the code-drawn ROM), Sol City shows on the map as coming soon.
+    levels. Without it (the code-drawn ROM), Sol City and Ethereum City show on the map
+    as coming soon.
 - `project/`: the same game with its art and music moved into GBA-Studio. Sprites, fonts,
   palettes and music are files in `project/assets/` registered in `project/studio/`,
   edited in the studio (see `project/AGENTS.md`); `project/src/` is `game/src/` with its
   sprite and glyph painting replaced by loading those sheets (`src/art/studio.rs`, generated).
-  It plays all three levels with the menus, map and saves of the code-drawn ROM: Sol City
-  is drawn from its studio rooms (`src/sol_city/draw.rs`), the first two levels by the
-  code-drawn renderer. Sol City also builds as a ROM of its own
+  It plays all four levels with the menus, map and saves of the code-drawn ROM: Sol City
+  and Ethereum City are drawn from their studio rooms (`src/sol_city/draw.rs`), the first
+  two levels by the code-drawn renderer. Sol City also builds as a ROM of its own
   (`--features sol-city --bin sol-city`).
   - GBA-Studio's runtime (`pecten_studio_rt`, compiled into the ROM) and build helper
     (`pecten_studio_build`, run by `build.rs`) are git dependencies on
@@ -315,8 +343,25 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   and the map come from the code-drawn renderer; switching to or from them shows one
   blank frame. Its dialogue box is made of sprites (the room's four layers leave no
   background for it), and the scene behind it isn't dimmed as in the other levels.
-  Ethereum City shows on the map once unlocked but can't be played yet. The Trenches and Sol City
+  Ethereum City is the same: studio ROM only. The Trenches, Sol City and Ethereum City
   borrow the Badlands' music.
+- The studio ROM's dev build also carries GBA-Studio's debug map (`dev` turns on the
+  runtime's `debug-map` feature, which the dev profile's missing debug assertions would
+  otherwise leave out). In the studio's Play panel the overlays then draw the wassie's
+  hitbox, the collision cells, the room borders and the camera over Sol City. The levels
+  drawn in code have no studio map, so they show nothing. Sol City's enemies come from
+  the game's own logic, not from studio entities, so the entity list and their hitboxes
+  stay empty.
+- The studio's entity types carry behaviours from the runtime's library: `hazard` on the
+  bots that hurt on touch (sentry, crawler, drone, mine, dealer, guard, dino, blockade and
+  crab bots), `collectible` on the diamond, coin, heal and plasma cell, `ability-pickup` on
+  the jetpack (ability 0) and `checkpoint` on the beacon. They say what each type does; the
+  bots' own moves stay in `logic` (a crawler's tell and lunge, a guard's burst, a sentry
+  that walks to the ledge don't fit the library's patrol or shooter). The game reads one
+  thing from them: a diamond, a coin or a heal is worth the `value` of its type's
+  `collectible` behaviour, or of the placed entity's own `value`. `logic/build.rs` writes it
+  into the level (`Level::worth`), so the worth is tuned in the studio, not in code. A level
+  drawn in code pays one each, and a heal of `HEAL_AMOUNT`.
 - Still drawn in code in the studio ROM: terrain tiles and the day-to-night lighting, the
   sky and city backdrops, the dialogue box, the world map, the pause menu's icons and the
   splash (made from `cover.png` by `scripts/make-splash.py`). `export-art` already writes
@@ -324,6 +369,18 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   the studio's room view.
 - The art in `project/assets/` came from running the code-drawn art (and, for Sol City, a
   script), so it is as it was, not redrawn by hand. Open and edit any PNG in the studio.
+- Ethereum City's art is a first pass, drawn or cut by script into `project/generated/`
+  until it is redrawn by hand:
+  - `sprites/bad-cop.png` (32x32: idle 0-3, walk 4-9, attack 10-15, hit 16-19, defeat
+    20-24) and `sprites/bad-cop-shot.png` (16x16, 5 frames) are cut from the mockup
+    `.claude/mockup/bad-cop-bot-mockup.png` by `tools/eth-city/bad-cop-sheet.py`.
+  - Drawn by `tools/eth-city/draw-art.py`, to redraw: `sprites/ape-boss.png` (64x64,
+    20 frames: idle 0-1, walk 2-5, chest pound 6-7, crouch 8, airborne 9, slam 10, throw
+    11-12, charge 13-14, stunned 15, hit 16, death 17-19), `sprites/ape-boss-portrait.png`
+    (32x32), `sprites/ape-rubble.png` (16x16, 2), `sprites/emerald.png` (16x16, 4),
+    `sprites/plasma-shield.png` (64x64: hum 0-3, hit 4-5), `sprites/shield-hud.png` (8x8:
+    charged, spent) and `backgrounds/eth-city-sky.png` and `eth-city-skyline.png`
+    (256x160). A sheet redrawn at the same size and frame layout drops straight in.
 - GBA-Studio sprites can name a shared palette file (`palette` in the sprite document, added
   for this); an already-open studio from before that change drops the field. Restart it.
 - Sprite VRAM is full. Each level's own sprites load while it is on screen (`LevelArt` in
