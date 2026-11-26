@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "inscriber-laser",
+  "image": "generated/sprites/inscriber-laser.png",
+  "frame": {
+    "width": 32,
+    "height": 8
+  },
+  "anchor": {
+    "x": 16,
+    "y": 4
+  },
+  "animations": [
+    {
+      "name": "burn",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 3
+        },
+        {
+          "index": 1,
+          "duration": 3
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

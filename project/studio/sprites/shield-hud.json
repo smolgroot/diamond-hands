@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Shield HUD",
-  "image": "generated/sprites/shield-hud.png",
+  "image": "generated/sprites/shield-icons.png",
   "frame": {
     "width": 8,
     "height": 8
@@ -10,5 +10,36 @@
     "x": 4,
     "y": 8
   },
-  "animations": []
+  "animations": [
+    {
+      "name": "whole",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "half",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "spent",
+      "frames": [
+        {
+          "index": 2,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ]
 }

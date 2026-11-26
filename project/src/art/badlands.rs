@@ -73,7 +73,7 @@ pub static SKY_PALETTES: [Palette16; 3] = [
 pub fn sky_palettes(theme: Theme) -> &'static [Palette16] {
     match theme {
         // Sol City is drawn by the studio ROM only; this one never starts it.
-        Theme::Badlands | Theme::SolCity | Theme::EthCity => &SKY_PALETTES,
+        Theme::Badlands | Theme::SolCity | Theme::EthCity | Theme::SatoshiCanyon => &SKY_PALETTES,
         Theme::Trenches => &super::trenches::SKY_PALETTES,
     }
 }

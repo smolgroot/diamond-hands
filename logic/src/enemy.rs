@@ -60,7 +60,8 @@ pub enum ActorKind {
     /// Armoured security bot on the upper floors: closes in and fires bursts.
     Guard,
     /// A clay dinosaur loose in the MagicEden zoo: ambles about, roars, then charges.
-    /// Once the power is back the fences hold it: it goes home and calms down.
+    /// Once the power is back it is home again, still roaming, but penned in by the
+    /// live [`ActorKind::Fence`]s.
     Dino,
     /// Someone to talk to; what they say is the level's [`Level::npcs`] entry, by
     /// their order among the people on the map.
@@ -88,6 +89,20 @@ pub enum ActorKind {
     /// CL207, in the Wormhole building's Ethereum City office: someone to talk to, who
     /// hands over the plasma shield once.
     Mentor,
+    /// A stalactite in the Satoshi mines: it hangs from the rock until the wassie walks
+    /// under, shakes (the tell), then drops and shatters. A shot knocks it down for good.
+    Stalactite,
+    /// A runaway mine cart full of gold: parked until the wassie comes along its rails,
+    /// it rattles (the tell), then barrels at it until it smashes into a wall.
+    Cart,
+    /// Someone held by Bad Cop bots (the Bitcoin Puppet, in Satoshi Canyon's jail): it
+    /// speaks up once the cops guarding it are beaten. Freed, it opens the gates and
+    /// tips the wassie some gold coins.
+    Hostage,
+    /// An electric fence post in the MagicEden zoo: dead while the power is cut, then a
+    /// crackling curtain up the post that no dino gets past and that shocks the
+    /// wassie. The pens it closes are off the way through, under walkways.
+    Fence,
 }
 
 impl ActorKind {
@@ -113,10 +128,14 @@ impl ActorKind {
             b'm' => ActorKind::Blockade,
             b'a' => ActorKind::Crab,
             b'f' => ActorKind::Prisoner,
-            b'n' | b'u' | b'y' => ActorKind::Block(BlockLook::from_marker(c)?),
+            b'n' | b'u' | b'y' | b'1' | b'2' => ActorKind::Block(BlockLook::from_marker(c)?),
             b'z' => ActorKind::Cop,
             b'i' => ActorKind::Emerald,
             b'I' => ActorKind::Mentor,
+            b'3' => ActorKind::Stalactite,
+            b'4' => ActorKind::Cart,
+            b'5' => ActorKind::Hostage,
+            b'6' => ActorKind::Fence,
             _ => return None,
         })
     }
@@ -147,6 +166,10 @@ impl ActorKind {
             ActorKind::Cop => (16, 26),
             ActorKind::Emerald => (10, 10),
             ActorKind::Mentor => (14, 28),
+            ActorKind::Stalactite => (10, 20),
+            ActorKind::Cart => (24, 14),
+            ActorKind::Hostage => (18, 28),
+            ActorKind::Fence => (8, FENCE_H),
         }
     }
 
@@ -174,6 +197,8 @@ impl ActorKind {
                 | ActorKind::Blockade
                 | ActorKind::Crab
                 | ActorKind::Cop
+                | ActorKind::Stalactite
+                | ActorKind::Cart
         )
     }
 
@@ -192,7 +217,7 @@ impl ActorKind {
             ActorKind::Guard => 6,
             ActorKind::Dino | ActorKind::Cop => 4,
             ActorKind::Block(look) => look.hp(),
-            ActorKind::Sentry | ActorKind::Dealer | ActorKind::Crab => 3,
+            ActorKind::Sentry | ActorKind::Dealer | ActorKind::Crab | ActorKind::Cart => 3,
             ActorKind::Crawler | ActorKind::Drone => 2,
             _ => 1,
         }
@@ -206,7 +231,9 @@ impl ActorKind {
             | ActorKind::Dino
             | ActorKind::Blockade
             | ActorKind::Crab
-            | ActorKind::Cop => 2,
+            | ActorKind::Cop
+            | ActorKind::Stalactite
+            | ActorKind::Cart => 2,
             _ => 1,
         }
     }
@@ -214,12 +241,15 @@ impl ActorKind {
     /// Checkpoints stay lit, terminals on and gates open through a respawn, and a
     /// saved run brings them back that way.
     pub fn keeps_state(self) -> bool {
-        matches!(self, ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate | ActorKind::Prisoner | ActorKind::Mentor)
+        matches!(
+            self,
+            ActorKind::Checkpoint | ActorKind::Terminal | ActorKind::Gate | ActorKind::Prisoner | ActorKind::Mentor | ActorKind::Hostage
+        )
     }
 
     /// Someone to talk to: their lines are the level's [`Level::npcs`], in map order.
     pub fn is_person(self) -> bool {
-        matches!(self, ActorKind::Npc | ActorKind::Prisoner | ActorKind::Mentor)
+        matches!(self, ActorKind::Npc | ActorKind::Prisoner | ActorKind::Mentor | ActorKind::Hostage)
     }
 
     /// Picked up by touching it.
@@ -231,7 +261,8 @@ impl ActorKind {
     fn flies(self) -> bool {
         matches!(
             self,
-            ActorKind::Drone
+            ActorKind::Stalactite
+                | ActorKind::Drone
                 | ActorKind::Diamond
                 | ActorKind::Heal
                 | ActorKind::Checkpoint
@@ -264,9 +295,11 @@ pub mod state {
     pub const RECOIL: u8 = 4;
     /// Checkpoint flag that has been touched, a terminal switched on, or a gate open.
     pub const LIT: u8 = 1;
-    /// A dino the fences hold again: home and harmless.
-    pub const CALM: u8 = 5;
 }
+
+/// How tall a zoo fence's curtain stands over its post's feet: as tall as a dino, and
+/// low enough to pass under a walkway four tiles up.
+pub const FENCE_H: i32 = 24;
 
 /// How long a dino roars before it charges, and how long the charge lasts.
 pub const DINO_ROAR_FRAMES: u16 = 30;
@@ -290,6 +323,15 @@ const COP_SIGHT: (i32, i32) = (120, 48);
 const CANISTER_FRAMES: i32 = 40;
 /// Where a cop's hand lets go of a canister: ahead of its centre, and up from its feet.
 pub const COP_HAND: (i32, i32) = (6, 26);
+/// A stalactite: how far either side of it, and how far below, the wassie sets it off;
+/// how long it shakes before it drops (the tell).
+const STALACTITE_REACH: (i32, i32) = (20, 112);
+pub const STALACTITE_TELL_FRAMES: u16 = 26;
+/// A mine cart: how far along its rails (and how far off them, up or down) it sees the
+/// wassie coming, how long it rattles before it goes (the tell), and how fast it rolls.
+const CART_SIGHT: (i32, i32) = (128, 24);
+pub const CART_TELL_FRAMES: u16 = 30;
+const CART_FX: i32 = 11 * FX / 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Actor {
@@ -344,6 +386,14 @@ impl Actor {
             Body {
                 x_fx: tx * TILE * FX,
                 y_fx: ((ty + 1) * TILE - h) * FX,
+                w,
+                h,
+                ..Body::default()
+            }
+        } else if kind == ActorKind::Stalactite {
+            Body {
+                x_fx: (tx * TILE + TILE / 2 - w / 2) * FX,
+                y_fx: ty * TILE * FX,
                 w,
                 h,
                 ..Body::default()
@@ -422,12 +472,7 @@ impl Actor {
 
     /// Whether the wassie can hurt or be hurt by this actor right now.
     pub fn is_threat(&self) -> bool {
-        self.alive && self.awake && self.kind.is_enemy() && !self.calm()
-    }
-
-    /// A dino the fences hold again.
-    pub fn calm(&self) -> bool {
-        self.kind == ActorKind::Dino && self.state == state::CALM
+        self.alive && self.awake && self.kind.is_enemy()
     }
 }
 
@@ -442,6 +487,10 @@ pub struct Ctx<'a> {
     pub camera_x: i32,
     /// A terminal has brought the power back: fences hold, gates open.
     pub power: bool,
+    /// The zoo's fences, while they are live: walls to a dino.
+    pub fences: &'a [Rect],
+    /// A hostage has been freed: gates open.
+    pub freed: bool,
 }
 
 impl Actor {
@@ -459,12 +508,14 @@ impl Actor {
             ActorKind::Blockade => self.blockade(ctx),
             ActorKind::Crab => self.crab(ctx),
             ActorKind::Cop => self.cop(ctx),
+            ActorKind::Stalactite => self.stalactite(ctx),
+            ActorKind::Cart => self.cart(ctx),
             ActorKind::Gate => {
-                if ctx.power {
+                if ctx.power || ctx.freed {
                     self.state = state::LIT;
                 }
             }
-            ActorKind::Npc | ActorKind::Prisoner | ActorKind::Portal | ActorKind::Mentor => self.face_player(&ctx.player),
+            ActorKind::Npc | ActorKind::Prisoner | ActorKind::Portal | ActorKind::Mentor | ActorKind::Hostage => self.face_player(&ctx.player),
             ActorKind::Diamond
             | ActorKind::Heal
             | ActorKind::Checkpoint
@@ -473,6 +524,7 @@ impl Actor {
             | ActorKind::Jetpack
             | ActorKind::Terminal
             | ActorKind::Emerald
+            | ActorKind::Fence
             | ActorKind::Block(_) => {}
         }
     }
@@ -647,20 +699,9 @@ impl Actor {
     }
 
     /// Ambles back and forth; when the wassie is level and near, stops to roar (the
-    /// tell), then charges until a wall, a ledge or the time is up. With the power back
-    /// it is calm: home, and harmless.
+    /// tell), then charges until a wall, a ledge, a live fence or the time is up. With
+    /// the power back, the fences pen it in where it lives (see [`Actor::go_home`]).
     fn dino(&mut self, ctx: &mut Ctx) {
-        if ctx.power {
-            if self.state != state::CALM {
-                let (x, y) = self.home;
-                self.body.x_fx = x * FX;
-                self.body.y_fx = y * FX;
-                self.state = state::CALM;
-            }
-            self.body.vx_fx = 0;
-            self.fall(&ctx.map);
-            return;
-        }
         match self.state {
             state::AIM => {
                 self.body.vx_fx = 0;
@@ -689,8 +730,10 @@ impl Actor {
         let r = self.rect();
         let front = if self.facing > 0 { r.right() } else { r.x - 1 };
         let ledge = contacts.ground && !ctx.map.ground_ahead(front, r.bottom());
-        if contacts.wall() || ledge {
-            if ledge {
+        // A live fence it walked into: the step it took into the curtain is undone.
+        let fenced = ctx.fences.iter().any(|f| f.overlaps(&r) && (f.centre_x() - r.centre_x()) * self.facing > 0);
+        if contacts.wall() || ledge || fenced {
+            if ledge || fenced {
                 self.body.x_fx -= self.body.vx_fx;
             }
             self.facing = -self.facing;
@@ -699,6 +742,18 @@ impl Actor {
                 self.timer = 70;
             }
         }
+    }
+
+    /// Back where it was placed, ambling: what a loose dino comes to when the power is
+    /// back and the fences of its pen come on.
+    pub fn go_home(&mut self) {
+        let (x, y) = self.home;
+        self.body.x_fx = x * FX;
+        self.body.y_fx = y * FX;
+        self.body.vx_fx = 0;
+        self.body.vy_fx = 0;
+        self.state = state::IDLE;
+        self.timer = 60;
     }
 
     /// Scuttles sideways along its stretch of sand, turning at walls and ledges. When
@@ -802,6 +857,64 @@ impl Actor {
         }
         if (contacts.wall() || ledge) && self.state == state::IDLE {
             self.facing = -self.facing;
+        }
+    }
+
+    /// Hangs still until the wassie passes under it, then shakes (the tell) and drops.
+    /// Landing, it shatters: it is gone, but comes back with a respawn (`killed` stays
+    /// false), so the trap is set again. The world spawns the dust.
+    fn stalactite(&mut self, ctx: &mut Ctx) {
+        match self.state {
+            state::AIM => {
+                if self.timer == 0 {
+                    self.state = state::LUNGE;
+                }
+            }
+            state::LUNGE => {
+                let contacts = self.fall(&ctx.map);
+                if contacts.ground || self.body.y() > ctx.level.px_height() {
+                    self.alive = false;
+                    self.state = state::RETURN;
+                }
+            }
+            _ => {
+                let (r, p) = (self.rect(), &ctx.player);
+                let under = (p.centre_x() - r.centre_x()).abs() <= STALACTITE_REACH.0 && p.y >= r.bottom() && p.y - r.bottom() <= STALACTITE_REACH.1;
+                if under {
+                    self.state = state::AIM;
+                    self.timer = STALACTITE_TELL_FRAMES;
+                }
+            }
+        }
+    }
+
+    /// Parked on its rails until the wassie comes along them; then it rattles (the
+    /// tell) and rolls at it, faster and faster, until it smashes into a wall. Smashed,
+    /// it is gone until a respawn. The world spawns the wreck.
+    fn cart(&mut self, ctx: &mut Ctx) {
+        match self.state {
+            state::AIM => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.state = state::LUNGE;
+                }
+            }
+            state::LUNGE => {
+                self.body.vx_fx = (self.body.vx_fx + self.facing * FX / 8).clamp(-CART_FX, CART_FX);
+            }
+            _ => {
+                self.body.vx_fx = 0;
+                if self.in_line(&ctx.player, CART_SIGHT.0, CART_SIGHT.1) {
+                    self.face_player(&ctx.player);
+                    self.state = state::AIM;
+                    self.timer = CART_TELL_FRAMES;
+                }
+            }
+        }
+        let contacts = self.fall(&ctx.map);
+        if self.state == state::LUNGE && contacts.wall() {
+            self.alive = false;
+            self.state = state::RETURN;
         }
     }
 

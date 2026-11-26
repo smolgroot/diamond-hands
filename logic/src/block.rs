@@ -1,8 +1,8 @@
 //! Blocks the wassie can shoot apart: sand on the beach, crates on the dock, soil in
-//! the zoo.
+//! the zoo, adobe bricks in Satoshi Canyon's town and gold ore in its mines.
 //!
-//! A block is a 16x16 solid that moves: the map only holds its marker (`n`, `u` or
-//! `y`, air like any marker) at its bottom-left tile, and [`Map`] lays the blocks
+//! A block is a 16x16 solid that moves: the map only holds its marker (`n`, `u`, `y`,
+//! `1` or `2`, air like any marker) at its bottom-left tile, and [`Map`] lays the blocks
 //! still standing over the map wherever they are now. Each one is also an actor
 //! ([`crate::enemy::ActorKind::Block`]), drawn as a sprite since the background can't
 //! change under it, and kept broken through a respawn or a saved game by the run's
@@ -37,6 +37,10 @@ pub enum BlockLook {
     Crate,
     /// A clod of soil in the zoo's paddocks.
     Soil,
+    /// An adobe brick in Satoshi Canyon's town: the jail's wall.
+    Brick,
+    /// A block of gold ore in the Satoshi mines.
+    Ore,
 }
 
 impl BlockLook {
@@ -46,6 +50,8 @@ impl BlockLook {
             b'n' => BlockLook::Sand,
             b'u' => BlockLook::Crate,
             b'y' => BlockLook::Soil,
+            b'1' => BlockLook::Brick,
+            b'2' => BlockLook::Ore,
             _ => return None,
         })
     }
@@ -53,8 +59,8 @@ impl BlockLook {
     /// Shots it takes to break: one laser bolt does 1, a charged beam more.
     pub fn hp(self) -> i32 {
         match self {
-            BlockLook::Sand => 2,
-            BlockLook::Soil => 3,
+            BlockLook::Sand | BlockLook::Brick => 2,
+            BlockLook::Soil | BlockLook::Ore => 3,
             BlockLook::Crate => 4,
         }
     }

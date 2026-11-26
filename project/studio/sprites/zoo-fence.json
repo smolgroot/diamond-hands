@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "zoo-fence",
+  "image": "generated/sprites/zoo-fence.png",
+  "frame": {
+    "width": 8,
+    "height": 32
+  },
+  "anchor": {
+    "x": 4,
+    "y": 32
+  },
+  "animations": [
+    {
+      "name": "dead",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "live",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 8
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

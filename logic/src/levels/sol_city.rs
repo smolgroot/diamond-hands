@@ -29,10 +29,16 @@
 //!   the fences dead, the clay dinos loose;
 //! - the Jurassic Zoo (120-209, rows 0-39): a lower paddock of loose dinos, a jungle
 //!   canopy above it up the girders at the east end, and a service shaft (152-161) down
-//!   to the tunnels. The gate to the harbor (206) holds until the power is back;
+//!   to the tunnels. The gate to the harbor (206) holds until the power is back. Its
+//!   pens are fenced: the hilltop (fence posts at 142 and 151) and the east paddock
+//!   (173 to 201, the soil hut at its west end), each under a walkway (row 28 over the
+//!   hill, up from the girder at 132-137; row 32 over the paddock, over the hut's roof
+//!   and on to the gate);
 //! - the service tunnels (rows 40-59): the generator's breaker at the west end (130).
-//!   Thrown, the fences hold the dinos again and the zoo's gate opens. Girders beside
-//!   the shaft (158-161) climb back up;
+//!   Thrown, the fences come on: every loose dino is back in its pen, still roaming
+//!   but held there by the live fences, and the way through runs safe along the
+//!   walkways over them. The zoo's gate opens. Girders beside the shaft (158-161)
+//!   climb back up;
 //! - the harbor (210-269): piers over the water, containers stacked up to a crane, and
 //!   the Wormhole building's front door, jammed by blockade bots that can't be beaten;
 //! - the Wormhole building (270-329): off the crane's jib onto a ledge on its west
@@ -48,10 +54,11 @@ use crate::{
 include!(concat!(env!("OUT_DIR"), "/sol_city.rs"));
 
 /// The route bot's way through: down the service shaft, off the landing girder to the
-/// tunnel floor, west to the breaker, back up the girders, through the zoo's gate, over
-/// the harbor's containers and crane, up the building's wall onto its roof, in by the
-/// skylight, and down the building's floors to the portal.
-static ROUTE: [(i32, i32); 31] = [
+/// tunnel floor, west to the breaker, back up the girders, along the walkway over the
+/// dinos' paddock (its fences live by then) and over the soil hut's roof, down to the
+/// zoo's gate and through it, over the harbor's containers and crane, up the building's
+/// wall onto its roof, in by the skylight, and down the building's floors to the portal.
+static ROUTE: [(i32, i32); 35] = [
     (153, 45),
     (159, 55),
     (147, 51),
@@ -64,6 +71,10 @@ static ROUTE: [(i32, i32); 31] = [
     (159, 41),
     (159, 37),
     (164, 35),
+    (169, 31),
+    (176, 29),
+    (185, 31),
+    (204, 31),
     (210, 35),
     (255, 29),
     (259, 26),

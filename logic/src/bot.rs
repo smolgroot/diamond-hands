@@ -7,7 +7,8 @@
 //! An explorable level lists waypoints ([`crate::level::Level::route`]): [`Bot`] walks
 //! to each in turn, dropping down to those below and jumping (riding the jetpack once
 //! it has it) up to those above, then runs right as usual. Wherever Up would do
-//! something on the way (a dark terminal, an open elevator) it presses it.
+//! something on the way (a dark terminal, an open elevator) it presses it. Near a
+//! hostage, it fights the Bad Cops guarding it before going on.
 
 use crate::{
     TILE, World,
@@ -56,6 +57,11 @@ impl Bot {
         {
             self.step += 1;
         }
+        if !world.arena && !dead
+            && let Some(keys) = guard_keys(world, previous)
+        {
+            return keys;
+        }
         let p = &world.player;
         if !world.arena && !dead && p.grounded && p.hurt == 0 && world.up_prompt().is_some() {
             // Where Up does something on the way (a breaker), it presses it.
@@ -71,6 +77,35 @@ impl Bot {
     pub fn step(&self) -> usize {
         self.step
     }
+}
+
+/// Near a hostage whose guards still stand: closes on the nearest guard, stops a
+/// little short facing it and fires (its shield comes down when it throws), and jumps
+/// on it when it comes close.
+fn guard_keys(world: &World, previous: u16) -> Option<u16> {
+    let h = &world.actors[world.guarded_hostage()?];
+    let p = &world.player;
+    let r = p.body.rect();
+    let hr = h.rect();
+    if (hr.centre_x() - r.centre_x()).abs() > crate::world::GUARD_REACH.0 + 48 || (hr.bottom() - r.bottom()).abs() > 2 * TILE {
+        return None;
+    }
+    let guard = world.guards(h).min_by_key(|g| (g.rect().centre_x() - r.centre_x()).abs())?;
+    let g = guard.rect();
+    let dx = g.centre_x() - r.centre_x();
+    let mut out = if previous & keys::B == 0 { keys::B } else { 0 };
+    let toward = if dx < 0 { keys::LEFT } else { keys::RIGHT };
+    if !p.grounded {
+        return Some(out | toward | if p.body.vy_fx < 0 { previous & keys::A } else { 0 });
+    }
+    // Turn to face it, closing in while it is far.
+    if dx.abs() > 40 || (dx < 0) != (p.facing < 0) {
+        out |= toward;
+    }
+    if dx.abs() < 28 && previous & keys::A == 0 {
+        out |= keys::A;
+    }
+    Some(out)
 }
 
 /// Centre x and feet of waypoint `(tx, row)`, in pixels.
@@ -273,7 +308,7 @@ fn arena_keys(world: &World, previous: u16) -> u16 {
         let sr = s.rect();
         s.active
             && !s.kind.from_player()
-            && matches!(s.kind, ShotKind::Bullet | ShotKind::Shockwave | ShotKind::MegaCucumber)
+            && matches!(s.kind, ShotKind::Bullet | ShotKind::Shockwave | ShotKind::MegaCucumber | ShotKind::EyeLaser)
             && sr.y > r.y + 12
             && (sr.centre_x() - r.centre_x()).abs() < 48
     });

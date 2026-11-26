@@ -225,6 +225,12 @@ impl Sfx {
                 SOUND1CNT_L.write_volatile(sweep_down(6, 1));
                 SOUND1CNT_H.write_volatile(tone(32, 2, 1, 10));
                 SOUND1CNT_X.write_volatile(BOLT_RATE | USE_LENGTH | RESTART);
+            } else if events.contains(Events::ZAP) {
+                // THE INSCRIBER's Laser Eyes: a long searing note sweeping down, below
+                // the wassie's bolt.
+                SOUND1CNT_L.write_volatile(sweep_down(5, 3));
+                SOUND1CNT_H.write_volatile(tone(0, 2, 3, 13));
+                SOUND1CNT_X.write_volatile(SHOCK_RATE | RESTART);
             }
             if events.contains(Events::BLOCKED) && !events.contains(Events::BEAM) {
                 // A bolt off a riot shield: a short, bright clank, higher than a break.

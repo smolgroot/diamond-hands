@@ -29,8 +29,10 @@ with a boss.
    cafés and palms, then
    **MagicEden**, a dinosaur zoo hit by a
    power cut: its clay dinos are loose. The zookeeper explains; the breaker is down in the
-   service tunnels under the paddocks. Thrown, the fences hold the dinos again and the
-   harbor gate opens. At the harbor, bots jam the **Wormhole Bridge**'s door and can't be
+   service tunnels under the paddocks. Thrown, the zoo's electric fences come back on:
+   every dino is back in its pen, still roaming and charging but held there by the
+   crackling fences, and the way on runs along walkways over the pens. The harbor gate
+   opens. At the harbor, bots jam the **Wormhole Bridge**'s door and can't be
    beaten: climb the containers and the crane onto the terminal's roof, drop in through
    the skylight, fight through the hall, and a wassie in a cosmonaut suit sends you into
    the portal. The first level made in GBA-Studio (`project/`).
@@ -41,6 +43,15 @@ with a boss.
    behind riot shields. Down the subway stairs, along the platform over live track pits,
    up a skyscraper floor by floor on steel girders, and out onto its roof, where
    **BORED KONG**, a giant ape with a bored stare, sits on top of the town.
+5. **Satoshi Canyon** (playable in the studio ROM, unlocked by clearing Ethereum City): the
+   far west of Bitcoin, at sunset. Red-rock mesas and a butte to climb, a rope bridge
+   high over the canyon floor, drones, sentry bots and Bad Cops. Then a small western
+   town on three levels: the street, the bank's hill, and the jail on a rock shelf, where
+   two Bad Cops hold a **Bitcoin Puppet** behind adobe bricks. Beat them, shoot the
+   bricks apart, and the Puppet opens the gate to the **Satoshi mines** under the shelf:
+   down through walls of gold ore, under stalactites that drop and past runaway mine
+   carts, to the vault where **THE INSCRIBER**, a laser-eyed Bitcoin cyborg miner,
+   guards its hoard of diamonds and gold.
 
 | Button      | Action                                                          |
 | ----------- | --------------------------------------------------------------- |
@@ -127,14 +138,36 @@ with a boss.
   **50 diamonds**; the wall holds while the fight is on. A beacon waits at the foot of
   the shaft, and the save keeps the crab beaten and the reward paid.
 - **Plasma Shield (Ethereum City):** CL207 hands it over in the Wormhole office. A green
-  bubble around the wassie that soaks up hits: each costs one of its 3 charges (the
-  hexagons under the life bar) instead of health, with no knockback. The bubble flickers
-  on its last charge. **Green emeralds** charge it back up, one each; diamonds don't.
+  bubble around the wassie that soaks up hits: each costs one of its 6 charges instead
+  of health, with no knockback. Under the life bar, three shield icons show them, two
+  charges to a shield, so they empty and fill by halves; the last half blinks, and the
+  bubble flickers on its last charge. **Green emeralds** (the diamond, cut in green)
+  charge it back up, one each (half a shield); diamonds don't.
   Falling in a pit or onto the live rail gets past it. A file keeps the shield, fully
   charged at the start of each level.
 - **Bad Cop bots:** their riot shield stops bolts from the front (a clank and sparks).
   Hit them from behind, stomp them, burn through with a charged beam, or catch them when
   they lower the shield to lob a canister at you (the "!" tell).
+- **Bitcoin Puppet (Satoshi Canyon):** two Bad Cops guard the jail; while either
+  stands, the adobe bricks in front of the cell won't break (bolts clank off). Beat
+  them and shoot the bricks apart, and the Puppet speaks up: it tips you 10 gold coins
+  and opens the gate to the mine at the end of the lane under the shelf. Kept with the
+  run, so a continued file finds the gate open.
+- **Stalactites and mine carts (Satoshi Canyon):** a stalactite shakes when you walk
+  under it, then drops and shatters (a shot knocks it down for good). A parked cart
+  rattles when you come along its rails, then barrels at you until it smashes into a
+  wall: jump it, or shoot it first. Both come back after a respawn.
+- **Gold coins outside the casino:** Satoshi Canyon's coins (and its HUD counter) go in
+  the file's purse when the level is cleared, for the penguin to change on a visit to
+  the Trenches.
+- **THE INSCRIBER:** Satoshi Canyon's boss, in the vault at the bottom of the mines. It
+  strides after you and works through the **Laser Eyes** (its visor glows, then a beam
+  rakes along the floor: jump it), **Inscribe** (it raises a glowing tablet and inscribed
+  sats fall from the ceiling around you) and the **Pickaxe Slam** (shockwaves both ways;
+  then its pickaxe is stuck in the rock and it takes double damage). At half health
+  comes **the Halving**: it glitches, untouchable, and from then on its timers are
+  halved, its lasers come in pairs and more sats fall. Beaten, it spills its hoard (21
+  diamonds and 21 gold coins) and the level is clear.
 - **BORED KONG:** Ethereum City's boss, on the skyscraper's roof. It lumbers after you and
   works through the **Leap** (it pounds its chest, then jumps at you: the landing sends
   shockwaves both ways, so jump them), the **Throw** (chunks of the spire lobbed at you)
@@ -189,7 +222,11 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
     `tileset_generate` and `room_generate` tools (pictures under `project/generated/`),
     then given their doorways, girders and entities by hand. Blocks the wassie can shoot
     apart are entities too: `sand-block`, `dock-crate` and `soil-block` (16x16, feet on
-    the 8 px grid, over air). `build.rs` puts only their marker in the map;
+    the 8 px grid, over air). The zoo's pens are closed by `zoo-fence` posts (map `6`, feet
+    on the floor): dead until the breaker is thrown, then a curtain as tall as a dino that
+    turns every dino back and shocks the wassie. Walkways of the zoo's one-way platforms
+    run over the pens (row 28 over the hilltop, row 32 over the east paddock), so the way
+    through never crosses a live fence. `build.rs` puts only the blocks' marker in the map;
     `logic/src/block.rs` makes them solid wherever they are now, drops any with nothing
     under them (rock, or another block it overlaps by a tile), and shatters one that
     lands on the wassie or a villain. A band of light sweeps across each one every two
@@ -207,16 +244,25 @@ The wassie's poses and effects follow the player sprite sheet there (`sprite-she
     types: `bad-cop` (map `z`), `emerald` (`i`, worth its `collectible` value in charges),
     `cl207` (`I`, lines in its `talk` property, hands over the shield) and `ape-boss` (`B`).
     The shield is gear bit 14 of the file's part mask (`GEAR_SHIELD`, beside the jetpack's).
+  - Satoshi Canyon is four rooms: `btc-canyon`, `btc-town`, `satoshi-mine` and
+    `inscriber-vault`, in the `satoshi-canyon`, `satoshi-town` and `satoshi-mine` tilesets
+    made with `tileset_generate`. The rooms were laid out by
+    `tools/satoshi-canyon/build-rooms.py` (block-level maps autotiled with the
+    generator's layout; running it again replaces those rooms, so edit them in the studio
+    now). New entity types: `brick-block` and `ore-block` (map `1`, `2`: breakable blocks),
+    `stalactite` (`3`), `mine-cart` (`4`), `btc-puppet` (`5`, a hostage: lines in its `talk`
+    property; freed once the Bad Cops that start near it are beaten, it opens the `h`
+    gates) and `inscriber` (`B`).
   - The `studio` feature marks the build as the studio ROM: only it can play studio-made
-    levels. Without it (the code-drawn ROM), Sol City and Ethereum City show on the map
-    as coming soon.
+    levels. Without it (the code-drawn ROM), Sol City, Ethereum City and Satoshi Canyon
+    show on the map as coming soon.
 - `project/`: the same game with its art and music moved into GBA-Studio. Sprites, fonts,
   palettes and music are files in `project/assets/` registered in `project/studio/`,
   edited in the studio (see `project/AGENTS.md`); `project/src/` is `game/src/` with its
   sprite and glyph painting replaced by loading those sheets (`src/art/studio.rs`, generated).
-  It plays all four levels with the menus, map and saves of the code-drawn ROM: Sol City
-  and Ethereum City are drawn from their studio rooms (`src/sol_city/draw.rs`), the first
-  two levels by the code-drawn renderer. Sol City also builds as a ROM of its own
+  It plays all five levels with the menus, map and saves of the code-drawn ROM: Sol City,
+  Ethereum City and Satoshi Canyon are drawn from their studio rooms
+  (`src/sol_city/draw.rs`), the first two levels by the code-drawn renderer. Sol City also builds as a ROM of its own
   (`--features sol-city --bin sol-city`).
   - GBA-Studio's runtime (`pecten_studio_rt`, compiled into the ROM) and build helper
     (`pecten_studio_build`, run by `build.rs`) are git dependencies on
@@ -343,8 +389,8 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   and the map come from the code-drawn renderer; switching to or from them shows one
   blank frame. Its dialogue box is made of sprites (the room's four layers leave no
   background for it), and the scene behind it isn't dimmed as in the other levels.
-  Ethereum City is the same: studio ROM only. The Trenches, Sol City and Ethereum City
-  borrow the Badlands' music.
+  Ethereum City and Satoshi Canyon are the same: studio ROM only. The Trenches, Sol
+  City, Ethereum City and Satoshi Canyon borrow the Badlands' music.
 - The studio ROM's dev build also carries GBA-Studio's debug map (`dev` turns on the
   runtime's `debug-map` feature, which the dev profile's missing debug assertions would
   otherwise leave out). In the studio's Play panel the overlays then draw the wassie's
@@ -377,10 +423,27 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   - Drawn by `tools/eth-city/draw-art.py`, to redraw: `sprites/ape-boss.png` (64x64,
     20 frames: idle 0-1, walk 2-5, chest pound 6-7, crouch 8, airborne 9, slam 10, throw
     11-12, charge 13-14, stunned 15, hit 16, death 17-19), `sprites/ape-boss-portrait.png`
-    (32x32), `sprites/ape-rubble.png` (16x16, 2), `sprites/emerald.png` (16x16, 4),
-    `sprites/plasma-shield.png` (64x64: hum 0-3, hit 4-5), `sprites/shield-hud.png` (8x8:
-    charged, spent) and `backgrounds/eth-city-sky.png` and `eth-city-skyline.png`
+    (32x32), `sprites/ape-rubble.png` (16x16, 2), `sprites/plasma-shield.png` (64x64:
+    hum 0-3, hit 4-5) and `backgrounds/eth-city-sky.png` and `eth-city-skyline.png`
     (256x160). A sheet redrawn at the same size and frame layout drops straight in.
+    (Its `sprites/emerald.png` and `sprites/shield-hud.png` are no longer used.)
+- Drawn by `tools/emerald-shield-fence.py`, to redraw: `sprites/emerald-gem.png` (the
+  diamond pickup recoloured in the shield's greens, 16x16: still 0, glint 1),
+  `sprites/shield-icons.png` (the HUD's shield, 8x8: whole 0, half 1, spent 2) and
+  `sprites/zoo-fence.png` (a zoo fence post, 8x32 with the post in the bottom 24 rows:
+  dead 0, live 1; the author's `fence-8x8` lightning crackles around it while live).
+- Satoshi Canyon's art is a first pass too, drawn by `tools/satoshi-canyon/draw-art.py`
+  into `project/generated/` (the tilesets by `tileset_generate`), to redraw:
+  `sprites/inscriber.png` (64x64, 21 frames: idle 0-1, walk 2-5, gaze 6-7, laser 8-9,
+  inscribe 10-11, pickaxe raised 12, slam 13, stuck 14, Halving 15-16, hit 17, death
+  18-20), `sprites/inscriber-portrait.png` (32x32), `sprites/inscriber-laser.png` (32x8,
+  2), `sprites/sat-glyph.png` (16x16, 4), `sprites/btc-puppet.png` (32x32: idle 0-1,
+  cheer 2-3; after the author's Bitcoin Puppet reference), `sprites/btc-puppet-portrait.png`
+  (32x32), `sprites/stalactite.png` (16x32, the rock in the top 24 rows: hanging 0,
+  cracking 1), `sprites/mine-cart.png` (32x16: parked 0-1, rolling 2-3),
+  `sprites/brick-block.png` and `sprites/ore-block.png` (16x16; `python3
+  tools/block-sheen.py` derives their sheen sheets) and `backgrounds/satoshi-sky.png`,
+  `satoshi-mesas.png` and `satoshi-mine-back.png` (256x160).
 - GBA-Studio sprites can name a shared palette file (`palette` in the sprite document, added
   for this); an already-open studio from before that change drops the field. Restart it.
 - Sprite VRAM is full. Each level's own sprites load while it is on screen (`LevelArt` in

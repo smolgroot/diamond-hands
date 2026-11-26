@@ -529,7 +529,7 @@ struct Island {
 /// Height of the cliff face under each island, in pixels.
 const CLIFF: i32 = 4;
 
-static ISLANDS: [Island; 3] = [
+static ISLANDS: [Island; 4] = [
     // The Badlands: orange mesas speckled with red rock.
     Island {
         blobs: &[(42, 106, 34, 20), (62, 94, 20, 14), (22, 98, 16, 12)],
@@ -556,6 +556,15 @@ static ISLANDS: [Island; 3] = [
         rim: ix::CYAN,
         cliff: ix::STEEL,
         texture: |x, y| x & 7 < 2 && y & 7 < 2,
+    },
+    // Satoshi Canyon, past Ethereum City: gold desert banded with red-rock strata.
+    Island {
+        blobs: &[(212, 36, 22, 9), (194, 42, 9, 5), (229, 31, 8, 5)],
+        top: ix::GOLD,
+        pattern: ix::ORANGE,
+        rim: ix::WHITE,
+        cliff: ix::RED_DARK,
+        texture: |x, y| (y + (x >> 3)) % 6 == 0,
     },
 ];
 

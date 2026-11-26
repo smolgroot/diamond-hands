@@ -32,6 +32,10 @@ pub enum Speaker {
     Smolsnip,
     /// BORED KONG, the giant ape on the roof of Ethereum City's tallest tower.
     Ape,
+    /// The Bitcoin Puppet, held by Bad Cop bots in Satoshi Canyon's jail.
+    Puppet,
+    /// THE INSCRIBER, the boss of the Satoshi mines.
+    Inscriber,
 }
 
 impl Speaker {
@@ -47,6 +51,8 @@ impl Speaker {
             Speaker::CrabBot => "BIG CRAB BOT",
             Speaker::Smolsnip => "SMOLSNIP",
             Speaker::Ape => "BORED KONG",
+            Speaker::Puppet => "BITCOIN PUPPET",
+            Speaker::Inscriber => "THE INSCRIBER",
         }
     }
 }

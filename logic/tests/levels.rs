@@ -60,12 +60,12 @@ fn maps_are_well_formed() {
             }
             assert!(boss_x > arena_x, "{name}: boss inside the arena");
         }
-        let people = level.markers().filter(|&(c, _, _)| matches!(c, b'e' | b'c' | b'f' | b'I')).count();
+        let people = level.markers().filter(|&(c, _, _)| matches!(c, b'e' | b'c' | b'f' | b'I' | b'5')).count();
         assert_eq!(people, level.npcs.len(), "{name}: lines for everyone on the map");
 
         for (c, tx, ty) in level.markers() {
             assert_eq!(level.tile(tx, ty), Tile::Empty, "{name}: {} at ({tx},{ty}) is in rock", c as char);
-            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm' | b'a' | b'f' | b'z' | b'I');
+            let grounded = matches!(c, b'P' | b'C' | b'b' | b's' | b't' | b'B' | b'x' | b'e' | b'c' | b'w' | b'h' | b'm' | b'a' | b'f' | b'z' | b'I' | b'4' | b'5');
             if grounded {
                 assert!(level.is_floor(tx, ty + 1), "{name}: {} at ({tx},{ty}) floats", c as char);
             }

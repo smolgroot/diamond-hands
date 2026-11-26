@@ -36,6 +36,10 @@ pub enum ShotKind {
     Canister,
     /// A chunk of masonry BORED KONG throws, or shakes down from the spire: it falls.
     Rubble,
+    /// THE INSCRIBER's Laser Eyes, raking along the floor: low enough to jump.
+    EyeLaser,
+    /// An inscribed sat falling from the vault's ceiling.
+    Sat,
 }
 
 impl ShotKind {
@@ -59,13 +63,15 @@ impl ShotKind {
             ShotKind::Orb => (6, 6),
             ShotKind::Canister => (8, 8),
             ShotKind::Rubble => (12, 12),
+            ShotKind::EyeLaser => (24, 6),
+            ShotKind::Sat => (10, 10),
         }
     }
 
     pub fn damage(self) -> i32 {
         match self {
-            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Bomb | ShotKind::Card | ShotKind::Orb | ShotKind::Canister => 1,
-            ShotKind::Shockwave | ShotKind::Missile | ShotKind::Cucumber | ShotKind::Candle | ShotKind::Rubble => 2,
+            ShotKind::Bolt | ShotKind::Bullet | ShotKind::Bomb | ShotKind::Card | ShotKind::Orb | ShotKind::Canister | ShotKind::Sat => 1,
+            ShotKind::Shockwave | ShotKind::Missile | ShotKind::Cucumber | ShotKind::Candle | ShotKind::Rubble | ShotKind::EyeLaser => 2,
             ShotKind::Beam | ShotKind::MegaCucumber => 3,
         }
     }
@@ -88,7 +94,7 @@ impl ShotKind {
     fn gravity(self) -> Option<(i32, i32)> {
         match self {
             ShotKind::Missile | ShotKind::Bomb => Some((24, 3 * FX)),
-            ShotKind::Cucumber | ShotKind::Canister | ShotKind::Rubble => Some((GRAVITY_FX_SHOT, 4 * FX)),
+            ShotKind::Cucumber | ShotKind::Canister | ShotKind::Rubble | ShotKind::Sat => Some((GRAVITY_FX_SHOT, 4 * FX)),
             ShotKind::Candle => Some((10, 2 * FX)),
             _ => None,
         }

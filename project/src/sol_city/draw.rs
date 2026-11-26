@@ -9,7 +9,7 @@ use agb::{
 use diamond_hands_logic::{
     Game, PlayerState, Scene, SCREEN_H, SCREEN_W,
     block::BlockLook,
-    boss::{APE_DYING_FRAMES, BossState, CRAB_DYING_FRAMES, HALO_LIVE_FRAMES, SPRAY_TELL_FRAMES},
+    boss::{APE_DYING_FRAMES, BossState, CRAB_DYING_FRAMES, HALO_LIVE_FRAMES, INSCRIBER_DYING_FRAMES, SPRAY_TELL_FRAMES},
     enemy::{Actor, ActorKind, COP_TELL_FRAMES, CRAB_SNAP_FRAMES, DINO_ROAR_FRAMES, state},
     fx::FxKind,
     level::{BossKind, Theme},
@@ -119,6 +119,8 @@ pub struct Screen {
     heal: SpriteVram,
     /// The wassie's portrait: bill shut, then half and wide open.
     wassie_face: [SpriteVram; 3],
+    /// The gold coin beside the diamonds in the HUD, in a level that has coins.
+    coin: SpriteVram,
     /// The dialogue box as sprites (the room's backgrounds use all four layers), made on
     /// the level card or else when first needed, and the page last painted into it.
     dialog: Option<box_ui::DialogText>,
@@ -132,6 +134,8 @@ pub struct Screen {
 /// A frame of a sheet with its top-left at screen pixel (x, y), unless well off screen.
 /// Frames between the sheen sweeps over a breakable block, and how long one lasts (its
 /// sprite's `sheen` animation: 8 steps of 3 frames).
+/// Shield icons in the HUD: each holds two of the plasma shield's charges.
+const SHIELD_ICONS: u8 = SHIELD_MAX.div_ceil(2);
 const SHEEN_EVERY: u32 = 120;
 const SHEEN_FRAMES: u32 = 24;
 
@@ -168,9 +172,10 @@ impl Screen {
     /// studio level to draw.
     pub fn new(world: &'static World<'static>, theme: Theme) -> Self {
         // The level's map starts at the top-left of its top-left room: Sol City's beach,
-        // Ethereum City's Wormhole office.
+        // Ethereum City's Wormhole office, Satoshi Canyon's canyon.
         let first = match theme {
             Theme::EthCity => room::ETH_OFFICE,
+            Theme::SatoshiCanyon => room::BTC_CANYON,
             _ => room::BEACH,
         };
         let origin = world.origin(first).unwrap_or((0, 0));
@@ -199,6 +204,7 @@ impl Screen {
             diamond: pickups::diamond(),
             heal: pickups::heal(),
             wassie_face: [wassie_talk::portrait(), half, wide],
+            coin: SpriteVram::from(&gfx::SPRITE_CASINO_8X8.frames[0]),
             dialog: None,
             dialog_painted: None,
         }
@@ -322,7 +328,9 @@ impl Screen {
         }
         if matches!(game.scene, Scene::Play | Scene::Intro) {
             let art = HudArt { life_caps: &self.life_caps, life: &self.life, diamond: &self.diamond };
-            screens::hud(&self.font, &art, None, game, frame);
+            // Satoshi Canyon pays in gold coins too: their count beside the diamonds.
+            let coin = (self.theme == Theme::SatoshiCanyon).then_some(&self.coin);
+            screens::hud(&self.font, &art, coin, game, frame);
             self.shield_hud(game, frame);
             self.boss_bar(game, frame);
         }
@@ -369,6 +377,8 @@ impl Screen {
             Speaker::CrabBot => put(frame, &gfx::SPRITE_CRAB_BOT_BOSS_PORTRAIT, 0, px, py - bob, false),
             Speaker::Smolsnip => put(frame, &gfx::SPRITE_SMOLSNIP_PORTRAIT, 0, px, py - bob, false),
             Speaker::Ape => put(frame, &gfx::SPRITE_APE_BOSS_PORTRAIT, 0, px, py - bob, false),
+            Speaker::Puppet => put(frame, &gfx::SPRITE_BTC_PUPPET_PORTRAIT, 0, px, py - bob, false),
+            Speaker::Inscriber => put(frame, &gfx::SPRITE_INSCRIBER_PORTRAIT, 0, px, py - bob, false),
             _ => {}
         }
 
@@ -389,18 +399,20 @@ impl Screen {
         }
     }
 
-    /// The plasma shield's charges under the life bar, once CL207 has handed it over:
-    /// a lit hexagon a charge, a dark one for each spent.
+    /// The plasma shield's charge under the life bar, once CL207 has handed it over: a
+    /// shield for every two charges, whole, half or spent, as the life bar's hearts.
     fn shield_hud(&self, game: &Game, frame: &mut GraphicsFrame) {
         let world = &game.world;
         if !world.has_shield() {
             return;
         }
-        for i in 0..SHIELD_MAX {
-            let lit = i < world.shield;
-            // The last charge left blinks, as a warning.
-            let warn = world.shield == 1 && lit && (game.frame / 16).is_multiple_of(2);
-            put(frame, &gfx::SPRITE_SHIELD_HUD, (!lit || warn) as usize, 8 + 9 * i as i32, 14, false);
+        let s = &gfx::SPRITE_SHIELD_HUD;
+        // The last half left blinks, as a warning.
+        let warn = world.shield == 1 && (game.frame / 16).is_multiple_of(2);
+        for i in 0..SHIELD_ICONS {
+            let charges = if warn { 0 } else { world.shield.saturating_sub(2 * i).min(2) };
+            let name = ["spent", "half", "whole"][charges as usize];
+            put(frame, s, first_of(s, name), 8 + 9 * i as i32, 14, false);
         }
     }
 
@@ -431,6 +443,10 @@ impl Screen {
         }
         if boss.kind == BossKind::Ape {
             self.ape(game, frame, cx, cy);
+            return;
+        }
+        if boss.kind == BossKind::Inscriber {
+            self.inscriber(game, frame, cx, cy);
             return;
         }
         let s = &gfx::SPRITE_CRAB_BOT_BOSS;
@@ -512,6 +528,41 @@ impl Screen {
         }
     }
 
+    /// THE INSCRIBER, from its sheet (`studio/sprites/inscriber.json`), facing right there.
+    fn inscriber(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
+        let boss = &game.world.boss;
+        let s = &gfx::SPRITE_INSCRIBER;
+        let r = boss.rect();
+        if r.right() < cx - 32 || r.x > cx + SCREEN_W + 32 || r.bottom() < cy || r.y > cy + SCREEN_H + 64 {
+            return;
+        }
+        let tick = game.frame;
+        let index = match boss.state {
+            BossState::Dying => anim(s, "death", (INSCRIBER_DYING_FRAMES - boss.timer) as u32),
+            BossState::Defeated => first_of(s, "death") + 2,
+            _ if boss.flash > 0 => first_of(s, "hit"),
+            // The Halving: glitching, its top half sliding off its bottom half.
+            BossState::Overload => anim(s, "halving", tick),
+            BossState::Gaze => anim(s, "gaze", tick),
+            BossState::Laser => anim(s, "laser", tick),
+            BossState::Inscribe => anim(s, "inscribe", tick),
+            BossState::Windup => first_of(s, "raise"),
+            // The pickaxe buried in the rock: the slam's frame first, then tugging.
+            BossState::Stunned if boss.timer % 48 > 40 => first_of(s, "slam"),
+            BossState::Stunned => first_of(s, "stuck"),
+            BossState::Walk if boss.body.vx_fx != 0 => anim(s, "walk", (r.x.unsigned_abs() / 2) * 4),
+            _ => anim(s, "idle", tick),
+        };
+        if boss.flash > 0 && boss.state != BossState::Dying && (tick / 2).is_multiple_of(2) {
+            return;
+        }
+        at(frame, s, index, r.centre_x() - cx, r.bottom() - cy, boss.facing < 0);
+        let tell = matches!(boss.state, BossState::Gaze | BossState::Inscribe | BossState::Windup);
+        if tell && game.scene == Scene::Play {
+            put(frame, &gfx::SPRITE_UI, ui::ALERT, r.centre_x() - 4 - cx, r.y - 22 - cy, false);
+        }
+    }
+
     /// "^" where Up does something, and "!" over a villain about to attack.
     fn prompts(&self, game: &Game, frame: &mut GraphicsFrame, cx: i32, cy: i32) {
         let world = &game.world;
@@ -565,8 +616,17 @@ impl Screen {
                 }
                 // The Big Crab Bot's water jets burst into droplets where they land.
                 FxKind::Splat => (fx::GLINT, 3),
-                // Casino effects: Sol City has none.
-                FxKind::CoinPop | FxKind::NinjaWreck => continue,
+                // A gold coin flips up and falls back, spinning: from the Puppet's tip,
+                // a smashed cart or THE INSCRIBER's hoard.
+                FxKind::CoinPop => {
+                    let s = &gfx::SPRITE_CASINO_8X8;
+                    let t = e.age as i32;
+                    let y = e.y - 4 - (t * (22 - t)) / 6;
+                    put(frame, s, anim(s, "coin", e.age as u32 * 3), e.x - 4 - cx, y - cy, false);
+                    continue;
+                }
+                // The casino's ninja: in no studio level.
+                FxKind::NinjaWreck => continue,
             };
             at(frame, sheet, first + e.frame(count), e.x - cx, e.y - cy, false);
         }
@@ -614,6 +674,15 @@ impl Screen {
                 }
                 ShotKind::Rubble => {
                     let s = &gfx::SPRITE_APE_RUBBLE;
+                    at(frame, s, anim(s, "spin", game.frame), x, y, false);
+                }
+                // THE INSCRIBER's Laser Eyes raking along the floor, its flare ahead.
+                ShotKind::EyeLaser => {
+                    let s = &gfx::SPRITE_INSCRIBER_LASER;
+                    at(frame, s, anim(s, "burn", game.frame), x, y, left);
+                }
+                ShotKind::Sat => {
+                    let s = &gfx::SPRITE_SAT_GLYPH;
                     at(frame, s, anim(s, "spin", game.frame), x, y, false);
                 }
                 _ => at(frame, sheet, fx::BULLET, x, y, left),
@@ -763,13 +832,19 @@ impl Screen {
                     screens::show(frame, &self.heal, r.x - 3 - cx, r.y - 3 - cy);
                     continue;
                 }
-                // Green, bobbing a pixel, its facets catching the light now and then.
+                // A gold coin, spinning and bobbing a pixel.
+                ActorKind::Coin => {
+                    let s = &gfx::SPRITE_CASINO_8X8;
+                    let bob = (game.frame / 16 % 2) as i32;
+                    put(frame, s, anim(s, "coin", game.frame + r.x as u32), r.x - cx, r.y - bob - cy, false);
+                    continue;
+                }
+                // The diamond, cut in green: still, with the same glint now and then,
+                // and bobbing a pixel so it reads as the shield's fuel.
                 ActorKind::Emerald => {
                     let s = &gfx::SPRITE_EMERALD;
-                    let phase = (game.frame + r.x as u32 * 3) % 72;
-                    let index = if phase < 32 { anim(s, "glint", phase) } else { 0 };
                     let bob = (game.frame / 20 % 2) as i32;
-                    put(frame, s, index, r.x - 3 - cx, r.y - 3 - bob - cy, false);
+                    put(frame, s, anim(s, "glint", game.frame + r.x as u32), r.x - 3 - cx, r.y - 3 - bob - cy, false);
                     continue;
                 }
                 _ => {}
@@ -785,7 +860,7 @@ impl Screen {
         let walk = (a.body.x().unsigned_abs() / 4) as u32;
         let lit = a.state == state::LIT;
         match a.kind {
-            ActorKind::Diamond | ActorKind::Heal | ActorKind::Emerald => {}
+            ActorKind::Diamond | ActorKind::Heal | ActorKind::Emerald | ActorKind::Coin => {}
             ActorKind::Checkpoint => {
                 let s = &gfx::SPRITE_BEACON;
                 at(frame, s, anim(s, if lit { "lit" } else { "off" }, tick), x, feet, false);
@@ -809,7 +884,6 @@ impl Screen {
                 let s = &gfx::SPRITE_CLAY_DINO;
                 let index = match a.state {
                     _ if a.flash > 0 => anim(s, "hit", 6u32.saturating_sub(a.flash as u32)),
-                    _ if a.calm() => anim(s, "idle", tick),
                     state::AIM => anim(s, "roar", DINO_ROAR_FRAMES.saturating_sub(a.timer) as u32),
                     state::LUNGE => anim(s, "run", tick * 2),
                     _ => anim(s, "walk", walk * 2),
@@ -878,6 +952,8 @@ impl Screen {
                     BlockLook::Sand => &gfx::SPRITE_SAND_BLOCK_SHEEN,
                     BlockLook::Crate => &gfx::SPRITE_DOCK_CRATE_SHEEN,
                     BlockLook::Soil => &gfx::SPRITE_SOIL_BLOCK_SHEEN,
+                    BlockLook::Brick => &gfx::SPRITE_BRICK_BLOCK_SHEEN,
+                    BlockLook::Ore => &gfx::SPRITE_ORE_BLOCK_SHEEN,
                 };
                 // A band of light sweeps across it now and then, as on a loading
                 // skeleton, to say it can be shot apart. Neighbours sweep at different
@@ -887,8 +963,51 @@ impl Screen {
                 let index = if phase < SHEEN_FRAMES { anim(s, "sheen", phase) } else { anim(s, "block", tick) };
                 at(frame, s, index, x, feet, false);
             }
-            // Casino and Badlands things: not in Sol City.
-            ActorKind::Coin | ActorKind::Part | ActorKind::Jetpack | ActorKind::Dealer | ActorKind::Guard => {}
+            // A stalactite hangs from the rock (its top on the actor's), shakes as it
+            // cracks, then drops.
+            ActorKind::Stalactite => {
+                let s = &gfx::SPRITE_STALACTITE;
+                let (index, shake) = match a.state {
+                    state::AIM => (anim(s, "crack", tick), if (tick / 2).is_multiple_of(2) { 1 } else { -1 }),
+                    state::LUNGE => (first_of(s, "crack") + 1, 0),
+                    _ => (anim(s, "hang", tick), 0),
+                };
+                put(frame, s, index, x - 8 + shake, feet - a.body.h, false);
+            }
+            // A mine cart: parked, rattling (the tell), then rolling with sparks behind.
+            ActorKind::Cart => {
+                let s = &gfx::SPRITE_MINE_CART;
+                let (index, rattle) = match a.state {
+                    state::AIM => (anim(s, "parked", tick * 4), (tick / 2 % 2) as i32),
+                    state::LUNGE => (anim(s, "roll", tick * 2), 0),
+                    _ => (anim(s, "parked", tick), 0),
+                };
+                at(frame, s, index, x + rattle, feet, a.facing < 0);
+            }
+            // The Bitcoin Puppet: waiting in its cell, cheering once it's free.
+            ActorKind::Hostage => {
+                let s = &gfx::SPRITE_BTC_PUPPET;
+                at(frame, s, anim(s, if lit { "cheer" } else { "idle" }, tick), x, feet, false);
+            }
+            // A zoo fence post: dark while the power is cut. Live, its lamps come on and
+            // the lightning crackles up it, reshuffled every couple of frames like the
+            // Trenches' fences.
+            ActorKind::Fence => {
+                let s = &gfx::SPRITE_ZOO_FENCE;
+                let live = game.world.powered();
+                if live {
+                    let l = &gfx::SPRITE_FENCE_8X8;
+                    for piece in 0..2u32 {
+                        let h = (a.home.0 as u32).wrapping_mul(73_856_093) ^ piece.wrapping_mul(19_349_663) ^ (tick / 2).wrapping_mul(83_492_791);
+                        let h = h ^ (h >> 13);
+                        let index = first_of(l, "lightning_short") + (h % 4) as usize;
+                        put(frame, l, index, x - 4, feet - 21 + 8 * piece as i32, h & 16 != 0);
+                    }
+                }
+                at(frame, s, first_of(s, if live { "live" } else { "dead" }), x, feet, false);
+            }
+            // Casino and Badlands things: not in a studio level.
+            ActorKind::Part | ActorKind::Jetpack | ActorKind::Dealer | ActorKind::Guard => {}
         }
     }
 }

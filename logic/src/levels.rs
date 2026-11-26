@@ -2,12 +2,14 @@
 
 pub mod badlands;
 pub mod eth_city;
+pub mod satoshi_canyon;
 pub mod sol_city;
 pub mod trenches;
 
 use crate::{arrival::Arrival, level::Level};
 
-pub static ALL: [&Level; 4] = [&badlands::BADLANDS, &trenches::TRENCHES, &sol_city::SOL_CITY, &eth_city::ETH_CITY];
+pub static ALL: [&Level; 5] =
+    [&badlands::BADLANDS, &trenches::TRENCHES, &sol_city::SOL_CITY, &eth_city::ETH_CITY, &satoshi_canyon::SATOSHI_CANYON];
 
 /// Whether this build can play `level`: a level painted in GBA-Studio needs the studio
 /// ROM (the `studio` feature). Elsewhere it shows on the map as coming soon.
@@ -112,8 +114,9 @@ impl Place {
     }
 }
 
-/// West to east, in the order the map cursor walks them.
-pub static MAP: [Place; 4] = [
+/// In play order, the order the map cursor walks them: west to east, then up past
+/// Ethereum City to Satoshi Canyon.
+pub static MAP: [Place; 5] = [
     Place {
         name: "THE BADLANDS",
         blurb: "MOSSY CLIFFS. BERA 3000 WAITS.",
@@ -146,6 +149,14 @@ pub static MAP: [Place; 4] = [
         order: 3,
         level: Some(3),
     },
+    Place {
+        name: "SATOSHI CANYON",
+        blurb: "THE FAR WEST. MIND THE MINES.",
+        x: 210,
+        y: 34,
+        order: 4,
+        level: Some(4),
+    },
 ];
 
 /// The map place for level `index`, or the first place.
@@ -173,14 +184,15 @@ mod tests {
         use PlaceStatus::*;
         let status = |cleared| MAP.each_ref().map(|p| p.status(cleared));
         let studio = if cfg!(feature = "studio") { Locked } else { Soon };
-        assert_eq!(status(0), [Open, Locked, studio, studio]);
-        assert_eq!(status(0b1), [Cleared, Open, studio, studio]);
+        assert_eq!(status(0), [Open, Locked, studio, studio, studio]);
+        assert_eq!(status(0b1), [Cleared, Open, studio, studio, studio]);
         if cfg!(feature = "studio") {
-            assert_eq!(status(0b11), [Cleared, Cleared, Open, Locked], "clearing level 2 unlocks Sol City");
-            assert_eq!(status(0b111), [Cleared, Cleared, Cleared, Open], "and Sol City unlocks Ethereum City");
-            assert_eq!(status(0b1111), [Cleared, Cleared, Cleared, Cleared]);
+            assert_eq!(status(0b11), [Cleared, Cleared, Open, Locked, Locked], "clearing level 2 unlocks Sol City");
+            assert_eq!(status(0b111), [Cleared, Cleared, Cleared, Open, Locked], "and Sol City unlocks Ethereum City");
+            assert_eq!(status(0b1111), [Cleared, Cleared, Cleared, Cleared, Open], "and Ethereum City unlocks Satoshi Canyon");
+            assert_eq!(status(0b11111), [Cleared, Cleared, Cleared, Cleared, Cleared]);
         } else {
-            assert_eq!(status(0b11), [Cleared, Cleared, Upcoming, Soon], "Sol City needs the studio ROM");
+            assert_eq!(status(0b11), [Cleared, Cleared, Upcoming, Soon, Soon], "Sol City needs the studio ROM");
         }
         assert!(!MAP[1].playable(0) && MAP[1].playable(0b1));
     }

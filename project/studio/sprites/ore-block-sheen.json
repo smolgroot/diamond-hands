@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "name": "ore-block-sheen",
+  "image": "generated/sprites/ore-block-sheen.png",
+  "frame": {
+    "width": 16,
+    "height": 16
+  },
+  "anchor": {
+    "x": 8,
+    "y": 16
+  },
+  "animations": [
+    {
+      "name": "block",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "sheen",
+      "frames": [
+        {
+          "index": 1,
+          "duration": 3
+        },
+        {
+          "index": 2,
+          "duration": 3
+        },
+        {
+          "index": 3,
+          "duration": 3
+        },
+        {
+          "index": 4,
+          "duration": 3
+        },
+        {
+          "index": 5,
+          "duration": 3
+        },
+        {
+          "index": 6,
+          "duration": 3
+        },
+        {
+          "index": 7,
+          "duration": 3
+        },
+        {
+          "index": 8,
+          "duration": 3
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

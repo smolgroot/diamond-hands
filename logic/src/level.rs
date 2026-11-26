@@ -35,7 +35,7 @@
 //! | `l`  | where the elevator arrives (feet row) |
 //! | `X`  | left edge of the boss arena (any row) |
 //! | `B`  | the boss |
-//! | `x`  | a clay dino on the loose: charges; calms down once the power is back |
+//! | `x`  | a clay dino on the loose: charges; once the power is back it is home again, penned in by the fences (`6`) |
 //! | `e`, `c` | someone to talk to (the zookeeper, the cosmonaut wassie): their lines are [`Level::npcs`], in map order |
 //! | `f`  | a boss's prisoner (Smolsnip): someone to talk to too, but only once the boss is beaten, and they pay a reward |
 //! | `w`  | the Wormhole portal: stepping in ends the level |
@@ -45,9 +45,14 @@
 //! | `i`  | a green emerald: recharges the plasma shield |
 //! | `I`  | CL207, who hands over the plasma shield: someone to talk to, in map order with the rest |
 //! | `n`, `u`, `y` | the bottom-left tile of a 2x2 block the wassie can shoot apart, which falls when nothing holds it up: sand on the beach, a crate on the dock, soil in the zoo (see [`crate::block`]) |
+//! | `1`, `2` | the same, for Satoshi Canyon: an adobe brick in the town, a block of gold ore in the mines |
+//! | `3`  | a stalactite, its top against the rock above: it shakes when the wassie walks under, then drops |
+//! | `4`  | a runaway mine cart: it rattles, then barrels down the rails at the wassie |
+//! | `5`  | a hostage (the Bitcoin Puppet): someone to talk to, in map order with the rest, once the Bad Cops guarding it are beaten; freed, it opens the gates (`h`) |
+//! | `6`  | a zoo fence post (its feet on the tile below): dead until a terminal (`E`) brings the power back, then a curtain as tall as a dino that no dino crosses and that shocks the wassie |
 //!
-//! Studio levels (Sol City, Ethereum City) are painted in GBA-Studio; `build.rs` writes their rows in
-//! this legend.
+//! Studio levels (Sol City, Ethereum City, Satoshi Canyon) are painted in GBA-Studio; `build.rs`
+//! writes their rows in this legend.
 
 use crate::{TILE, enemy::ActorKind, talk::Line};
 
@@ -134,12 +139,15 @@ pub enum Theme {
     /// Ethereum City, a New York at dusk: the Wormhole office, the avenue, the subway
     /// and a skyscraper with an ape on its roof. Painted in GBA-Studio.
     EthCity,
+    /// Satoshi Canyon, the far west of Bitcoin: the canyon, a western town and the
+    /// Satoshi mines under it. Painted in GBA-Studio.
+    SatoshiCanyon,
 }
 
 impl Theme {
     /// Painted in GBA-Studio and drawn from its rooms.
     pub const fn studio(self) -> bool {
-        matches!(self, Theme::SolCity | Theme::EthCity)
+        matches!(self, Theme::SolCity | Theme::EthCity | Theme::SatoshiCanyon)
     }
 }
 
@@ -154,6 +162,8 @@ pub enum BossKind {
     Crab,
     /// BORED KONG, the giant ape on the roof of Ethereum City's tallest tower.
     Ape,
+    /// THE INSCRIBER, the laser-eyed Bitcoin cyborg in the vault of the Satoshi mines.
+    Inscriber,
 }
 
 impl BossKind {

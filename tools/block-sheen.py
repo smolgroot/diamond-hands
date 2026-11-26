@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derives the "sheen" sheets of Sol City's breakable blocks from their own art.
+"""Derives the "sheen" sheets of the breakable blocks (Sol City's, Satoshi Canyon's) from their own art.
 
 A sheen is a band of light sweeping diagonally across a block's face, as a skeleton
 placeholder's wave does on the web: it tells the player the block is something to
@@ -27,6 +27,9 @@ BLOCKS = [
     ("sand-block", "generated/tilesets/beach-sand-blocks.png", 6),
     ("dock-crate", "generated/tilesets/dock-crates.png", 6),
     ("soil-block", "generated/tilesets/zoo-jungle.png", 6),
+    # Satoshi Canyon's: drawn by tools/satoshi-canyon/draw-art.py, one block a sheet.
+    ("brick-block", "generated/sprites/brick-block.png", 0),
+    ("ore-block", "generated/sprites/ore-block.png", 0),
 ]
 SIZE = 16
 FRAMES = 8

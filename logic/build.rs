@@ -28,6 +28,7 @@ use serde_json::Value;
 const LEVELS: &[(&str, &[&str])] = &[
     ("sol_city", &["beach", "beach-tunnels", "crab-lair", "harbor", "jurassic-zoo", "service-tunnels", "marina", "wormhole-hq"]),
     ("eth_city", &["eth-office", "eth-avenue", "eth-subway", "eth-tower", "ape-roof"]),
+    ("satoshi_canyon", &["btc-canyon", "btc-town", "satoshi-mine", "inscriber-vault"]),
 ];
 
 /// Entity type to map marker.
@@ -61,18 +62,23 @@ const MARKERS: &[(&str, u8)] = &[
     ("emerald", b'i'),
     ("cl207", b'I'),
     ("ape-boss", b'B'),
+    ("stalactite", b'3'),
+    ("mine-cart", b'4'),
+    ("btc-puppet", b'5'),
+    ("inscriber", b'B'),
+    ("zoo-fence", b'6'),
 ];
 
 /// Breakable blocks: entity type to the marker of its bottom-left tile. A block is 16x16
 /// pixels with its feet at the middle of its bottom edge, on the 8 px grid, over 2x2
 /// cells of air; only its marker goes in the map, since it moves (see `src/block.rs`).
-const BLOCKS: &[(&str, u8)] = &[("sand-block", b'n'), ("dock-crate", b'u'), ("soil-block", b'y')];
+const BLOCKS: &[(&str, u8)] = &[("sand-block", b'n'), ("dock-crate", b'u'), ("soil-block", b'y'), ("brick-block", b'1'), ("ore-block", b'2')];
 
 /// The pickups whose worth the game reads from their type's `collectible` behaviour.
 const PICKUPS: &[&str] = &["diamond", "coin", "heal", "emerald"];
 
 /// The speaker of an entity type's lines.
-const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo"), ("smolsnip", "Smolsnip"), ("cl207", "Cl207")];
+const SPEAKERS: &[(&str, &str)] = &[("zookeeper", "Keeper"), ("cosmo-wassie", "Cosmo"), ("smolsnip", "Smolsnip"), ("cl207", "Cl207"), ("btc-puppet", "Puppet")];
 
 fn read(path: &PathBuf) -> Value {
     println!("cargo:rerun-if-changed={}", path.display());

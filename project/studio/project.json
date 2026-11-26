@@ -485,6 +485,78 @@
       "sprite": "ape-boss",
       "props": [],
       "behaviours": []
+    },
+    {
+      "id": "brick-block",
+      "name": "Adobe brick block (shoot to break)",
+      "colour": "#c05a30",
+      "sprite": "brick-block-sheen",
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "ore-block",
+      "name": "Gold ore block (shoot to break)",
+      "colour": "#ffd040",
+      "sprite": "ore-block-sheen",
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "stalactite",
+      "name": "Stalactite (drops when the wassie walks under)",
+      "colour": "#7a6e78",
+      "sprite": "stalactite",
+      "props": [],
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
+    },
+    {
+      "id": "mine-cart",
+      "name": "Runaway mine cart",
+      "colour": "#93602e",
+      "sprite": "mine-cart",
+      "props": [],
+      "behaviours": [
+        {
+          "id": "hazard",
+          "props": {}
+        }
+      ]
+    },
+    {
+      "id": "btc-puppet",
+      "name": "Bitcoin Puppet (held by Bad Cops; opens the mine)",
+      "colour": "#2f5a28",
+      "sprite": "btc-puppet",
+      "props": [
+        {
+          "name": "talk",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "behaviours": []
+    },
+    {
+      "id": "inscriber",
+      "name": "THE INSCRIBER (boss)",
+      "colour": "#f7931a",
+      "sprite": "inscriber",
+      "props": [],
+      "behaviours": []
+    },
+    {
+      "id": "zoo-fence",
+      "name": "Zoo fence (live with the breaker)",
+      "colour": "#70e0f8",
+      "sprite": "zoo-fence",
+      "props": [],
+      "behaviours": []
     }
   ],
   "physics": {

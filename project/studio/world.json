@@ -75,11 +75,31 @@
       "room": "ape-roof",
       "x": 10,
       "y": 15
+    },
+    {
+      "room": "btc-canyon",
+      "x": 0,
+      "y": 19
+    },
+    {
+      "room": "btc-town",
+      "x": 5,
+      "y": 19
+    },
+    {
+      "room": "satoshi-mine",
+      "x": 9,
+      "y": 20
+    },
+    {
+      "room": "inscriber-vault",
+      "x": 12,
+      "y": 22
     }
   ],
   "start": "badlands",
   "size": {
-    "width": 12,
-    "height": 18
+    "width": 13,
+    "height": 23
   }
 }

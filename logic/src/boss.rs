@@ -31,6 +31,16 @@
 //! dazed, taking double damage). At half health it speeds up, throws three at a time,
 //! and its landings shake rubble down from the spire.
 //!
+//! THE INSCRIBER, a laser-eyed Bitcoin cyborg miner, guards the vault at the bottom of the
+//! Satoshi mines and its hoard of diamonds and gold. It strides after the wassie and works
+//! through three attacks: the Laser Eyes (its visor glows, the tell, then a beam rakes
+//! along the floor: jump it), Inscribe (it raises a glowing tablet and inscribed sats
+//! rain from the ceiling around the wassie) and the Pickaxe Slam (it heaves its pickaxe
+//! up, slams it into the rock so shockwaves run along the floor both ways, and is stuck
+//! there a moment, taking double damage). At half health comes the Halving: it glitches,
+//! untouchable, and from then on its timers are halved, its lasers come in pairs and
+//! more sats fall.
+//!
 //! Every step is on timers, so the fights are deterministic.
 
 use crate::{
@@ -111,6 +121,30 @@ const APE_PATTERN: [[BossState; 6]; 2] = [
     [BossState::Throw, BossState::Windup, BossState::Telegraph, BossState::Throw, BossState::Windup, BossState::Throw],
     [BossState::Windup, BossState::Throw, BossState::Telegraph, BossState::Windup, BossState::Throw, BossState::Telegraph],
 ];
+/// THE INSCRIBER: tall and lean, its pickaxe at its side.
+pub const INSCRIBER_W: i32 = 28;
+pub const INSCRIBER_H: i32 = 50;
+pub const INSCRIBER_HP: i32 = 48;
+pub const INSCRIBER_DYING_FRAMES: u16 = 160;
+const INSCRIBER_WALK_FX: i32 = 3 * FX / 5;
+/// The Laser Eyes: how long the visor glows first (the tell), the beam's speed along the
+/// floor, and the frames between the two beams after the Halving.
+pub const GAZE_FRAMES: u16 = 40;
+const LASER_FX: i32 = 4 * FX;
+const LASER_GAP: u16 = 20;
+/// Inscribe: how long the tablet is held up before the sats fall (the tell).
+pub const INSCRIBE_FRAMES: u16 = 34;
+/// The Pickaxe Slam: how long the pickaxe is held up (the tell), and how long it stays
+/// stuck in the rock afterwards.
+pub const HEAVE_FRAMES: u16 = 44;
+pub const STUCK_FRAMES: u16 = 84;
+/// The Halving: frames it glitches, untouchable.
+pub const HALVING_FRAMES: u16 = 70;
+/// THE INSCRIBER's attacks, in order, before and after the Halving.
+const INSCRIBER_PATTERN: [[BossState; 6]; 2] = [
+    [BossState::Gaze, BossState::Inscribe, BossState::Windup, BossState::Gaze, BossState::Inscribe, BossState::Windup],
+    [BossState::Gaze, BossState::Windup, BossState::Inscribe, BossState::Gaze, BossState::Inscribe, BossState::Windup],
+];
 const WALK_FX: i32 = 3 * FX / 4;
 const CHARGE_FX: i32 = 3 * FX;
 const BULLET_FX: i32 = 2 * FX;
@@ -149,6 +183,12 @@ pub enum BossState {
     Spray,
     /// The Big Crab Bot's Electric Halo: it charges, then crackles around its shell.
     Halo,
+    /// THE INSCRIBER's visor glows: the Laser Eyes are coming.
+    Gaze,
+    /// THE INSCRIBER's Laser Eyes: the beam rakes along the floor.
+    Laser,
+    /// THE INSCRIBER holds up its tablet, and inscribed sats fall.
+    Inscribe,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,6 +255,7 @@ impl Boss {
             BossKind::Sam => (SAM_W, SAM_H),
             BossKind::Crab => (CRAB_W, CRAB_H),
             BossKind::Ape => (APE_W, APE_H),
+            BossKind::Inscriber => (INSCRIBER_W, INSCRIBER_H),
         }
     }
 
@@ -224,6 +265,7 @@ impl Boss {
             BossKind::Sam => SAM_HP,
             BossKind::Crab => CRAB_HP,
             BossKind::Ape => APE_HP,
+            BossKind::Inscriber => INSCRIBER_HP,
         }
     }
 
@@ -282,6 +324,7 @@ impl Boss {
             BossKind::Sam => self.hp * 2 > SAM_HP,
             BossKind::Crab => self.hp * 2 > CRAB_HP,
             BossKind::Ape => self.hp * 2 > APE_HP,
+            BossKind::Inscriber => self.hp * 2 > INSCRIBER_HP,
         };
         if lasts { 1 } else { 2 }
     }
@@ -350,6 +393,7 @@ impl Boss {
                 BossKind::Sam => SAM_DYING_FRAMES,
                 BossKind::Crab => CRAB_DYING_FRAMES,
                 BossKind::Ape => APE_DYING_FRAMES,
+                BossKind::Inscriber => INSCRIBER_DYING_FRAMES,
             };
             events.insert(Events::BOSS_DOWN);
             return true;
@@ -358,6 +402,12 @@ impl Boss {
             // The implants overload: he stops whatever he was doing.
             self.body.vx_fx = 0;
             self.go(BossState::Overload, 50);
+            events.insert(Events::SLAM);
+        }
+        if self.kind == BossKind::Inscriber && phase == 1 && self.phase() == 2 {
+            // The Halving: it glitches, untouchable, whatever it was doing.
+            self.body.vx_fx = 0;
+            self.go(BossState::Overload, HALVING_FRAMES);
             events.insert(Events::SLAM);
         }
         false
@@ -399,6 +449,7 @@ impl Boss {
             BossKind::Sam => self.sam(ctx, &mut events),
             BossKind::Crab => self.crab(ctx, &mut events),
             BossKind::Ape => self.ape(ctx, &mut events),
+            BossKind::Inscriber => self.inscriber(ctx, &mut events),
         }
 
         self.body.vy_fx = (self.body.vy_fx + GRAVITY_FX).min(5 * FX);
@@ -836,6 +887,104 @@ impl Boss {
                 self.body.vx_fx = 0;
                 if self.timer == 0 {
                     self.go(BossState::Walk, pick(40, 24));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// One frame of THE INSCRIBER. After the Halving, every timer is halved.
+    fn inscriber(&mut self, ctx: &mut BossCtx, events: &mut Events) {
+        let player = ctx.player;
+        let halved = self.phase() == 2;
+        let pick = |t: u16| if halved { t / 2 } else { t };
+        match self.state {
+            BossState::Intro | BossState::Overload => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(60));
+                }
+            }
+            BossState::Walk => {
+                // Strides after the wassie, keeping a pickaxe's length off.
+                self.face(&player);
+                let dist = (player.centre_x() - self.rect().centre_x()).abs();
+                let speed = if halved { INSCRIBER_WALK_FX * 3 / 2 } else { INSCRIBER_WALK_FX };
+                self.body.vx_fx = if dist > 64 { self.facing * speed } else { 0 };
+                if self.timer == 0 && self.grounded {
+                    self.body.vx_fx = 0;
+                    let next = INSCRIBER_PATTERN[halved as usize][self.step as usize % INSCRIBER_PATTERN[0].len()];
+                    self.step = self.step.wrapping_add(1);
+                    match next {
+                        BossState::Gaze => {
+                            self.shots_left = if halved { 2 } else { 1 };
+                            self.go(BossState::Gaze, pick(GAZE_FRAMES));
+                        }
+                        BossState::Inscribe => self.go(BossState::Inscribe, pick(INSCRIBE_FRAMES)),
+                        _ => self.go(BossState::Windup, pick(HEAVE_FRAMES)),
+                    }
+                }
+            }
+            BossState::Gaze => {
+                // The visor glows brighter and brighter.
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Laser, 0);
+                }
+            }
+            BossState::Laser => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    // The beam strikes the floor just ahead and rakes along it.
+                    let r = self.rect();
+                    let x = r.centre_x() + self.facing * (INSCRIBER_W / 2 + 14);
+                    shot::spawn(ctx.shots, ShotKind::EyeLaser, x, r.bottom() - 5, self.facing * LASER_FX, 0);
+                    events.insert(Events::ZAP);
+                    self.shots_left = self.shots_left.saturating_sub(1);
+                    if self.shots_left > 0 {
+                        self.timer = LASER_GAP;
+                    } else {
+                        self.go(BossState::Recover, ctx.difficulty.fire_interval(pick(40)));
+                    }
+                }
+            }
+            BossState::Inscribe => {
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    // Inscribed sats fall from the ceiling around the wassie, with gaps
+                    // between them to stand in.
+                    let offsets: &[i32] = if halved { &[-84, -42, 0, 42, 84] } else { &[-56, 0, 56] };
+                    // From just under the vault's roof, clear of its walls.
+                    let top = self.rect().bottom() - 100;
+                    for &offset in offsets {
+                        let jitter = ctx.rng.below(9) as i32 - 4;
+                        let x = (player.centre_x() + offset + jitter).clamp(self.arena.0 + 20, self.arena.1 - 36);
+                        shot::spawn(ctx.shots, ShotKind::Sat, x, top, 0, 0);
+                    }
+                    self.go(BossState::Recover, ctx.difficulty.fire_interval(pick(48)));
+                }
+            }
+            BossState::Windup => {
+                // The pickaxe heaved over its head.
+                self.face(&player);
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    let r = self.rect();
+                    for dir in [-1, 1] {
+                        shot::spawn(ctx.shots, ShotKind::Shockwave, r.centre_x() + dir * (INSCRIBER_W / 2 + 8), r.bottom() - 6, dir * 2 * FX, 0);
+                    }
+                    events.insert(Events::SLAM);
+                    // Stuck in the rock: it takes double damage while it tugs it free.
+                    self.go(BossState::Stunned, pick(STUCK_FRAMES));
+                }
+            }
+            BossState::Stunned | BossState::Recover => {
+                self.body.vx_fx = 0;
+                if self.timer == 0 {
+                    self.go(BossState::Walk, pick(44));
                 }
             }
             _ => {}

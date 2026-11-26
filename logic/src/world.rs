@@ -12,7 +12,7 @@ use crate::{
     block::{Blocks, Map},
     level::Level,
     levels,
-    physics::Body,
+    physics::{Body, Rect},
     player::{
         DIAGONAL, GRAVITY_FX, HOVER_FRAMES, MAX_FALL_FX, MAX_HP, PLAYER_H, PLAYER_W, Player, PlayerState,
         RUN_MAX_FX, STOMP_BOUNCE_FX,
@@ -84,9 +84,9 @@ pub const GEAR_JETPACK: u16 = 1 << 15;
 /// The bit of the file's part mask that records CL207's plasma shield, handed over in
 /// Ethereum City.
 pub const GEAR_SHIELD: u16 = 1 << 14;
-/// Hits a fully charged plasma shield soaks up. Each costs a charge; emeralds put them
-/// back.
-pub const SHIELD_MAX: u8 = 3;
+/// Hits a fully charged plasma shield soaks up. Each costs a charge; an emerald puts one
+/// back. The HUD shows them two to a shield icon, so an emerald fills half an icon.
+pub const SHIELD_MAX: u8 = 6;
 /// Frames the wassie blinks after the shield soaks up a hit, and the bubble flashes.
 pub const SHIELD_INVULN: u16 = 40;
 pub const SHIELD_FLASH: u8 = 12;
@@ -223,8 +223,10 @@ impl Events {
     pub const BREAK: Events = Events(1 << 30);
     /// The plasma shield soaked up a hit.
     pub const SHIELD: Events = Events(1 << 31);
-    /// A bolt clanged off a Bad Cop's riot shield.
+    /// A bolt clanged off a Bad Cop's riot shield, or a hostage's cell wall.
     pub const BLOCKED: Events = Events(1 << 32);
+    /// THE INSCRIBER's Laser Eyes fired.
+    pub const ZAP: Events = Events(1 << 33);
 
     pub fn contains(self, other: Events) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -316,8 +318,19 @@ const PORTAL_KEEPER_REACH: i32 = 96;
 pub const WARP_FRAMES: u16 = 80;
 /// People a level may have, for the bits of [`World::heard`].
 const MAX_NPCS: usize = 16;
+/// Zoo fences a level may have.
+pub const MAX_FENCES: usize = 16;
 /// Diamonds a prisoner hands over once freed and heard out.
 pub const PRISONER_REWARD: u32 = 50;
+/// Gold coins a hostage tips the wassie once its guards are beaten.
+pub const HOSTAGE_TIP: u32 = 10;
+/// Bad Cops guard a hostage when they start out this near it, across and up or down.
+pub const GUARD_REACH: (i32, i32) = (20 * TILE, 8 * TILE);
+/// Blocks this near a guarded hostage, across and up or down, hold: its cell stays shut.
+const CELL_REACH: (i32, i32) = (6 * TILE, 4 * TILE);
+/// What THE INSCRIBER's hoard spills when it goes down: diamonds and gold coins.
+pub const HOARD_DIAMONDS: u32 = 21;
+pub const HOARD_COINS: u32 = 21;
 /// The bit of [`World::taken`] that says the boss is beaten, in a level it doesn't end:
 /// the last one, past every actor slot.
 const BOSS_BEATEN: usize = crate::enemy::ActorSet::CAPACITY - 1;
@@ -813,23 +826,20 @@ impl World {
         if events.contains(Events::SLAM) {
             self.shake = self.shake.max(10);
         }
-        if events.contains(Events::BOSS_DOWN) {
-            self.shake = 24;
-            if self.level.coins {
-                self.coins += BOSS_STASH;
-                events.insert(Events::COIN);
-            }
-        }
+        let hoard = self.boss.kind == crate::level::BossKind::Inscriber;
         // The boss comes apart in a string of blasts while it goes down; in a casino,
-        // its stash of coins spills out between them.
+        // or from THE INSCRIBER's hoard, coins and diamonds spill out between them.
         if self.boss.state == crate::boss::BossState::Dying && self.boss.timer % 5 == 0 {
             let r = self.boss.rect();
             let x = r.x + self.rng.below(r.w as u32) as i32;
             let y = r.y + self.rng.below(r.h as u32) as i32;
             if self.boss.timer % 10 == 0 {
                 self.fx.spawn(FxKind::Explosion, x, y);
-            } else if self.level.coins {
+            } else if self.level.coins || hoard {
                 self.fx.spawn(FxKind::CoinPop, x, y);
+                if hoard {
+                    self.fx.spawn(FxKind::Glint, x, y - 8);
+                }
             }
         }
         // Shots into a standing block, to be dealt once the shots have all moved.
@@ -838,13 +848,28 @@ impl World {
         let map = Map { level: self.level, blocks: &self.blocks };
         // While a boss fight is on, the blocks hold (a prisoner's cell stays shut).
         let blocks_hold = self.arena && !self.boss.is_beaten();
+        // A hostage's cell holds too while its guards stand.
+        let cell = self.guarded_hostage().map(|i| self.actors[i].rect());
         for s in self.shots.iter_mut().filter(|s| s.active) {
             s.update(&map);
             let r = s.rect();
             if !s.active && s.kind.from_player() && s.life > 0 {
                 // Ran into rock, or into a block.
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
-                if let Some(b) = self.blocks.at_px(r.centre_x(), r.centre_y())
+                let held_cell = |b: usize| {
+                    cell.is_some_and(|c| {
+                        let br = self.blocks.rect(b);
+                        (br.centre_x() - c.centre_x()).abs() <= CELL_REACH.0 && (br.bottom() - c.bottom()).abs() <= CELL_REACH.1
+                    })
+                };
+                let block = self.blocks.at_px(r.centre_x(), r.centre_y());
+                if let Some(b) = block
+                    && held_cell(b)
+                {
+                    // A hostage's cell, while its guards stand: the bolt clanks off.
+                    self.fx.spawn(FxKind::Sparks, r.centre_x(), r.centre_y());
+                    events.insert(Events::BLOCKED);
+                } else if let Some(b) = block
                     && block_hit_count < MAX_BLOCK_HITS
                     && !blocks_hold
                 {
@@ -856,7 +881,7 @@ impl World {
                 self.fx.spawn(FxKind::Splat, r.centre_x(), r.centre_y());
             }
             // A canister bursts into smoke, masonry into grit, where it lands.
-            if !s.active && matches!(s.kind, ShotKind::Canister | ShotKind::Rubble) {
+            if !s.active && matches!(s.kind, ShotKind::Canister | ShotKind::Rubble | ShotKind::Sat) {
                 self.fx.spawn(FxKind::Puff, r.centre_x(), r.centre_y());
                 self.fx.spawn(FxKind::Impact, r.centre_x(), r.centre_y());
             }
@@ -872,8 +897,22 @@ impl World {
         }
         self.drop_blocks(&mut events);
         self.collide(&mut events);
+        // The wassie's shots are what bring a boss down, so this comes after they hit.
+        if events.contains(Events::BOSS_DOWN) {
+            self.shake = 24;
+            if self.level.coins {
+                self.coins += BOSS_STASH;
+                events.insert(Events::COIN);
+            }
+            if hoard {
+                // THE INSCRIBER's hoard: the diamonds and gold it guarded.
+                self.diamonds += HOARD_DIAMONDS;
+                self.coins += HOARD_COINS;
+                events.insert(Events::COIN);
+            }
+        }
         self.hazards(&mut events);
-        self.meet_people(input);
+        self.meet_people(input, &mut events);
         self.enter_portal(&mut events);
         events
     }
@@ -888,14 +927,43 @@ impl World {
         self.actors[..self.used].iter().filter(|a| a.kind.is_person())
     }
 
-    /// Whether person `a` can speak: a prisoner says nothing while its jailer stands.
+    /// Whether person `a` can speak: a prisoner says nothing while its jailer stands,
+    /// nor a hostage while any of its guards does.
     fn free_to_talk(&self, a: &Actor) -> bool {
-        a.kind != ActorKind::Prisoner || !self.boss.present || self.boss.state == crate::boss::BossState::Defeated
+        match a.kind {
+            ActorKind::Prisoner => !self.boss.present || self.boss.state == crate::boss::BossState::Defeated,
+            ActorKind::Hostage => self.guards(a).next().is_none(),
+            _ => true,
+        }
+    }
+
+    /// The Bad Cops guarding hostage `h` still standing: those that started out near it.
+    pub fn guards<'a>(&'a self, h: &'a Actor) -> impl Iterator<Item = &'a Actor> + 'a {
+        self.actors[..self.used].iter().filter(move |c| {
+            c.kind == ActorKind::Cop
+                && c.alive
+                && (c.home.0 - h.home.0).abs() <= GUARD_REACH.0
+                && (c.home.1 + c.body.h - (h.home.1 + h.body.h)).abs() <= GUARD_REACH.1
+        })
+    }
+
+    /// The slot of a hostage some guard still stands over, if any.
+    pub fn guarded_hostage(&self) -> Option<usize> {
+        (0..self.used).find(|&i| {
+            let a = &self.actors[i];
+            a.kind == ActorKind::Hostage && a.state != enemy::state::LIT && self.guards(a).next().is_some()
+        })
+    }
+
+    /// Whether a hostage has been freed: it opens the gates.
+    pub fn freed(&self) -> bool {
+        self.actors[..self.used].iter().any(|a| a.kind == ActorKind::Hostage && a.state == enemy::state::LIT)
     }
 
     /// Person `n` has had their say. A freed prisoner hands over its reward, and CL207
     /// the plasma shield, once: saved with the run, so it is never paid twice.
-    /// Returns whether it paid, so the run can be saved.
+    /// Returns whether it paid (or, for a hostage, whether it is free), so the run can
+    /// be saved.
     pub fn heard_out(&mut self, n: u8, events: &mut Events) -> bool {
         let Some(i) = self.actors[..self.used]
             .iter()
@@ -907,6 +975,10 @@ impl World {
             return false;
         };
         let a = &mut self.actors[i];
+        if a.kind == ActorKind::Hostage {
+            // Freed and paid when it spoke up: the run is saved with that now.
+            return a.state == enemy::state::LIT;
+        }
         if !matches!(a.kind, ActorKind::Prisoner | ActorKind::Mentor) || a.state == enemy::state::LIT {
             return false;
         }
@@ -938,8 +1010,9 @@ impl World {
     }
 
     /// Someone speaks up the first time the wassie comes near; Up near them again
-    /// hears them out once more.
-    fn meet_people(&mut self, input: &Input) {
+    /// hears them out once more. A hostage is freed the moment it speaks up: it opens
+    /// the gates and tips the wassie, once (its state is saved with the run).
+    fn meet_people(&mut self, input: &Input, events: &mut Events) {
         if self.player.is_dead() || self.player.hurt > 0 || self.walk_in {
             return;
         }
@@ -955,6 +1028,18 @@ impl World {
             self.heard |= 1 << n;
             self.npc_due = Some(n as u8);
             self.player.body.vx_fx = 0;
+            let hostage = self.people().nth(n).filter(|a| a.kind == ActorKind::Hostage && a.state != enemy::state::LIT).map(|a| a.home);
+            if let Some(home) = hostage {
+                for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Hostage && a.home == home) {
+                    a.state = enemy::state::LIT;
+                    let r = a.rect();
+                    for (dx, dy) in [(-10, -8), (0, -16), (10, -8)] {
+                        self.fx.spawn(FxKind::CoinPop, r.centre_x() + dx, r.y + dy);
+                    }
+                }
+                self.coins += HOSTAGE_TIP;
+                events.insert(Events::COIN);
+            }
         }
     }
 
@@ -1151,6 +1236,7 @@ impl World {
         let dark_car = self
             .lift
             .filter(|l| l.state == LiftState::Dark && self.player.grounded && l.at_door(&r));
+        let mut switched_on = false;
         for a in self.actors[..self.used].iter_mut() {
             let called = dark_car.is_some_and(|l| l.beside(&a.rect()));
             if a.kind == ActorKind::Terminal
@@ -1162,6 +1248,14 @@ impl World {
                 let ar = a.rect();
                 self.fx.spawn(FxKind::Sparks, ar.centre_x(), ar.y + 4);
                 events.insert(Events::POWER);
+                switched_on = true;
+            }
+        }
+        if switched_on {
+            // The zoo's fences come on: the keepers have every loose dino back in its
+            // pen, out of the wassie's way, while it is down here.
+            for a in self.actors[..self.used].iter_mut().filter(|a| a.kind == ActorKind::Dino && a.alive) {
+                a.go_home();
             }
         }
     }
@@ -1413,6 +1507,16 @@ impl World {
 
     fn update_actors(&mut self) {
         let power = self.powered();
+        let freed = self.freed();
+        // The zoo's fences, live once the power is back.
+        let mut fences = [Rect::default(); MAX_FENCES];
+        let mut live = 0;
+        if power {
+            for a in self.actors[..self.used].iter().filter(|a| a.kind == ActorKind::Fence && a.alive).take(MAX_FENCES) {
+                fences[live] = a.rect();
+                live += 1;
+            }
+        }
         let mut ctx = Ctx {
             level: self.level,
             map: Map { level: self.level, blocks: &self.blocks },
@@ -1421,6 +1525,8 @@ impl World {
             difficulty: self.difficulty,
             camera_x: self.camera_x,
             power,
+            fences: &fences[..live],
+            freed,
         };
         let view = (self.camera_x - WAKE_MARGIN, self.camera_x + SCREEN_W + WAKE_MARGIN);
         let view_y = (self.camera_y - WAKE_MARGIN, self.camera_y + SCREEN_H + WAKE_MARGIN);
@@ -1439,6 +1545,24 @@ impl World {
                 || r.y > view_y.1 + SCREEN_H / 2;
             if a.awake && !far {
                 a.update(&mut ctx);
+                // A stalactite that hit the floor bursts into grit; a cart that hit a
+                // wall smashes to bits.
+                if !a.alive && a.state == enemy::state::RETURN {
+                    let r = a.rect();
+                    match a.kind {
+                        ActorKind::Stalactite => {
+                            self.fx.spawn(FxKind::Dust, r.centre_x() - 4, r.bottom() - 4);
+                            self.fx.spawn(FxKind::Dust, r.centre_x() + 4, r.bottom() - 4);
+                            self.fx.spawn(FxKind::Impact, r.centre_x(), r.bottom() - 6);
+                        }
+                        ActorKind::Cart => {
+                            self.fx.spawn(FxKind::Explosion, r.centre_x(), r.centre_y());
+                            self.fx.spawn(FxKind::CoinPop, r.centre_x(), r.y);
+                            self.shake = self.shake.max(6);
+                        }
+                        _ => {}
+                    }
+                }
                 // While the fight is on, a Bad Cop's beat ends at the arena's edge: none
                 // follows the wassie onto the roof. Only cops: the older levels' villains
                 // keep their ways, which their screens' sprite budgets were measured
@@ -1606,6 +1730,8 @@ impl World {
         // Touching villains, pickups and checkpoints.
         let mut checkpoint_reached = None;
         let mut part_taken = None;
+        let mut shocked = false;
+        let power = self.powered();
         let worth = self.level.worth;
         for (i, a) in self.actors[..self.used].iter_mut().enumerate() {
             if !a.alive || !player.overlaps(&a.rect()) {
@@ -1670,13 +1796,33 @@ impl World {
                     events.insert(Events::GEAR);
                 }
                 ActorKind::Terminal | ActorKind::Npc | ActorKind::Mentor | ActorKind::Portal | ActorKind::Gate | ActorKind::Block(_) => {}
+                // A live zoo fence: thrown back out the side it came in by, shocked or
+                // not, so a wassie still blinking from the last jolt can't slip through.
+                ActorKind::Fence if power && !self.player.is_dead() => {
+                    let f = a.rect();
+                    let body = &mut self.player.body;
+                    if player.centre_x() < f.centre_x() {
+                        body.x_fx = (f.x - player.w - 1) * FX;
+                        body.vx_fx = body.vx_fx.min(0);
+                    } else {
+                        body.x_fx = (f.right() + 1) * FX;
+                        body.vx_fx = body.vx_fx.max(0);
+                    }
+                    if self.player.invuln == 0 {
+                        hurt = Some((SPIKE_DAMAGE, f.centre_x(), true));
+                        shocked = true;
+                    }
+                }
                 ActorKind::Checkpoint => {
                     if a.state != enemy::state::LIT {
                         a.state = enemy::state::LIT;
                         checkpoint_reached = Some(i);
                     }
                 }
-                _ if !a.awake || a.calm() => {}
+                // Only a villain hurts to touch: people (Smolsnip, the Bitcoin Puppet and
+                // the rest) are friends, and anything new is harmless until it says
+                // otherwise in `is_enemy`.
+                _ if !a.is_threat() => {}
                 _ => {
                     let falling = self.player.body.vy_fx > 0;
                     let stomp = falling && player.bottom() - a.rect().y <= 8;
@@ -1719,8 +1865,11 @@ impl World {
             hurt = Some((damage, self.boss.rect().centre_x(), heavy));
         }
 
-        if let Some((damage, from_x, heavy)) = hurt {
-            self.knock_player(damage, from_x, heavy, events);
+        if let Some((damage, from_x, heavy)) = hurt
+            && self.knock_player(damage, from_x, heavy, events)
+            && shocked
+        {
+            events.insert(Events::SHOCK);
         }
     }
 
@@ -2686,8 +2835,35 @@ mod tests {
         w.actors.iter().position(|a| a.kind == kind).unwrap()
     }
 
+    /// Sol City with the breaker thrown down in the tunnels, as the wassie would throw
+    /// it, and the wassie then standing at `(tx, ty)`.
+    fn sol_city_powered(tx: i32, ty: i32) -> World {
+        let mut w = sol_city_on(130, 55);
+        assert!(tap(&mut w, keys::UP).contains(Events::POWER));
+        w.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        w
+    }
+
+    /// The zoo fence nearest column `tx`.
+    fn zoo_fence(w: &World, tx: i32) -> Rect {
+        let f = (0..w.used)
+            .filter(|&i| w.actors[i].kind == ActorKind::Fence)
+            .min_by_key(|&i| (w.actors[i].rect().centre_x().div_euclid(TILE) - tx).abs())
+            .unwrap();
+        w.actors[f].rect()
+    }
+
+    /// The dinos of the zoo's east paddock, between its fences at 173 and 201.
+    fn paddock_dinos(w: &World) -> impl Iterator<Item = usize> + '_ {
+        (0..w.used).filter(|&i| {
+            let a = &w.actors[i];
+            a.kind == ActorKind::Dino && (174..201).contains(&a.home.0.div_euclid(TILE)) && a.home.1 + a.body.h == 36 * TILE
+        })
+    }
+
     #[test]
-    fn a_loose_dino_roars_then_charges_and_the_power_calms_it() {
+    fn a_loose_dino_roars_then_charges_and_the_power_sends_it_home() {
         let mut w = sol_city_on(140, 35);
         w.god = true;
         let d = w.actors.iter().position(|a| a.kind == ActorKind::Dino && (140..150).contains(&a.home.0.div_euclid(TILE))).unwrap();
@@ -2701,12 +2877,91 @@ mod tests {
         }
         assert!(roared && charged, "the roar is the tell before the charge");
         assert!(w.actors[d].is_threat());
-        let t = sol_city_first(&w, ActorKind::Terminal);
-        w.actors[t].state = state::LIT;
-        w.step(&Input::default());
+        // The breaker, thrown down in the tunnels.
+        w.player = Player::new(Body::standing_on_tile(130, 55, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        assert!(tap(&mut w, keys::UP).contains(Events::POWER));
         let dino = &w.actors[d];
-        assert!(dino.calm() && !dino.is_threat(), "the fences hold it again");
-        assert_eq!((dino.body.x(), dino.body.y()), home, "back home");
+        assert!((dino.body.x() - home.0).abs() <= 2 && dino.body.y() == home.1, "back home");
+        assert!(dino.is_threat() && dino.state != state::LUNGE, "still a dino, ambling again");
+    }
+
+    /// With the power back the paddock's dinos roam their pen, and charge at the wassie
+    /// waiting by the gate beyond its fence, but none gets past the fence or so much as
+    /// touches it.
+    #[test]
+    fn the_live_fences_pen_the_dinos_in_their_paddock() {
+        let mut w = sol_city_powered(204, 35);
+        let fence = zoo_fence(&w, 201);
+        let hp = w.player.hp;
+        let mut span = [(i32::MAX, i32::MIN); 3];
+        let mut charged = false;
+        for _ in 0..900 {
+            w.step(&Input::default());
+            for (n, d) in paddock_dinos(&w).enumerate() {
+                let r = w.actors[d].rect();
+                assert!(r.right() <= fence.x, "a dino got past the fence: {r:?}");
+                span[n] = (span[n].0.min(r.x), span[n].1.max(r.x));
+                charged |= w.actors[d].state == state::LUNGE;
+            }
+        }
+        assert_eq!(paddock_dinos(&w).count(), 3, "three dinos in the paddock");
+        assert!(charged, "they still charge at the wassie");
+        assert!(span.iter().all(|&(lo, hi)| hi - lo >= 16), "every dino roams its pen: {span:?}");
+        assert_eq!(w.player.hp, hp, "and the wassie by the gate is never touched");
+    }
+
+    #[test]
+    fn a_zoo_fence_is_dead_until_the_power_then_shocks_and_throws_back() {
+        // Dead, it is walked through.
+        let mut w = sol_city_on(203, 35);
+        for a in w.actors.iter_mut().filter(|a| a.kind == ActorKind::Dino) {
+            a.alive = false;
+        }
+        let fence = zoo_fence(&w, 201);
+        let hp = w.player.hp;
+        hold(&mut w, keys::LEFT, 40);
+        assert!(w.player.body.rect().right() < fence.x && w.player.hp == hp, "a dead fence is no wall");
+        // Live, it shocks and throws the wassie back out the side it came from.
+        let mut w = sol_city_powered(203, 35);
+        for a in w.actors.iter_mut().filter(|a| a.kind == ActorKind::Dino) {
+            a.alive = false;
+        }
+        let events = hold(&mut w, keys::LEFT, 40);
+        assert!(events.contains(Events::SHOCK), "the current bites");
+        assert!(w.player.hp < hp);
+        assert!(w.player.body.rect().x >= fence.right(), "and nothing gets through");
+    }
+
+    /// With the power back, the hilltop is the dino's pen and the way to the shaft runs
+    /// over it: a hop from the girder up onto the walkway, along it, and off its end
+    /// down the shaft, touching no fence.
+    #[test]
+    fn the_way_over_the_hill_pen_is_safe() {
+        let mut w = sol_city_powered(136, 31);
+        for a in w.actors.iter_mut().filter(|a| a.kind == ActorKind::Drone) {
+            a.alive = false;
+        }
+        let hp = w.player.hp;
+        let mut events = press(&mut w, keys::RIGHT | keys::A, 0, 24);
+        events.insert(hold(&mut w, keys::RIGHT, 200));
+        let r = w.player.body.rect();
+        assert!(r.x > 152 * TILE && r.y > 36 * TILE, "down the shaft: {r:?}");
+        assert!(!events.contains(Events::SHOCK) && w.player.hp == hp);
+    }
+
+    /// The way to the gate runs over the pens: the wassie stands on the walkway over the
+    /// paddock while the dinos below roam, then walks on to its end and drops by the
+    /// gate, and comes to no harm.
+    #[test]
+    fn the_walkway_over_the_paddock_is_safe() {
+        let mut w = sol_city_powered(186, 31);
+        let hp = w.player.hp;
+        hold(&mut w, 0, 300);
+        assert!(w.player.grounded && w.player.body.rect().bottom() == 32 * TILE, "on the walkway");
+        hold(&mut w, keys::RIGHT, 240);
+        assert!(w.player.body.rect().x > 206 * TILE, "on past the gate");
+        assert_eq!(w.player.hp, hp);
     }
 
     #[test]
@@ -3029,6 +3284,34 @@ mod tests {
         w.player = Player::new(Body::standing_on_tile(r.centre_x() / TILE - 1, LAIR_FLOOR, PLAYER_W, PLAYER_H));
         hold(&mut w, 0, 5);
         assert_eq!(w.npc_due, None);
+    }
+
+    /// Smolsnip, the Bitcoin Puppet, CL207, the zookeeper and the rest are friends:
+    /// standing in them costs nothing, whatever state they are in.
+    #[test]
+    fn people_never_hurt_to_touch() {
+        let mut met = 0;
+        for index in 0..crate::levels::ALL.len() as u8 {
+            let people = World::new(index, Difficulty::Normal).people().count();
+            for n in 0..people {
+                let mut w = World::new(index, Difficulty::Normal);
+                let i = (0..w.used).filter(|&i| w.actors[i].kind.is_person()).nth(n).unwrap();
+                // Nothing else around to do harm.
+                w.boss.present = false;
+                for a in w.actors.iter_mut().filter(|a| a.kind.is_enemy()) {
+                    a.alive = false;
+                }
+                let r = w.actors[i].rect();
+                w.player = Player::new(Body::standing_on_tile(r.centre_x().div_euclid(TILE), (r.bottom() - 1).div_euclid(TILE), PLAYER_W, PLAYER_H));
+                w.snap_camera();
+                assert!(w.player.body.rect().overlaps(&r), "level {index}: the wassie stands in {:?}", w.actors[i].kind);
+                let hp = w.player.hp;
+                hold(&mut w, 0, 30);
+                assert_eq!(w.player.hp, hp, "level {index}: touching {:?} hurt", w.actors[i].kind);
+                met += 1;
+            }
+        }
+        assert!(met >= 5, "only {met} people met");
     }
 
     #[test]
@@ -3392,5 +3675,259 @@ mod tests {
             w.step(&Input::default());
             assert!(w.actors[c].rect().right() <= edge, "it stays off the roof");
         }
+    }
+
+    // Satoshi Canyon: town origin at column 150, the mine at column 270 and row 20, the
+    // vault at column 360 and row 60.
+
+    fn satoshi_on(tx: i32, ty: i32) -> World {
+        let mut w = World::new(4, Difficulty::Normal);
+        w.player = Player::new(Body::standing_on_tile(tx, ty, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        w
+    }
+
+    /// The actor of `kind` whose spawn point is nearest tile column `tx`.
+    fn satoshi_actor(w: &World, kind: ActorKind, tx: i32) -> usize {
+        (0..w.placed_actors().len())
+            .filter(|&i| w.actors[i].kind == kind)
+            .min_by_key(|&i| (w.actors[i].rect().centre_x().div_euclid(TILE) - tx).abs())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_puppet_waits_for_its_guards_then_tips_the_wassie_and_opens_the_mine() {
+        // On the jail's shelf, just short of the bricks.
+        let mut w = satoshi_on(250, 17);
+        w.god = true;
+        let h = satoshi_actor(&w, ActorKind::Hostage, 259);
+        assert_eq!(w.guards(&w.actors[h]).count(), 2, "two Bad Cops guard the jail");
+        assert_eq!(w.guarded_hostage(), Some(h));
+        let brick = satoshi_actor(&w, ActorKind::Block(crate::block::BlockLook::Brick), 254);
+        let hp = w.actors[brick].hp;
+        // The cell holds while they stand: bolts only spark off the bricks.
+        w.player.facing = 1;
+        for _ in 0..6 {
+            press(&mut w, keys::B, 0, 12);
+        }
+        assert_eq!(w.actors[brick].hp, hp, "the bricks hold while the guards stand");
+        // The guards go down; now the bricks break.
+        for a in w.actors.iter_mut().filter(|a| a.kind == ActorKind::Cop && (a.home.0.div_euclid(TILE) - 259).abs() < 24) {
+            a.alive = false;
+            a.killed = true;
+        }
+        assert_eq!(w.guarded_hostage(), None);
+        for _ in 0..30 {
+            press(&mut w, keys::B, 0, 12);
+        }
+        assert!(
+            w.actors.iter().filter(|a| a.kind == ActorKind::Block(crate::block::BlockLook::Brick)).all(|a| !a.alive),
+            "all three bricks shot apart"
+        );
+        // Up to the Puppet: it speaks up, is freed and tips the wassie.
+        let coins = w.coins;
+        let target = w.actors[h].rect().centre_x() - 20;
+        for _ in 0..240 {
+            if w.npc_due.is_some() || w.player.body.rect().centre_x() >= target {
+                break;
+            }
+            w.step(&Input::from_keys(keys::RIGHT, keys::RIGHT));
+        }
+        for _ in 0..30 {
+            if w.npc_due.is_some() {
+                break;
+            }
+            w.step(&Input::default());
+        }
+        let n = w.npc_due.take().expect("the Puppet speaks up");
+        assert_eq!(w.people().nth(n as usize).unwrap().kind, ActorKind::Hostage);
+        assert!(w.freed() && w.coins == coins + HOSTAGE_TIP);
+        assert_eq!(w.level.npcs[n as usize][0].speaker, crate::talk::Speaker::Puppet);
+        assert!(w.heard_out(n, &mut Events::default()), "a freed hostage saves the run");
+        // Down in the lane, the mine's gate stands open.
+        let gate = satoshi_actor(&w, ActorKind::Gate, 266);
+        w.player = Player::new(Body::standing_on_tile(260, 33, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        hold(&mut w, 0, 2);
+        assert_eq!(w.actors[gate].state, state::LIT, "the gate opens");
+        assert!(w.taken().contains(h) && w.taken().contains(gate), "and a saved run keeps them so");
+    }
+
+    #[test]
+    fn the_mine_gate_holds_until_the_puppet_is_free() {
+        let mut w = satoshi_on(258, 33);
+        hold(&mut w, keys::RIGHT, 120);
+        let gate = w.actors[satoshi_actor(&w, ActorKind::Gate, 266)].rect();
+        assert!(w.player.body.rect().right() <= gate.x, "shut: the wassie can't get past");
+    }
+
+    #[test]
+    fn a_stalactite_shakes_then_drops_on_the_wassie_and_is_back_after_a_respawn() {
+        // In the adit, right under the first stalactite.
+        let s0 = satoshi_actor(&World::new(4, Difficulty::Normal), ActorKind::Stalactite, 285);
+        let mut w = World::new(4, Difficulty::Normal);
+        let r = w.actors[s0].rect();
+        w.player = Player::new(Body::standing_on_tile(r.centre_x().div_euclid(TILE), 33, PLAYER_W, PLAYER_H));
+        w.snap_camera();
+        assert!(r.y.rem_euclid(TILE) == 0 && w.level.tile(r.centre_x().div_euclid(TILE), r.y.div_euclid(TILE) - 1) == crate::Tile::Solid, "it hangs from the rock");
+        let hp = w.player.hp;
+        let (mut told, mut fell) = (None, None);
+        for frame in 0..120 {
+            w.step(&Input::default());
+            let a = &w.actors[s0];
+            if a.state == state::AIM && told.is_none() {
+                told = Some(frame);
+            }
+            if a.state == state::LUNGE && fell.is_none() {
+                fell = Some(frame);
+            }
+            if !a.alive {
+                break;
+            }
+        }
+        let (told, fell) = (told.expect("it shakes"), fell.expect("then drops"));
+        assert!(fell - told >= crate::enemy::STALACTITE_TELL_FRAMES as i32 - 1, "the tell comes first");
+        assert!(!w.actors[s0].alive && w.player.hp < hp, "it came down on the wassie and shattered");
+        assert!(!w.actors[s0].killed);
+        w.respawn(&mut Events::default());
+        let a = &w.actors[s0];
+        assert!(a.alive && a.state == state::IDLE && a.rect().y == r.y, "the trap is set again");
+    }
+
+    #[test]
+    fn a_shot_knocks_a_stalactite_down_for_good() {
+        let mut w = satoshi_on(281, 33);
+        let s0 = satoshi_actor(&w, ActorKind::Stalactite, 285);
+        w.actors[s0].awake = true;
+        let r = w.actors[s0].rect();
+        shot::spawn(&mut w.shots, ShotKind::Bolt, r.centre_x(), r.centre_y(), 0, -4 * FX);
+        let mut events = Events::default();
+        w.collide(&mut events);
+        assert!(events.contains(Events::ENEMY_DOWN) && w.actors[s0].killed);
+    }
+
+    #[test]
+    fn a_mine_cart_rattles_then_barrels_at_the_wassie_and_smashes_into_the_ore() {
+        // In the middle gallery, east of the parked cart.
+        let mut w = satoshi_on(297, 53);
+        w.god = true;
+        let c = satoshi_actor(&w, ActorKind::Cart, 283);
+        let home = w.actors[c].body.x();
+        let (mut told, mut rolled) = (None, None);
+        for frame in 0..300 {
+            w.step(&Input::default());
+            let a = &w.actors[c];
+            if a.state == state::AIM && told.is_none() {
+                told = Some(frame);
+                assert_eq!(a.facing, 1, "it turns toward the wassie");
+            }
+            if a.state == state::LUNGE && rolled.is_none() {
+                rolled = Some(frame);
+            }
+            if !a.alive {
+                break;
+            }
+        }
+        let (told, rolled) = (told.expect("it rattles"), rolled.expect("then rolls"));
+        assert!(rolled - told >= crate::enemy::CART_TELL_FRAMES as i32 - 1);
+        let a = &w.actors[c];
+        assert!(!a.alive && !a.killed && a.body.x() > home + 64, "smashed into the wall of ore, east of where it stood");
+        assert!(a.rect().h < crate::player::JUMP_APEX, "low enough to jump");
+    }
+
+    /// In THE INSCRIBER's vault, the fight on.
+    fn inscriber_fight() -> World {
+        let mut w = satoshi_on(366, 75);
+        w.god = true;
+        let events = hold(&mut w, 0, 2);
+        assert!(w.arena && events.contains(Events::BOSS_START), "the arena closes");
+        assert_eq!(w.boss.kind, crate::level::BossKind::Inscriber);
+        w
+    }
+
+    #[test]
+    fn the_inscriber_gazes_lasers_inscribes_and_slams_its_pickaxe() {
+        let mut w = inscriber_fight();
+        let mut seen = [false; 5];
+        let (mut laser, mut sats, mut waves) = (false, false, false);
+        let floor = w.boss.rect().bottom();
+        for _ in 0..2400 {
+            let before = w.boss.state;
+            let events = w.step(&Input::default());
+            for s in w.shots.iter().filter(|s| s.active) {
+                match s.kind {
+                    ShotKind::EyeLaser => {
+                        laser = true;
+                        let r = s.rect();
+                        assert!(r.bottom() <= floor && floor - r.y < crate::player::JUMP_APEX / 2, "along the floor, low enough to jump");
+                    }
+                    ShotKind::Sat => sats = true,
+                    ShotKind::Shockwave => waves = true,
+                    _ => {}
+                }
+            }
+            if events.contains(Events::ZAP) {
+                assert_eq!(before, BossState::Laser, "the beam comes out of the Laser Eyes");
+            }
+            let i = match w.boss.state {
+                BossState::Gaze => 0,
+                BossState::Laser => 1,
+                BossState::Inscribe => 2,
+                BossState::Windup => 3,
+                BossState::Stunned => 4,
+                _ => continue,
+            };
+            seen[i] = true;
+        }
+        assert_eq!(seen, [true; 5], "gaze, laser, inscribe, heave, stuck");
+        assert!(laser && sats && waves);
+    }
+
+    #[test]
+    fn the_inscriber_stuck_takes_double_and_the_halving_halves_its_timers() {
+        let mut w = inscriber_fight();
+        w.boss.state = BossState::Stunned;
+        w.boss.timer = 30;
+        let hp = w.boss.hp;
+        w.boss.damage(1, &mut Events::default());
+        assert_eq!(w.boss.hp, hp - 2, "stuck in the rock, it takes double");
+        // Past half health: the Halving.
+        w.boss.state = BossState::Walk;
+        w.boss.hp = crate::boss::INSCRIBER_HP / 2 + 1;
+        let mut events = Events::default();
+        w.boss.damage(1, &mut events);
+        assert_eq!(w.boss.state, BossState::Overload);
+        assert!(events.contains(Events::SLAM) && !w.boss.vulnerable(), "untouchable while it glitches");
+        let mut zaps = 0;
+        let mut gaze = None;
+        for _ in 0..1600 {
+            let events = w.step(&Input::default());
+            if w.boss.state == BossState::Gaze && gaze.is_none() {
+                gaze = Some(w.boss.timer);
+            }
+            if events.contains(Events::ZAP) {
+                zaps += 1;
+            }
+        }
+        assert!(gaze.unwrap() <= crate::boss::GAZE_FRAMES / 2, "its tell is halved");
+        assert!(zaps >= 2 && zaps % 2 == 0, "the lasers come in pairs: {zaps}");
+    }
+
+    #[test]
+    fn beating_the_inscriber_spills_its_hoard_and_clears_the_level() {
+        let mut w = inscriber_fight();
+        let (diamonds, coins) = (w.diamonds, w.coins);
+        w.boss.state = BossState::Walk;
+        w.boss.hp = 1;
+        // The last bolt, into its chest.
+        let r = w.boss.rect();
+        shot::spawn(&mut w.shots, ShotKind::Bolt, r.centre_x(), r.centre_y(), FX, 0);
+        let mut events = w.step(&Input::default());
+        assert!(events.contains(Events::BOSS_DOWN));
+        for _ in 0..crate::boss::INSCRIBER_DYING_FRAMES + 2 {
+            events.insert(w.step(&Input::default()));
+        }
+        assert!(events.contains(Events::LEVEL_CLEAR) && w.cleared);
+        assert_eq!((w.diamonds, w.coins), (diamonds + HOARD_DIAMONDS, coins + HOARD_COINS));
     }
 }

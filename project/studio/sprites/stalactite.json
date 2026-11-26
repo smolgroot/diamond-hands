@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "name": "stalactite",
+  "image": "generated/sprites/stalactite.png",
+  "frame": {
+    "width": 16,
+    "height": 32
+  },
+  "anchor": {
+    "x": 8,
+    "y": 8
+  },
+  "animations": [
+    {
+      "name": "hang",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 60
+        }
+      ],
+      "loop": true
+    },
+    {
+      "name": "crack",
+      "frames": [
+        {
+          "index": 0,
+          "duration": 3
+        },
+        {
+          "index": 1,
+          "duration": 3
+        }
+      ],
+      "loop": true
+    }
+  ]
+}

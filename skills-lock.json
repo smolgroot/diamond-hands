@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "game-designer": {
+      "source": "PlayableIntelligence/game-creator",
+      "commit": "53676bd2a524989745ce7cbd4128c17e8a20dd3d",
+      "sourceType": "github",
+      "skillPath": "skills/game-designer/SKILL.md",
+      "computedHash": "0e0bf184b568a9f5742670aa9f1bb95255cc07728ae2653b9ec71c840c17a8d1"
+    }
+  }
+}

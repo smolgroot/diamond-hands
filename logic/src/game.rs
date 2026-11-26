@@ -944,8 +944,10 @@ impl Game {
     /// Marks the level cleared, which unlocks the next, and saves. A replay of a cleared
     /// level banks no score and can't set a best.
     /// Marks the level cleared, which unlocks the next, banks the level's diamonds in
-    /// the wallet and saves. A replay of a cleared level banks no score or diamonds and
-    /// can't set a best. Shield parts are kept either way: each can only be found once.
+    /// the wallet and saves. Gold coins found outside the casino go in the purse, for
+    /// the penguin to change at the next visit. A replay of a cleared level banks no
+    /// score, diamonds or coins and can't set a best. Shield parts are kept either way:
+    /// each can only be found once.
     fn finish_level(&mut self, events: &mut Events) {
         self.enter(Scene::LevelClear);
         let index = self.world.level_index;
@@ -958,6 +960,9 @@ impl Game {
         self.parts |= self.world.parts;
         if !self.replay {
             self.wallet = self.wallet.saturating_add(self.world.diamonds);
+            if !self.world.level.coins {
+                self.purse = self.purse.saturating_add(self.world.coins);
+            }
             self.cleared |= 1 << index;
             let next = index + 1;
             self.fresh = levels::MAP
@@ -1107,6 +1112,24 @@ mod tests {
     }
 
     #[test]
+    fn coins_found_outside_the_casino_go_in_the_purse_on_a_clear() {
+        let mut game = at_title();
+        tap(&mut game, keys::START);
+        play_level(&mut game);
+        game.world.coins = 7;
+        game.purse = 3;
+        clear_level(&mut game);
+        assert_eq!(game.purse, 10);
+        assert_eq!(game.files[0].unwrap().purse, 10, "saved with the clear");
+        // A replay keeps none.
+        game.world = new_world(0, game.difficulty);
+        game.replay = true;
+        game.world.coins = 5;
+        clear_level(&mut game);
+        assert_eq!(game.purse, 10);
+    }
+
+    #[test]
     fn clearing_level_one_opens_the_map_with_level_two_unlocked() {
         let mut game = at_title();
         tap(&mut game, keys::START);
@@ -1118,7 +1141,7 @@ mod tests {
         assert_eq!(game.cleared, 0b1);
         use levels::PlaceStatus::*;
         let studio = if cfg!(feature = "studio") { Locked } else { Soon };
-        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, studio, studio]);
+        assert_eq!(levels::MAP.each_ref().map(|p| p.status(game.cleared)), [Cleared, Open, studio, studio, studio]);
         assert_eq!(game.cursor, 1, "the cursor waits on the new place");
         assert_eq!(game.fresh, Some(1));
         assert_eq!(game.map_walk, Some((0, 1)), "the wassie walks the road there");
@@ -1143,9 +1166,10 @@ mod tests {
         tap(&mut game, keys::RIGHT);
         assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY));
         assert_eq!(game.scene, Scene::Map, "level 2 is locked on a new file");
-        tap(&mut game, keys::RIGHT);
-        tap(&mut game, keys::RIGHT);
-        assert_eq!(game.cursor as usize, levels::MAP.len() - 1, "stops at the east edge");
+        for _ in 0..levels::MAP.len() {
+            tap(&mut game, keys::RIGHT);
+        }
+        assert_eq!(game.cursor as usize, levels::MAP.len() - 1, "stops at the last place");
         tap(&mut game, keys::A);
         assert_eq!(game.scene, Scene::Map, "unbuilt places don't start");
 
@@ -1212,9 +1236,17 @@ mod tests {
             assert!(core::ptr::eq(game.world.level, &levels::eth_city::ETH_CITY));
             clear_level(&mut game);
             let file = game.files[0].expect("saved on clear");
+            assert!(!file.complete, "Satoshi Canyon is still to come");
+            assert_eq!(game.fresh, Some(4), "Satoshi Canyon opens");
+            assert_eq!(levels::MAP[4].status(game.cleared), levels::PlaceStatus::Open);
+            tap(&mut game, keys::A);
+            play_level(&mut game);
+            assert!(core::ptr::eq(game.world.level, &levels::satoshi_canyon::SATOSHI_CANYON));
+            clear_level(&mut game);
+            let file = game.files[0].expect("saved on clear");
             assert!(file.complete);
             assert_eq!(file.cleared, levels::ALL_CLEARED);
-            assert_eq!(game.fresh, None, "nothing after Ethereum City yet");
+            assert_eq!(game.fresh, None, "nothing after Satoshi Canyon yet");
         } else {
             assert_eq!(levels::MAP[3].status(game.cleared), levels::PlaceStatus::Upcoming);
             assert!(tap(&mut game, keys::A).contains(Events::MENU_DENY), "the code-drawn ROM can't play it");
