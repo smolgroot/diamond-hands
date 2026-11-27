@@ -8,14 +8,16 @@ straight in. Same script, same pixels.
 
 Sprites (project/generated/sprites/), frames numbered row by row:
 
-- inscriber.png: THE INSCRIBER, the level's boss: a laser-eyed Bitcoin cyborg miner with
-  a pickaxe, who inscribes every sat in the mine. 64x64 frames, facing right, feet on
+- inscriber.png: THE INSCRIBER, the level's boss: a laser-eyed Bitcoin cyborg king with
+  a pickaxe, who inscribes every sat in the mine, after the author's Bitcoin Cyborg mockup
+  (.claude/mockup/bitcoin-cyborg.gif: crown, cyborg mask with green eyes, long beard,
+  red cape, gold pauldron, gunmetal armour, ₿ belt coin, gold pickaxe). 64x64 frames, facing right, feet on
   the bottom row, 8 a row:
     0-1 idle, 2-5 walk, 6-7 gaze (the laser eyes' tell), 8-9 laser, 10-11 inscribe
     (a glowing tablet raised), 12 pickaxe raised, 13 slam, 14 stuck (the pickaxe in the
     rock), 15-16 the Halving (glitching), 17 hit, 18-20 death (kneel, slump, flat)
 - inscriber-portrait.png: its face for the dialogue box, 32x32
-- inscriber-laser.png: the laser raking along the floor, 32x8, 2 frames
+- inscriber-laser.png: the green laser raking along the floor, 32x8, 2 frames
 - sat-glyph.png: an inscribed sat falling from the ceiling, 16x16, 4 frames (spinning)
 - btc-puppet.png: the Bitcoin Puppet, after the author's reference: a brown monkey in a
   green sweater with a pencil and a bunny hand puppet, 32x32: 0-1 idle, 2-3 cheering
@@ -170,9 +172,8 @@ class Canvas:
 
 
 # --------------------------------------------------------------------------------------
-# THE INSCRIBER: gunmetal armour with Bitcoin-orange plates and a ₿ on the chest, a
-# miner's helmet with a headlamp over a visor where two red laser eyes burn, a maroon
-# cape, and a pickaxe with an orange head. The tablet it raises glows inscription cyan.
+# The inscribed sats' palette: Bitcoin orange coins with an inscription-cyan glyph (the
+# first-pass INSCRIBER's palette; the boss itself is now drawn in KING_PALETTE below).
 
 INS_PALETTE = [
     None,
@@ -217,58 +218,149 @@ def bitcoin_b(c, x, y, col, scale=1):
         c.px(x + 1 * scale + sx, y + 6 * scale, col)
 
 
-def pickaxe(c, grip, head, flip=False):
-    """A pickaxe: the handle from `grip` to `head`, and a curved orange head across it."""
+# --------------------------------------------------------------------------------------
+# THE INSCRIBER, after the author's Bitcoin Cyborg mockup (.claude/mockup/bitcoin-cyborg.gif):
+# a bearded king in a gold crown with a red jewel, a dark cyborg mask with two angry
+# green eyes, a long brown beard, a red cape, a gold pauldron with a round stud, dark
+# gunmetal armour banded in lighter grey, a gold belt with a big ₿ coin, and a pickaxe
+# with a gold handle and a gold head tipped in steel. Its laser eyes and the tablet it
+# raises burn the same acid green.
+
+KING_PALETTE = [
+    None,
+    "#140c14",  # 1 outline
+    "#25232e",  # 2 steel dark
+    "#45434f",  # 3 steel
+    "#7d7b8a",  # 4 steel light
+    "#93480a",  # 5 gold dark
+    "#eb9a16",  # 6 gold
+    "#ffd447",  # 7 gold light
+    "#861422",  # 8 cape dark
+    "#dc2f2a",  # 9 cape red, the crown's jewel
+    "#3a2216",  # 10 beard dark
+    "#6c4128",  # 11 beard
+    "#b8714c",  # 12 skin dark
+    "#eaa97c",  # 13 skin
+    "#8cff2e",  # 14 eye green
+    "#f2ffd6",  # 15 white-hot
+]
+K_OUT, K_ST_D, K_ST, K_ST_L, K_GO_D, K_GO, K_GO_L, K_CAPE_D, K_CAPE, K_BEARD_D, K_BEARD, K_SKIN_D, K_SKIN, K_GREEN, K_HOT = range(1, 16)
+KING_MAT = {
+    "steel": (K_ST_D, K_ST, K_ST_L),
+    "gold": (K_GO_D, K_GO, K_GO_L),
+    "cape": (K_CAPE_D, K_CAPE, K_CAPE),
+    "beard": (K_BEARD_D, K_BEARD, K_BEARD),
+    "skin": (K_SKIN_D, K_SKIN, K_SKIN),
+    "mask": (K_OUT, K_ST_D, K_ST),
+}
+
+
+def king_pickaxe(c, grip, head):
+    """A pickaxe: a gold handle from `grip` to `head`, and a curved gold head across it
+    with steel tips."""
     gx, gy = grip
     hx, hy = head
-    c.limb([(gx, gy), (hx, hy)], 3, "wood")
+    c.limb([(gx, gy), (hx, hy)], 3, "gold")
     dx, dy = hx - gx, hy - gy
     n = math.hypot(dx, dy) or 1
     ux, uy = dx / n, dy / n
-    # Across the handle, the two spikes of the head, bent back along it.
     px_, py_ = -uy, ux
-    a = (hx + px_ * 11 - ux * 3, hy + py_ * 11 - uy * 3)
-    b = (hx - px_ * 11 - ux * 3, hy - py_ * 11 - uy * 3)
-    c.limb([a, (hx + ux * 2, hy + uy * 2), b], 4, "orange")
+    a = (hx + px_ * 11 - ux * 4, hy + py_ * 11 - uy * 4)
+    b = (hx - px_ * 11 - ux * 4, hy - py_ * 11 - uy * 4)
+    a2 = (hx + px_ * 7 - ux * 1, hy + py_ * 7 - uy * 1)
+    b2 = (hx - px_ * 7 - ux * 1, hy - py_ * 7 - uy * 1)
+    c.limb([a2, (hx + ux * 2, hy + uy * 2), b2], 4, "gold")
+    c.limb([a, a2], 3, "steel")
+    c.limb([b, b2], 3, "steel")
 
 
-def inscriber_head(c, hx, hy, eyes="lit", s=1.0, tilt=0):
-    """The helmet and visor, facing right, centred on (hx, hy)."""
+def king_crown(c, cx, by, s=1.0):
+    """The crown, its band's bottom-left at (cx, by): five points, a red jewel."""
     S = lambda v: v * s
-    c.ellipse(hx, hy, S(9), S(8.5), "steel")  # helmet dome
-    c.rect(hx - S(9), hy + S(2), hx + S(9), hy + S(9), "steel")  # jaw guard
-    c.ellipse(hx + S(4), hy + S(3), S(6.5), S(3.2), "visor")  # visor
+    w, band, tall = S(16), S(3), S(6)
+    pts = [(cx, by), (cx, by - band - tall)]
+    for i in range(1, 5):
+        x = cx + w * i / 4
+        pts += [(x - w / 8, by - band), (x, by - band - tall)]
+    pts += [(cx + w, by)]
+    c.poly(pts, "gold")
     c.shade()
-    # The helmet's orange stripe and brim.
-    c.line([(hx - S(9), hy - S(1)), (hx + S(9), hy - S(1))], OR, width=max(1, round(S(1.5))))
-    c.line([(hx - S(3), hy - S(8)), (hx - S(3), hy - S(1))], OR_D)
-    # The headlamp on the brow.
-    lx, ly = hx + S(7), hy - S(4)
-    ImageDraw.Draw(c.img).ellipse([lx - S(2), ly - S(2), lx + S(2), ly + S(2)], fill=OR_L, outline=I_OUT)
-    c.px(lx, ly, CHROME)
-    # Laser eyes in the visor.
-    for ex in (hx + S(2), hx + S(7)):
-        ey = hy + S(3 + tilt)
+    c.line([(cx + 1, by - band), (cx + w - 1, by - band)], K_GO_D)
+    for i in range(5):
+        c.px(cx + w * i / 4, by - band - tall + 1, K_GO_L)
+    jx, jy = cx + w / 2, by - band - S(1)
+    ImageDraw.Draw(c.img).ellipse([jx - S(1.5), jy - S(1.5), jx + S(1.5), jy + S(1.5)], fill=K_CAPE, outline=K_CAPE_D)
+    c.px(jx - S(0.5), jy - S(0.5), K_HOT)
+
+
+def king_head(c, hx, hy, eyes="lit", s=1.0, crown=True):
+    """Hair, face, mask, beard and crown, facing right, the face centred on (hx, hy)."""
+    S = lambda v: v * s
+    c.ellipse(hx - S(3), hy + S(1), S(8), S(9), "beard")  # hair, wild at the back
+    c.ellipse(hx + S(2), hy, S(7), S(7), "skin")  # face
+    # The long beard: from the cheeks, under the nose, down to a point on the chest.
+    c.poly([(hx - S(7), hy - S(1)), (hx - S(1), hy + S(1)), (hx + S(3), hy + S(3)), (hx + S(9), hy + S(2)),
+            (hx + S(9), hy + S(8)), (hx + S(6), hy + S(14)), (hx + S(2), hy + S(19)),
+            (hx - S(2), hy + S(14)), (hx - S(7), hy + S(9))], "beard")
+    c.rect(hx - S(3), hy - S(4), hx + S(9), hy - S(1), "mask")  # the cyborg mask
+    c.shade()
+    d = ImageDraw.Draw(c.img)
+    # Strands in the beard.
+    for k, x in enumerate((hx - S(4), hx - S(1), hx + S(2), hx + S(5))):
+        y0 = hy + S(5 + k % 2)
+        d.line([(x, y0), (x + S(0.5), y0 + S(5 + k % 3))], fill=K_BEARD_D)
+    # A grim mouth under the moustache, its corners down.
+    my = hy + S(5)
+    d.line([(hx + S(4), my), (hx + S(7), my)], fill=K_OUT)
+    c.px(hx + S(3), my + 1, K_OUT)
+    c.px(hx + S(8), my + 1, K_OUT)
+    # The nose over the moustache.
+    c.px(hx + S(8), hy + S(1), K_SKIN_D)
+    c.px(hx + S(9), hy, K_SKIN)
+    # Angry eyes in the mask, 3x2, slanted down to the middle.
+    ew = max(3, round(S(3)))
+    for ex, inner_right in ((hx + S(0.5), True), (hx + S(5), False)):
+        ex, ey = round(ex), round(hy - S(3))
         if eyes == "dead":
-            c.px(ex, ey, ST)
+            for dx in range(ew):
+                c.px(ex + dx, ey + 1, K_ST_L)
             continue
-        c.px(ex, ey, RED)
-        c.px(ex + 1, ey, PINK if eyes in ("glow", "fire") else RED)
-        if eyes in ("glow", "fire"):
-            c.px(ex, ey - 1, RED)
-            c.px(ex, ey + 1, RED)
-            c.px(ex + 1, ey, CHROME)
-    # Rivets on the jaw guard.
-    c.px(hx - S(6), hy + S(6), ST_L)
-    c.px(hx - S(2), hy + S(7), ST_L)
+        hot = eyes in ("glow", "fire")
+        for dx in range(ew):
+            c.px(ex + dx, ey, K_GREEN)
+            c.px(ex + dx, ey + 1, K_GREEN)
+        # The slant: the outer top corner cut, the inner corner a pixel lower.
+        c.px(ex if inner_right else ex + ew - 1, ey, K_ST_D)
+        c.px(ex + ew - 1 if inner_right else ex, ey + 2, K_GREEN)
+        c.px(ex + ew // 2, ey + 1, K_HOT if hot else K_GREEN)
+        if eyes == "fire":
+            c.px(ex + ew // 2, ey - 1, K_GREEN)
+    if crown:
+        king_crown(c, hx - S(6), hy - S(4.5), s)
+
+
+def bands(c, points, width, col):
+    """Dark rings across a limb at the middle of each of its segments."""
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        n = math.hypot(x1 - x0, y1 - y0) or 1
+        px_, py_ = -(y1 - y0) / n, (x1 - x0) / n
+        r = width / 2 - 0.5
+        c.line([(mx - px_ * r, my - py_ * r), (mx + px_ * r, my + py_ * r)], col)
 
 
 def inscriber(pose):
-    c = Canvas(64, 64, INS_MAT, I_OUT)
+    c = Canvas(64, 64, KING_MAT, K_OUT)
     p = pose
-    # Back to front: cape, far arm and leg, torso, near leg, head, near arm and pickaxe.
+    # Back to front: cape, far arm and leg, torso, near leg, head, pauldron, near arm
+    # and pickaxe.
     if p.get("cape"):
         c.poly(p["cape"], "cape")
+        c.shade()
+        # Folds down the cape.
+        (x0, y0), (x1, _), (x2, y2), (x3, y3) = p["cape"]
+        for t in (0.35, 0.65):
+            c.line([(x0 + (x1 - x0) * t, y0 + 3), (x3 + (x2 - x3) * t, y3 - 2)], K_CAPE_D)
     c.limb(p["far_arm"], 7, "steel")
     if p.get("tablet"):
         tx, ty = p["tablet"]
@@ -276,106 +368,119 @@ def inscriber(pose):
     c.limb(p["far_leg"], 8, "steel")
     tx, ty, rx, ry = p["torso"]
     c.ellipse(tx, ty, rx, ry, "steel")
-    c.ellipse(tx + 3, ty + 1, rx - 5, ry - 4, "orange")  # chest plate
     c.limb(p["near_leg"], 8, "steel")
     fx, fy = p["near_leg"][-1]
-    c.rect(fx - 4, fy - 1, fx + 6, fy + 1, "orange")  # boot
+    c.rect(fx - 4, fy - 1, fx + 6, fy + 1, "steel")  # boots
     bx, by = p["far_leg"][-1]
     c.rect(bx - 4, by - 1, bx + 5, by + 1, "steel")
     c.shade()
-    bitcoin_b(c, tx + 1, ty - 3, CHROME)
-    hx, hy = p["head"]
-    inscriber_head(c, hx, hy, eyes=p.get("eyes", "lit"), tilt=p.get("tilt", 0))
-    # Shoulder pad, with the mark of inscription #0 on it: a ring.
-    sx, sy = p["shoulder"]
-    c.ellipse(sx, sy, 6, 5, "orange")
+    for limb in ("far_arm", "far_leg", "near_leg"):
+        bands(c, p[limb], 7, K_ST_D)
+    # The gold belt and its ₿ coin.
+    belt = ty + ry // 2
+    c.rect(tx - rx + 2, belt - 1, tx + rx - 2, belt + 1, "gold")
+    c.ellipse(tx + 3, belt, 5, 5, "gold")
     c.shade()
-    ImageDraw.Draw(c.img).ellipse([sx - 2, sy - 2, sx + 2, sy + 2], outline=OR_D)
+    bitcoin_b(c, tx + 2, belt - 3, K_GO_D)
+    hx, hy = p["head"]
+    king_head(c, hx, hy, eyes=p.get("eyes", "lit"), s=1.15, crown=p.get("crown", True))
+    # The big gold pauldron on its back shoulder, a stud in the middle.
+    sx, sy = p["shoulder"]
+    c.poly([(sx - 8, sy - 2), (sx - 2, sy - 6), (sx + 5, sy - 4), (sx + 4, sy + 3), (sx - 5, sy + 5)], "gold")
+    c.ellipse(sx, sy - 0.5, 2, 2, "gold")
+    c.shade()
     if p.get("pick"):
-        pickaxe(c, *p["pick"])
+        king_pickaxe(c, *p["pick"])
     c.limb(p["near_arm"], 7, "steel")
+    c.shade()
+    bands(c, p["near_arm"], 7, K_ST_D)
     nx, ny = p["near_arm"][-1]
-    c.ellipse(nx, ny, 3.5, 3.5, "orange")  # gauntlet
+    c.ellipse(nx, ny, 3.5, 3.5, "steel")  # fist
     c.shade()
     c.outline()
     if p.get("tablet"):
-        # The tablet's face: a glyph in inscription cyan.
+        # The tablet's face: a glyph burning green.
         tx, ty = p["tablet"]
         glow = p.get("glow", 0)
         for gx, gy in [(-2, -4), (0, -4), (2, -4), (-2, -2), (2, -2), (-2, 0), (0, 0), (-2, 2), (0, 2), (2, 2)]:
-            c.px(tx + gx, ty + gy, CYAN)
+            c.px(tx + gx, ty + gy, K_GREEN)
         if glow:
             for ang in range(0, 360, 45):
                 r = 9 + glow
-                c.px(tx + r * math.cos(math.radians(ang)), ty + r * math.sin(math.radians(ang)), CYAN)
+                c.px(tx + r * math.cos(math.radians(ang)), ty + r * math.sin(math.radians(ang)), K_GREEN)
+    if p.get("fallen_crown"):
+        x, y = p["fallen_crown"]
+        king_crown(c, x, y)
+        c.outline()
     for x0, y0, x1, y1 in p.get("beams", []):
-        # Laser eyes: red lines with a pink core, out to the floor.
-        c.line([(x0, y0), (x1, y1)], RED, width=3)
-        c.line([(x0, y0), (x1, y1)], PINK, width=1)
+        # Laser eyes: green lines with a white-hot core, out to the floor.
+        c.line([(x0, y0), (x1, y1)], K_GREEN, width=3)
+        c.line([(x0, y0), (x1, y1)], K_HOT, width=1)
     for x, y in p.get("sparks", []):
         for dx, dy in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]:
-            c.px(x + dx, y + dy, OR_L if (dx + dy) % 2 else CHROME)
+            c.px(x + dx, y + dy, K_GO_L if (dx + dy) % 2 else K_HOT)
     return c.img
 
 
 def inscriber_frames():
-    def standing(breath=0, eyes="lit", head=(39, 15), stride=0, cape=True):
+    def standing(breath=0, eyes="lit", head=(40, 18), stride=0, cape=True):
         b = breath
         f = {
-            "far_arm": [(26, 26 + b), (20, 36), (22, 45)],
-            "far_leg": [(27, 44), (25 - stride, 53), (25 - stride, 61)],
-            "torso": (31, 33 + b, 12, 12),
-            "near_leg": [(34, 45), (35 + stride, 53), (35 + stride, 61)],
+            "far_arm": [(25, 29 + b), (19, 38), (21, 46)],
+            "far_leg": [(27, 46), (25 - stride, 54), (25 - stride, 61)],
+            "torso": (31, 36 + b, 12, 11),
+            "near_leg": [(34, 46), (35 + stride, 54), (35 + stride, 61)],
             "head": (head[0], head[1] + b),
-            "shoulder": (37, 25 + b),
-            "near_arm": [(38, 27 + b), (44, 35), (47, 41)],
-            "pick": ((47, 41), (55, 57)),
+            "shoulder": (25, 28 + b),
+            "near_arm": [(37, 30 + b), (44, 37), (48, 42)],
+            "pick": ((48, 42), (56, 57)),
             "eyes": eyes,
         }
         if cape:
-            f["cape"] = [(22, 22 + b), (33, 22 + b), (24, 52), (14, 56)]
+            f["cape"] = [(20, 24 + b), (32, 24 + b), (24, 56), (9, 59)]
         return f
 
     frames = [standing(0), standing(1)]  # 0-1 idle
     for s in (-3, -1, 3, 1):  # 2-5 walk
         f = standing(0, stride=s)
-        f["far_arm"] = [(26, 26), (20 + s, 36), (22 + s, 45)]
+        f["far_arm"] = [(25, 29), (19 + s, 38), (21 + s, 46)]
+        f["cape"] = [(20, 24), (32, 24), (24, 56), (9 - abs(s), 58 + (s > 0))]
         frames.append(f)
     for glow in (0, 1):  # 6-7 gaze: head down a little, eyes building
-        f = standing(0, eyes="glow", head=(40, 17))
+        f = standing(0, eyes="glow", head=(41, 20))
         if glow:
-            f["sparks"] = [(48, 14), (51, 22)]
+            f["sparks"] = [(50, 14), (53, 21)]
         frames.append(f)
-    for k in (0, 1):  # 8-9 laser: beams from the visor to the floor ahead
-        f = standing(0, eyes="fire", head=(41, 18))
-        f["beams"] = [(47, 21, 63, 58 + k), (48, 21, 63, 61)]
+    for k in (0, 1):  # 8-9 laser: beams from the eyes to the floor ahead
+        f = standing(0, eyes="fire", head=(42, 21))
+        f["beams"] = [(44, 19, 63, 58 + k), (48, 19, 63, 61)]
         frames.append(f)
     for glow in (0, 2):  # 10-11 inscribe: the tablet raised high, glowing
         f = standing(0, eyes="glow")
-        f["far_arm"] = [(26, 26), (22, 16), (24, 7)]
-        f["tablet"] = (24, 8)
+        f["far_arm"] = [(25, 29), (21, 19), (21, 10)]
+        f["tablet"] = (19, 10)
         f["glow"] = glow
         frames.append(f)
     # 12 pickaxe raised over its head, behind it.
-    f = standing(0, eyes="glow", head=(38, 15))
-    f["near_arm"] = [(38, 27), (36, 16), (32, 8)]
-    f["pick"] = ((32, 9), (14, 6))
+    f = standing(0, eyes="glow", head=(39, 19))
+    f["near_arm"] = [(37, 30), (36, 20), (31, 12)]
+    f["pick"] = ((31, 13), (12, 12))
     frames.append(f)
     # 13 slam: the pickaxe swung down into the floor ahead.
-    f = standing(0, eyes="fire", head=(42, 19))
-    f["torso"] = (33, 35, 12, 11)
-    f["near_arm"] = [(40, 29), (49, 37), (54, 44)]
-    f["pick"] = ((53, 44), (58, 58))
+    f = standing(0, eyes="fire", head=(43, 22))
+    f["torso"] = (33, 38, 12, 10)
+    f["near_arm"] = [(40, 32), (49, 39), (54, 45)]
+    f["pick"] = ((53, 45), (58, 58))
     f["sparks"] = [(56, 61), (61, 59), (51, 60)]
     frames.append(f)
     # 14 stuck: bent over, both hands on the handle, the head buried.
-    f = standing(0, eyes="lit", head=(43, 24))
-    f["torso"] = (33, 38, 12, 10)
-    f["far_arm"] = [(28, 32), (40, 40), (50, 46)]
-    f["near_arm"] = [(40, 33), (48, 40), (52, 45)]
-    f["pick"] = ((51, 45), (57, 60))
-    f["shoulder"] = (38, 31)
-    f["cape"] = [(23, 28), (33, 28), (22, 54), (12, 56)]
+    f = standing(0, eyes="lit", head=(43, 27))
+    f["torso"] = (33, 40, 12, 9)
+    f["far_arm"] = [(28, 34), (40, 41), (50, 46)]
+    f["near_arm"] = [(40, 35), (48, 41), (52, 46)]
+    f["pick"] = ((51, 46), (57, 60))
+    f["shoulder"] = (27, 33)
+    f["cape"] = [(21, 30), (33, 30), (22, 56), (8, 58)]
     f["sparks"] = [(58, 62), (54, 58)]
     frames.append(f)
     # 15-16 the Halving: glitching, its top half sliding off its bottom half.
@@ -384,42 +489,44 @@ def inscriber_frames():
         f["sparks"] = [(20, 20), (46, 30)] if k else [(28, 10), (50, 24)]
         frames.append(("halving", f, k))
     # 17 hit: rocked back.
-    f = standing(0, eyes="glow", head=(36, 15))
-    f["torso"] = (29, 33, 12, 12)
+    f = standing(0, eyes="glow", head=(37, 18))
+    f["torso"] = (29, 36, 12, 11)
     frames.append(f)
-    # 18-20 death: to one knee, sparking; slumped; flat with the pickaxe beside.
-    f = standing(0, eyes="lit", head=(40, 26))
-    f["torso"] = (31, 42, 12, 11)
-    f["shoulder"] = (37, 34)
-    f["far_leg"] = [(27, 52), (20, 56), (18, 61)]
-    f["near_leg"] = [(34, 53), (42, 57), (44, 61)]
-    f["far_arm"] = [(26, 36), (22, 46), (24, 55)]
-    f["near_arm"] = [(38, 37), (44, 45), (47, 51)]
-    f["pick"] = ((47, 51), (58, 40))
-    f["cape"] = [(22, 32), (33, 32), (22, 58), (12, 60)]
-    f["sparks"] = [(30, 22), (46, 18)]
+    # 18-20 death: to one knee, sparking; slumped, the crown slipping; flat, the crown
+    # rolled off beside it.
+    f = standing(0, eyes="lit", head=(40, 29))
+    f["torso"] = (31, 44, 12, 10)
+    f["shoulder"] = (25, 37)
+    f["far_leg"] = [(27, 53), (20, 57), (18, 61)]
+    f["near_leg"] = [(34, 54), (42, 57), (44, 61)]
+    f["far_arm"] = [(25, 38), (21, 47), (23, 55)]
+    f["near_arm"] = [(37, 39), (44, 46), (47, 52)]
+    f["pick"] = ((47, 52), (58, 41))
+    f["cape"] = [(20, 34), (32, 34), (22, 59), (9, 61)]
+    f["sparks"] = [(30, 24), (49, 20)]
     frames.append(f)
-    f = standing(0, eyes="dead", head=(46, 40))
-    f["torso"] = (33, 50, 13, 9)
-    f["shoulder"] = (39, 45)
+    f = standing(0, eyes="dead", head=(45, 42))
+    f["torso"] = (33, 51, 13, 8)
+    f["shoulder"] = (27, 47)
     f["far_leg"] = [(25, 56), (16, 59), (10, 61)]
     f["near_leg"] = [(30, 57), (22, 60), (16, 61)]
-    f["far_arm"] = [(28, 46), (24, 54), (26, 61)]
-    f["near_arm"] = [(40, 48), (48, 54), (52, 60)]
-    f["pick"] = ((52, 60), (60, 46))
-    f["cape"] = [(22, 44), (34, 44), (14, 61), (6, 61)]
+    f["far_arm"] = [(28, 48), (24, 55), (26, 61)]
+    f["near_arm"] = [(40, 49), (48, 55), (52, 60)]
+    f["pick"] = ((52, 60), (60, 47))
+    f["cape"] = [(20, 45), (34, 45), (14, 61), (4, 61)]
     frames.append(f)
     f = {
-        "far_arm": [(20, 55), (12, 58), (6, 61)],
+        "far_arm": [(22, 56), (14, 59), (8, 61)],
         "far_leg": [(40, 57), (50, 59), (57, 61)],
-        "torso": (30, 56, 14, 6),
+        "torso": (30, 57, 14, 5),
         "near_leg": [(38, 58), (48, 60), (55, 61)],
-        "head": (12, 52),
-        "shoulder": (22, 54),
-        "near_arm": [(26, 57), (34, 60), (40, 61)],
-        "pick": ((44, 61), (52, 50)),
+        "head": (14, 52),
+        "shoulder": (24, 54),
+        "near_arm": [(28, 58), (36, 60), (42, 61)],
+        "pick": ((46, 61), (54, 50)),
         "eyes": "dead",
-        "tilt": 0,
+        "crown": False,
+        "fallen_crown": (1, 62),
     }
     frames.append(f)
     assert len(frames) == 21, len(frames)
@@ -431,14 +538,14 @@ def inscriber_frames():
             # The Halving: the top half slides one way, then the other, with a gap.
             shift = 3 if k == 0 else -3
             img = src.copy()
-            img.paste(0, (0, 0, 64, 36))
-            img.paste(src.crop((0, 1, 64, 36)), (shift, 0))
+            img.paste(0, (0, 0, 64, 38))
+            img.paste(src.crop((0, 1, 64, 38)), (shift, 0))
             # Scanlines through it.
             px = img.load()
             for y in range(4 + k * 2, 60, 6):
                 for x in range(64):
                     if px[x, y]:
-                        px[x, y] = CYAN if (y // 6) % 2 else ST_L
+                        px[x, y] = K_GREEN if (y // 6) % 2 else K_ST_L
             images.append(img)
         else:
             images.append(inscriber(f))
@@ -446,32 +553,33 @@ def inscriber_frames():
 
 
 def inscriber_portrait():
-    c = Canvas(32, 32, INS_MAT, I_OUT)
-    c.ellipse(15, 33, 16, 8, "steel")
-    c.ellipse(26, 28, 6, 5, "orange")
+    c = Canvas(32, 32, KING_MAT, K_OUT)
+    c.ellipse(8, 33, 10, 7, "cape")
+    c.ellipse(16, 34, 13, 7, "steel")
+    c.poly([(1, 27), (6, 23), (12, 25), (10, 31), (1, 32)], "gold")  # the pauldron
     c.shade()
-    inscriber_head(c, 13, 13, eyes="glow", s=1.3)
+    king_head(c, 13, 17, eyes="glow", s=1.2)
     c.shade()
     c.outline()
-    return palette_image(c.img, INS_PALETTE)
+    return palette_image(c.img, KING_PALETTE)
 
 
 def laser_frames():
-    """The laser raking along the floor: a hot core in a red beam, sparks off its head."""
+    """The laser raking along the floor: a white-hot core in a green beam, sparks off its head."""
     frames = []
     for k in range(2):
         img = Image.new("L", (32, 8), 0)
         d = ImageDraw.Draw(img)
-        d.rectangle([0, 2, 31, 5], fill=RED)
-        d.rectangle([2, 3, 31, 4], fill=PINK)
-        d.line([(8 + 4 * k, 3), (31, 3)], fill=CHROME)
+        d.rectangle([0, 2, 31, 5], fill=K_GREEN)
+        d.rectangle([2, 3, 31, 4], fill=K_HOT)
+        d.line([(8 + 4 * k, 3), (31, 3)], fill=K_HOT)
         # The head flares; the tail breaks up.
-        d.rectangle([28, 1, 31, 6], fill=PINK)
-        d.point([(30, 0), (31, 7), (29, 7) if k else (30, 7)], fill=RED)
+        d.rectangle([28, 1, 31, 6], fill=K_HOT)
+        d.point([(30, 0), (31, 7), (29, 7) if k else (30, 7)], fill=K_GREEN)
         for x in range(0, 8, 2):
             img.putpixel((x + k, 2), 0)
             img.putpixel((x + 1 - k, 5), 0)
-        frames.append(palette_image(img, INS_PALETTE))
+        frames.append(palette_image(img, KING_PALETTE))
     return frames
 
 
@@ -884,7 +992,7 @@ def mine_back():
 def main():
     SPRITES.mkdir(parents=True, exist_ok=True)
     BACKGROUNDS.mkdir(parents=True, exist_ok=True)
-    frames = [palette_image(f, INS_PALETTE) for f in inscriber_frames()]
+    frames = [palette_image(f, KING_PALETTE) for f in inscriber_frames()]
     sheet(frames, 64, 64, 8).save(SPRITES / "inscriber.png")
     inscriber_portrait().save(SPRITES / "inscriber-portrait.png")
     sheet(laser_frames(), 32, 8, 2).save(SPRITES / "inscriber-laser.png")

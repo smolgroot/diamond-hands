@@ -161,7 +161,7 @@ with a boss.
   the file's purse when the level is cleared, for the penguin to change on a visit to
   the Trenches.
 - **THE INSCRIBER:** Satoshi Canyon's boss, in the vault at the bottom of the mines. It
-  strides after you and works through the **Laser Eyes** (its visor glows, then a beam
+  strides after you and works through the **Laser Eyes** (its eyes glow, then a green beam
   rakes along the floor: jump it), **Inscribe** (it raises a glowing tablet and inscribed
   sats fall from the ceiling around you) and the **Pickaxe Slam** (shockwaves both ways;
   then its pickaxe is stuck in the rock and it takes double damage). At half health
@@ -434,7 +434,8 @@ every area of the Trenches, SAM's attacks and the exchange (`t2-*`).
   dead 0, live 1; the author's `fence-8x8` lightning crackles around it while live).
 - Satoshi Canyon's art is a first pass too, drawn by `tools/satoshi-canyon/draw-art.py`
   into `project/generated/` (the tilesets by `tileset_generate`), to redraw:
-  `sprites/inscriber.png` (64x64, 21 frames: idle 0-1, walk 2-5, gaze 6-7, laser 8-9,
+  `sprites/inscriber.png` (64x64, after the author's Bitcoin Cyborg mockup in
+  `.claude/mockup/bitcoin-cyborg.gif`, 21 frames: idle 0-1, walk 2-5, gaze 6-7, laser 8-9,
   inscribe 10-11, pickaxe raised 12, slam 13, stuck 14, Halving 15-16, hit 17, death
   18-20), `sprites/inscriber-portrait.png` (32x32), `sprites/inscriber-laser.png` (32x8,
   2), `sprites/sat-glyph.png` (16x16, 4), `sprites/btc-puppet.png` (32x32: idle 0-1,
