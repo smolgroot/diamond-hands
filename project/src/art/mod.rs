@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use agb::display::{
         Palette16, Rgb15,
-        object::{Sprite, SpriteVram},
+        object::{DynamicSprite16, Size, Sprite, SpriteVram},
         tiled::{DynamicTile16, RegularBackground, TileEffect},
     };
 
@@ -272,6 +272,29 @@ pub fn lines_to_vblank() -> i32 {
 pub fn has_spare_time() -> bool {
     const RESERVED_LINES: i32 = 96;
     lines_to_vblank() > RESERVED_LINES
+}
+
+/// Empties agb's cache of static sprites, freeing every frame no object still holds.
+///
+/// agb keeps each static frame it has drawn in sprite VRAM and only throws the unused
+/// ones out when an allocation fails. A drawer built over that cache puts its sprites
+/// in the gaps between the cached frames. Once those are freed, the drawer's own
+/// sprites are left spread over VRAM, too scattered for a 64x64 one to fit. A boss
+/// fight leaves 64x64 frames (BORED KONG's, the plasma shield's) all over VRAM.
+///
+/// agb has no public call for this. A dynamic sprite that doesn't fit makes agb empty
+/// the cache before it retries, so 64x64 blocks are allocated until VRAM is full, and
+/// then dropped.
+pub fn flush_sprite_cache() {
+    let block = DynamicSprite16::new(Size::S64x64);
+    // 32 KB of sprite VRAM is 16 of these: the bound only guards against a surprise.
+    let mut held = Vec::with_capacity(16);
+    while held.len() < 32 {
+        match block.try_to_vram(&ui::DIALOG_PALETTE) {
+            Ok(sprite) => held.push(sprite),
+            Err(_) => break,
+        }
+    }
 }
 
 /// Euclidean `n / 3` and `n % 3`. The ARM7 has no divide instruction, and terrain asks

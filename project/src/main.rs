@@ -44,6 +44,8 @@ fn main(mut gba: agb::Gba) -> ! {
     let mut gfx = gba.graphics.get();
     let mut splash = Some(boxed(|| splash::Splash::new(&mut gfx)));
     let mut drawer: Option<Drawer> = None;
+    // Blank frames still to go out after a drawer is dropped, before the next is built.
+    let mut settling = 0u8;
     // The studio's map, read once: Sol City's screen draws from it.
     let studio_world: &'static _ = Box::leak(boxed(data::world));
     // The tracker needs the mixer at 32768 Hz. The mixer comes before `Sfx`, which
@@ -76,13 +78,23 @@ fn main(mut gba: agb::Gba) -> ! {
 
         // A drawer is built once the splash's tiles are gone, and swapped when the game
         // moves between a level painted in the studio and everything else: no two of
-        // them fit in VRAM at once. The frame that drops one goes out blank; committing
-        // it frees the tiles, and the next frame builds the other. That frame runs long,
-        // which is fine on a level card, a clear screen or the pause menu.
+        // them fit in VRAM at once. The frame that drops one goes out blank, and so does
+        // the next: committing the first frees the tiles, but agb holds on to the sprites
+        // of the last two frames shown, so the old drawer's sprites (a boss's 64x64
+        // frames, the plasma shield's bubble) stay in VRAM until the second.
+        // Building the renderer over them ran out of sprite VRAM when pausing in BORED
+        // KONG's fight. The frame after builds the other drawer. It runs long, which is
+        // fine on a level card, a clear screen or the pause menu.
         let want = Drawer::wanted(&game);
         if splash.is_none() && drawer.as_ref().is_some_and(|d| d.kind() != want) {
             drawer = None;
+            settling = 1;
+        } else if splash.is_none() && drawer.is_none() && settling > 0 {
+            settling -= 1;
         } else if splash.is_none() && drawer.is_none() {
+            // Every frame the old drawer showed is still cached in sprite VRAM: clear
+            // them out so the new one's sprites pack together instead of filling gaps.
+            art::flush_sprite_cache();
             drawer = Some(match want {
                 DrawerKind::Classic => Drawer::Classic(boxed(|| render::Renderer::new(&mut gfx))),
                 DrawerKind::Studio(theme) => Drawer::Studio(boxed(|| studio_screen::Screen::new(studio_world, theme))),

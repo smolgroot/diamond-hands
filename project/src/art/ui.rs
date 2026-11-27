@@ -299,6 +299,9 @@ struct BoxSprites {
     /// Each sprite in VRAM, re-sent when its bit in `dirty` is set.
     vram: [Option<SpriteVram>; BOX_SPRITES],
     dirty: u8,
+    /// Set by a turn: the box lets go of every sprite and sits out a frame before it
+    /// sends the new ones (see [`BoxSprites::show`]).
+    turned: bool,
 }
 
 /// The screen column the portrait frame's strip starts at.
@@ -325,7 +328,7 @@ impl BoxSprites {
             pixels
         });
         let now = core::array::from_fn(|_| DynamicSprite16::new(Size::S64x64));
-        Self { strips, now, side: None, vram: [const { None }; BOX_SPRITES], dirty: 0 }
+        Self { strips, now, side: None, vram: [const { None }; BOX_SPRITES], dirty: 0, turned: false }
     }
 
     /// Turns the box to the side with the frame `right`: clears it and paints that
@@ -345,6 +348,7 @@ impl BoxSprites {
         }
         self.side = Some(right);
         self.dirty = u8::MAX;
+        self.turned = true;
         true
     }
 
@@ -367,7 +371,17 @@ impl BoxSprites {
     /// frames scattered through VRAM) there may be no 2 KB gap left. Then the sprite
     /// lets go of its old copy and sits out a frame: once the last frame's objects
     /// are released the space is free, and it is sent again on the next.
+    ///
+    /// A turn changes all four sprites at once. Sending them while the old ones are
+    /// still held would need 16 KB of sprite VRAM for the box alone, and a boss fight
+    /// can't spare that: BORED KONG's frames and the plasma shield's bubble beside it
+    /// left a static frame with no room ("have space for sprites"). So on a turn the box
+    /// drops every old copy and is hidden for one frame; it is sent whole on the next.
     fn show(&mut self, frame: &mut GraphicsFrame) {
+        if core::mem::take(&mut self.turned) {
+            self.vram = [const { None }; BOX_SPRITES];
+            return;
+        }
         let mut failed = 0;
         for (i, (vram, sprite)) in self.vram.iter_mut().zip(&self.now).enumerate() {
             if self.dirty & (1 << i) != 0 || vram.is_none() {
